@@ -22,7 +22,8 @@
       "Bash(curl -s -o /dev/null -w \"frontend %{http_code}\\\\n\" http://localhost:5173/)",
       "Bash(curl -s -o /dev/null -w \"admin-backend %{http_code}\\\\n\" http://localhost:8081/api/admin/policies)",
       "Bash(curl -s -o /dev/null -w \"gateway %{http_code}\\\\n\" http://localhost:8000/docs)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
