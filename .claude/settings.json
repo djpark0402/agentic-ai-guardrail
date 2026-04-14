@@ -20,6 +20,15 @@
             "command": "bash .claude/hooks/post-commit.sh"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/ruff-format.sh"
+          }
+        ]
       }
     ],
     "Stop": [
