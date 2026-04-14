@@ -51,9 +51,10 @@
 4. 구현 → 커밋
 5. 리팩터링 → 커밋
 6. `feature/core-secure-layer/dev`로 머지 (`--no-ff`, 사용자 확인 필수)
-7. 머지 성공 후 `feature/core-secure-layer/dev` push
-8. push 시 hook(`auto-pr-on-push.sh`)이 `develop`로 PR을 자동 생성
-   - 기존 열린 PR이 있으면 push가 해당 PR을 자동 갱신 (hook은 스킵)
+7. 머지가 성공하면 hook(`auto-pr-on-push.sh`)이 **자동으로**:
+   - `git push -u origin feature/core-secure-layer/dev` 실행
+   - `develop`로 PR 생성 (`gh pr create --base develop`)
+   - 기존 열린 PR이 있으면 push로 자동 갱신 (PR 중복 생성 방지)
    - 제목: `[core-secure-layer] <최신 커밋 메시지>` (70자 제한)
    - 본문: develop 대비 커밋 목록 + 변경 파일 통계 + TDD/ruff 체크리스트
-9. develop 머지는 GitHub 웹에서 사용자가 직접 진행 (Claude는 PR 생성까지만)
+8. develop 머지는 GitHub 웹에서 사용자가 직접 진행 (Claude는 PR 생성까지만)
