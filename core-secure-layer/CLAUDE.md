@@ -55,6 +55,10 @@
    - `git push -u origin feature/core-secure-layer/dev` 실행
    - `develop`로 PR 생성 (`gh pr create --base develop`)
    - 기존 열린 PR이 있으면 push로 자동 갱신 (PR 중복 생성 방지)
-   - 제목: `[core-secure-layer] <최신 커밋 메시지>` (70자 제한)
-   - 본문: develop 대비 커밋 목록 + 변경 파일 통계 + TDD/ruff 체크리스트
-8. develop 머지는 GitHub 웹에서 사용자가 직접 진행 (Claude는 PR 생성까지만)
+   - 제목/본문은 **임시 auto-generated** 상태 (hook은 의미 파악 불가)
+8. **Claude는 PR이 자동 생성됨을 인식하는 즉시** `gh pr edit <num> --title ... --body ...`을 실행해 의미 있는 제목과 본문으로 교체할 것
+   - 제목 형식: `[core-secure-layer] <변경사항을 포괄하는 한 줄 요약>`
+   - 본문: Summary / 주요 변경 / 테스트 / (필요 시) 다음 작업 섹션으로 구성
+   - 커밋 메시지를 나열하는 대신, **커밋 내용을 분석해 그룹화**할 것
+9. Stop hook이 PR 본문에 hook의 auto-generated 마커(`🤖 Claude Code hook이 자동 생성`)가 남아있으면 응답 종료를 차단하여 8번 단계를 강제함
+10. develop 머지는 GitHub 웹에서 사용자가 직접 진행 (Claude는 PR 생성/개선까지만)
