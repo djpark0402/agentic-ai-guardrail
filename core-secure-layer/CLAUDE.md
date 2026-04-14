@@ -13,7 +13,15 @@
 - **모든 `.py` 파일은 ruff format/check를 통과해야 함**
 - `.py` 파일 편집 시 PostToolUse hook이 자동으로 `ruff format` + `ruff check --fix` 실행
 - 자동 수정 불가능한 lint 에러가 남으면 hook이 차단하여 Claude가 직접 수정하도록 강제
-- 룰셋: `E, F, I, N, UP, B, SIM, RUF` (line-length=100, target=py314)
+- **기준: Google Python Style Guide**
+- line-length=80, target=py314, Google 스타일 docstring
+- 활성화 룰셋: `E, F, I, N, UP, B, SIM, RUF, D, TID, S, G, PT, ANN`
+- 주요 강제 사항:
+  - 함수/메서드에 타입 힌트 필수 (`ANN`) — `typing.Any`는 허용
+  - public 함수/클래스/모듈에 Google 스타일 docstring 필수 (`D`)
+  - 상대 import 금지 (`TID252`)
+  - `assert`를 런타임 검증에 사용 금지 (`S101`) — 테스트 파일은 예외
+  - 로깅은 `logger.info("msg %s", val)` 형태 (`G`)
 - 수동 실행: `uv run ruff format .` / `uv run ruff check .`
 
 ## 브랜치 및 커밋 규칙
