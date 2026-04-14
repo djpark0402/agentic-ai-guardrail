@@ -22,7 +22,7 @@ asyncio_mode = "auto"
 pythonpath = ["."]
 
 [tool.ruff]
-line-length = 100
+line-length = 80
 target-version = "py314"
 
 [tool.ruff.lint]
@@ -35,6 +35,31 @@ select = [
     "B",   # flake8-bugbear
     "SIM", # flake8-simplify
     "RUF", # ruff-specific
+    "D",   # pydocstyle (Google 스타일 docstring)
+    "TID", # flake8-tidy-imports (상대 import 금지)
+    "S",   # flake8-bandit (보안 취약점)
+    "G",   # flake8-logging-format (로깅 포맷)
+    "PT",  # flake8-pytest-style (pytest 컨벤션)
+    "ANN", # flake8-annotations (타입 힌트)
+]
+ignore = [
+    "D203",   # conflicts with D211 (class docstring 간격)
+    "D213",   # conflicts with D212 (multi-line summary 위치)
+    "D300",   # formatter가 triple-quote 처리 — 충돌 가능
+    "ANN401", # typing.Any 허용 (LangChain 등 외부 API 대응)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101", # pytest는 assert 사용
+    "D",    # 테스트는 docstring 면제
+    "ANN",  # 테스트는 타입 힌트 면제
+]
+"**/__init__.py" = [
+    "D104", # 빈 __init__.py는 package docstring 면제
 ]
 
 [tool.ruff.format]
