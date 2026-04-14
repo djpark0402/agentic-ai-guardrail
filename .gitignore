@@ -1,0 +1,22 @@
+# Java / Gradle
+admin-backend/build/
+admin-backend/.gradle/
+*.class
+
+# Node
+node_modules/
+dist/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
