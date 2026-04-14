@@ -9,6 +9,13 @@
 - 테스트 없이 구현 코드부터 작성하지 말 것
 - 테스트는 pytest 기반으로 작성
 
+## 코드 품질 (강제)
+- **모든 `.py` 파일은 ruff format/check를 통과해야 함**
+- `.py` 파일 편집 시 PostToolUse hook이 자동으로 `ruff format` + `ruff check --fix` 실행
+- 자동 수정 불가능한 lint 에러가 남으면 hook이 차단하여 Claude가 직접 수정하도록 강제
+- 룰셋: `E, F, I, N, UP, B, SIM, RUF` (line-length=100, target=py314)
+- 수동 실행: `uv run ruff format .` / `uv run ruff check .`
+
 ## 브랜치 및 커밋 규칙
 - 통합 브랜치: `feature/core-secure-layer/dev`
 - 세부 작업 브랜치: `feature/core-secure-layer/<작업명>` (예: `feature/core-secure-layer/auth`)
