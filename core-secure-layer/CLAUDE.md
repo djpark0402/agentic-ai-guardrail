@@ -33,7 +33,11 @@
 - 모든 커밋에 `Co-Authored-By: Claude <noreply@anthropic.com>` 포함
 - **각 단위 작업(테스트/구현/리팩터링)이 완료되면 사용자 확인 없이 즉시 커밋할 것**
 - **변경사항이 없으면 커밋 시도하지 말 것** (`git status`로 확인 후 비어있으면 스킵)
-- **푸시(`git push`)는 절대 자동으로 하지 말 것 — 사용자가 수동으로 진행**
+- **푸시(`git push`) 기본 원칙**:
+  - task 브랜치(`feature/core-secure-layer/<작업명>`)에서는 자동 push 금지 (사용자가 수동으로 진행)
+  - 통합 브랜치(`feature/core-secure-layer/dev`)에서는 task 브랜치 머지 직후 자동 push 허용
+  - `main`/`develop` 브랜치로의 직접 push는 절대 금지
+  - `--force` 계열(`--force`, `--force-with-lease`)은 절대 금지
 
 ## 머지 규칙
 - **머지는 항상 `--no-ff` 옵션 사용** (fast-forward 금지, 머지 커밋을 명시적으로 생성하여 브랜치 작업 이력 보존)
@@ -47,3 +51,9 @@
 4. 구현 → 커밋
 5. 리팩터링 → 커밋
 6. `feature/core-secure-layer/dev`로 머지 (`--no-ff`, 사용자 확인 필수)
+7. 머지 성공 후 `feature/core-secure-layer/dev` push
+8. push 시 hook(`auto-pr-on-push.sh`)이 `develop`로 PR을 자동 생성
+   - 기존 열린 PR이 있으면 push가 해당 PR을 자동 갱신 (hook은 스킵)
+   - 제목: `[core-secure-layer] <최신 커밋 메시지>` (70자 제한)
+   - 본문: develop 대비 커밋 목록 + 변경 파일 통계 + TDD/ruff 체크리스트
+9. develop 머지는 GitHub 웹에서 사용자가 직접 진행 (Claude는 PR 생성까지만)
