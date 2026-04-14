@@ -17,6 +17,7 @@
 - 커밋 메시지는 한글, conventional commits 규칙 준수 (`feat:`, `fix:`, `test:`, `refactor:` 등)
 - 모든 커밋에 `Co-Authored-By: Claude <noreply@anthropic.com>` 포함
 - **각 단위 작업(테스트/구현/리팩터링)이 완료되면 사용자 확인 없이 즉시 커밋할 것**
+- **변경사항이 없으면 커밋 시도하지 말 것** (`git status`로 확인 후 비어있으면 스킵)
 - **푸시(`git push`)는 절대 자동으로 하지 말 것 — 사용자가 수동으로 진행**
 
 ## 작업 흐름
