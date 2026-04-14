@@ -69,7 +69,7 @@ export function PoliciesPage() {
   }
 
   return (
-    <div>
+    <div className="sakura-page">
       <h1>정책 관리</h1>
       {error && <p role="alert">{error}</p>}
       <button type="button" onClick={() => setShowForm(true)}>

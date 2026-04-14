@@ -10,7 +10,17 @@ if (!localStorage.getItem('admin_token')) {
 export function App() {
   return (
     <>
-      <nav style={{ padding: 12, borderBottom: '1px solid #ddd', display: 'flex', gap: 16 }}>
+      <div className="sakura-petals" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+      <nav className="sakura-nav">
+        <span aria-hidden="true">🌸</span>
         <Link to="/admin/policies">Policies</Link>
         <Link to="/admin/audit-logs">Audit Logs</Link>
       </nav>

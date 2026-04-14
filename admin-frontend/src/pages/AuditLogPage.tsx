@@ -61,7 +61,7 @@ export function AuditLogPage() {
   }
 
   return (
-    <div>
+    <div className="sakura-page">
       <h1>감사 로그</h1>
       <form onSubmit={handleSearch}>
         <label htmlFor="from">시작일</label>
