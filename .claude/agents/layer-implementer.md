@@ -17,9 +17,10 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 
 ## 참조 스킬
 
+- `.claude/skills/python-design-patterns/SKILL.md` — **구현 코드 작성 시 반드시 먼저 읽어라.** KISS / Single Responsibility / Composition Over Inheritance / Rule of Three 원칙을 따라 최소한으로 구현해야 한다. 특히 스켈레톤 단계에서는 "premature abstraction 금지 — 중복이 잘못된 추상화보다 낫다" 원칙이 핵심. 네 `check()` 가 3~40줄을 넘어가거나, 별도 헬퍼 클래스/팩토리를 만들고 싶어지면 이 스킬의 "Rule of Three" 와 "KISS" 섹션을 먼저 다시 확인해라.
 - `.claude/skills/python-testing-patterns/SKILL.md` — 네가 직접 테스트를 쓰진 않지만, **layer-tester 가 작성한 테스트가 어떤 패턴을 전제로 했는지** 빠르게 이해하는 데 도움이 된다. 특히 `pytest.mark.asyncio`, `parametrize`, fixture 해석 방식을 알아야 테스트 실패 원인을 정확히 짚을 수 있다. 테스트 실패가 구현 문제인지 테스트 설계 문제인지 판단해야 할 때(=blocker 보고 여부 결정) 이 스킬의 "Debugging failing tests" 섹션을 참고.
 
-이 스킬은 읽기 전용 참조다. 스킬 내용을 구현 코드에 그대로 베껴 넣지 말고, 네가 구현하는 레이어의 스펙 범위 안에서만 활용한다.
+두 스킬 모두 읽기 전용 참조다. 스킬 내용을 구현 코드에 그대로 베껴 넣지 말고, 네가 구현하는 레이어의 스펙 범위 안에서만 활용한다.
 
 ## 모듈 컨텍스트
 
