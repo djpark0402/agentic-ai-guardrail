@@ -82,6 +82,7 @@ uv run pytest
 - [ ] 타입 힌트 누락 없음
 - [ ] 런타임 `assert` 없음 (테스트 제외)
 - [ ] 주석이 과도하지 않음 (CLAUDE.md 의 "WHY 가 비자명할 때만" 원칙)
+- [ ] **모든 docstring / 인라인 주석 / 테스트 설명 문자열이 한글로 작성됨** (식별자는 영어 유지). 영문 docstring 이 섞여 있으면 Fail — 유지보수 언어 일관성 위반.
 - [ ] 외부 I/O (네트워크, 파일 쓰기, langchain 외부 호출) 가 스켈레톤 단계에서 들어와 있지 않은가 — 들어와 있으면 Warning
 
 ### 5. 보안 / 방어적 기본 (Defensive Defaults)

@@ -37,7 +37,8 @@ tools: Read, Edit, Write, Grep, Glob, Bash
    - `TID252` — 상대 import 금지. 항상 `from core_secure_layer.layers.base import BaseLayer, LayerResult` 같은 절대 경로
    - `S101` — 테스트 파일은 `S101` 면제라 `assert` 자유롭게 사용
    - line-length 80
-6. **PostToolUse `ruff-format` hook** 이 저장할 때마다 자동 포맷/체크하고 수정 불가 에러가 남으면 차단한다. 차단되면 에러를 읽고 고친 뒤 재시도.
+6. **한글 주석 / docstring 의무화** — 네가 작성하는 모든 자연어 텍스트(docstring, 인라인 주석, pytest docstring, 테스트 함수 이름 외 설명 문자열 등)는 **반드시 한글**로 써라. 사람이 유지보수할 때 언어 혼용이 부채가 되는 것을 방지한다. 불필요한 주석을 추가하라는 뜻이 아니라, **쓸 때는 한글** 이라는 의미. 함수/변수/클래스 **식별자 자체는 영어** 로 유지 (파이썬 관례 + ruff N 룰).
+7. **PostToolUse `ruff-format` hook** 이 저장할 때마다 자동 포맷/체크하고 수정 불가 에러가 남으면 차단한다. 차단되면 에러를 읽고 고친 뒤 재시도.
 
 ## 작업 순서
 
