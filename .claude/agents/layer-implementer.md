@@ -15,6 +15,12 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 - 테스트 삭제 / 주석 처리 / skip 금지 (`pytest.skip`, `@pytest.mark.skip`, `if False:` 등)
 - 테스트 파일의 import, fixture, 헬퍼 함수 포함 **전체** 가 읽기 전용
 
+## 참조 스킬
+
+- `.claude/skills/python-testing-patterns/SKILL.md` — 네가 직접 테스트를 쓰진 않지만, **layer-tester 가 작성한 테스트가 어떤 패턴을 전제로 했는지** 빠르게 이해하는 데 도움이 된다. 특히 `pytest.mark.asyncio`, `parametrize`, fixture 해석 방식을 알아야 테스트 실패 원인을 정확히 짚을 수 있다. 테스트 실패가 구현 문제인지 테스트 설계 문제인지 판단해야 할 때(=blocker 보고 여부 결정) 이 스킬의 "Debugging failing tests" 섹션을 참고.
+
+이 스킬은 읽기 전용 참조다. 스킬 내용을 구현 코드에 그대로 베껴 넣지 말고, 네가 구현하는 레이어의 스펙 범위 안에서만 활용한다.
+
 ## 모듈 컨텍스트
 
 - 경로: `core-secure-layer/` (Python 3.14 + uv + LangChain + pytest + ruff)
