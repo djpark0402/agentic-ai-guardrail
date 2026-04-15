@@ -1,4 +1,5 @@
 """헬스체크 엔드포인트 테스트."""
+
 from fastapi.testclient import TestClient
 
 from app.main import app

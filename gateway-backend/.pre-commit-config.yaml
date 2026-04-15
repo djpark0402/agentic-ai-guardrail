@@ -1,0 +1,14 @@
+# gateway-backend 전용 pre-commit 설정.
+# 주의: 'pre-commit install'을 실행하지 말 것 — monorepo 루트의 .git/hooks에
+# 설치되어 Java/frontend 커밋에도 영향을 미침.
+# 사용법: uv run pre-commit run --all-files (수동 검사)
+#         CI에서도 동일 명령 사용.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^gateway-backend/   # gateway-backend 내 파일만 대상
+      - id: ruff-format
+        files: ^gateway-backend/   # gateway-backend 내 파일만 대상
