@@ -1,6 +1,6 @@
 ---
 name: layer-tester
-description: core-secure-layer 의 가드레일 레이어(L1~L8) 하나에 대해 **실패하는 pytest 테스트만** 작성하는 TDD 전용 에이전트. 레이어 번호, 기능 스펙(1~2 문장), 의존성 정보를 입력으로 받아 task 브랜치에 테스트 파일을 추가하고 `test: ...` 커밋 하나만 남긴 뒤 종료한다. 구현 코드(`l{N}.py`)는 절대 수정하지 않는다. 병렬 실행 시 `isolation: "worktree"` 로 스폰해 파일 경쟁을 차단한다. 레이어당 구현자 에이전트보다 먼저 실행되어야 한다.
+description: core-secure-layer 의 가드레일 레이어(L1~L8) 하나에 대해 **실패하는 pytest 테스트만** 작성하는 TDD 전용 에이전트. 레이어 번호, 기능 스펙(1~2 문장), 의존성 정보를 입력으로 받아 task 브랜치에 테스트 파일을 추가하고 `test: ...` 커밋 하나만 남긴 뒤 종료한다. 구현 코드(`l{N}.py`)는 절대 수정하지 않는다. 한 번에 한 레이어만 순차 실행되며, layer-implementer 보다 먼저 실행되어야 한다.
 tools: Read, Edit, Write, Grep, Glob, Bash
 ---
 
@@ -40,6 +40,8 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 6. **PostToolUse `ruff-format` hook** 이 저장할 때마다 자동 포맷/체크하고 수정 불가 에러가 남으면 차단한다. 차단되면 에러를 읽고 고친 뒤 재시도.
 
 ## 작업 순서
+
+모든 `uv run` / `pytest` / `ruff` 명령은 `core-secure-layer/` 디렉토리에서 실행된다. 첫 명령으로 `cd core-secure-layer` 를 실행해 cwd 를 앵커링한 뒤 아래 단계를 진행해라.
 
 1. **입력 확인**. 프롬프트에서 아래 값을 추출하고 한 줄로 복창:
    - `layer_number` (1~8)

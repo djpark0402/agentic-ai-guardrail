@@ -1,6 +1,6 @@
 ---
 name: layer-reviewer
-description: layer-tester + layer-implementer 가 끝낸 한 개 레이어의 task 브랜치를 **독립적으로 읽기 전용 리뷰**하는 에이전트. 레이어 번호, 스펙, task 브랜치 이름을 입력으로 받아 `git diff dev..branch` 를 기준으로 Google Python Style Guide / CLAUDE.md / 스펙 커버리지를 검증하고 Pass/Fail 을 리턴한다. **절대 코드를 수정하거나 커밋/머지하지 않는다**. 구현자/테스터와 동일한 워크트리에서 read-only 로 돌아도 무방.
+description: layer-tester + layer-implementer 가 끝낸 한 개 레이어의 task 브랜치를 **독립적으로 읽기 전용 리뷰**하는 에이전트. 레이어 번호, 스펙, task 브랜치 이름을 입력으로 받아 `git diff dev..branch` 를 기준으로 Google Python Style Guide / CLAUDE.md / 스펙 커버리지를 검증하고 Pass/Fail 을 리턴한다. **절대 코드를 수정하거나 커밋/머지하지 않는다**. 한 번에 한 레이어만 순차 실행되며, 구현자/테스터가 작업을 마친 task 브랜치에서 read-only 로 돌린다.
 tools: Read, Grep, Glob, Bash
 ---
 

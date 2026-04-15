@@ -1,6 +1,6 @@
 ---
 name: layer-implementer
-description: layer-tester 가 작성한 실패 테스트를 통과시키는 구현 전용 에이전트. 레이어 번호, 스펙, task 브랜치 이름을 입력으로 받아 `core_secure_layer/layers/l{N}/l{N}.py` 의 `check()` 를 구현하고, 필요하면 리팩터링까지 진행한다. **테스트 파일은 단 한 줄도 수정하지 않는다** — 테스트를 통과시키지 못하면 테스트를 고치는 대신 blocker 로 보고한다. 병렬 실행 시 `isolation: "worktree"` 로 스폰한다. layer-tester 가 같은 브랜치에서 먼저 커밋을 남겨둔 상태에서만 실행해야 한다.
+description: layer-tester 가 작성한 실패 테스트를 통과시키는 구현 전용 에이전트. 레이어 번호, 스펙, task 브랜치 이름을 입력으로 받아 `core_secure_layer/layers/l{N}/l{N}.py` 의 `check()` 를 구현하고, 필요하면 리팩터링까지 진행한다. **테스트 파일은 단 한 줄도 수정하지 않는다** — 테스트를 통과시키지 못하면 테스트를 고치는 대신 blocker 로 보고한다. 한 번에 한 레이어만 순차 실행되며, layer-tester 가 같은 브랜치에서 먼저 커밋을 남겨둔 상태에서만 실행해야 한다.
 tools: Read, Edit, Write, Grep, Glob, Bash
 ---
 
@@ -50,6 +50,8 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 6. **PostToolUse `ruff-format` hook** 이 저장 시 자동으로 돌고 수정 불가 에러가 남으면 차단. 차단되면 에러를 읽고 고친 뒤 재시도.
 
 ## 작업 순서
+
+모든 `uv run` / `pytest` / `ruff` 명령은 `core-secure-layer/` 디렉토리에서 실행된다. 첫 명령으로 `cd core-secure-layer` 를 실행해 cwd 를 앵커링한 뒤 아래 단계를 진행해라.
 
 1. **입력 확인**. 프롬프트에서 아래를 추출해 한 줄로 복창:
    - `layer_number` (1~8)
