@@ -90,9 +90,9 @@ fi
 # 변경 파일 통계
 STAT=$(git diff --stat origin/develop..feature/core-secure-layer/dev 2>/dev/null)
 
-# 본문 조립
-BODY=$(cat <<PRBODY
-## 변경 요약
+# 본문 조립 — here-doc in $() 는 /tmp 쓰기가 제한된 환경에서
+# 실패할 수 있어 literal 문자열 연결로 작성. BODY가 비어 있으면 fail-closed.
+BODY="## 변경 요약
 
 ${COMMITS}
 
@@ -110,9 +110,12 @@ ${STAT}
 - [ ] CLAUDE.md 작업 규칙 준수
 
 ---
-🤖 Claude Code hook이 자동 생성
-PRBODY
-)
+🤖 Claude Code hook이 자동 생성"
+
+if [ -z "$BODY" ] || [ -z "$TITLE" ]; then
+  jq -n '{ systemMessage: "⚠️  PR 본문/제목 생성 실패 — gh pr create 호출을 중단합니다. 수동으로 PR을 생성하세요." }'
+  exit 0
+fi
 
 # PR 생성
 PR_OUT=$(gh pr create \
