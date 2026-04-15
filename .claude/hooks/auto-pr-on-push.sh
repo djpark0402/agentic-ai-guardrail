@@ -15,11 +15,13 @@ if [ "$CURRENT_BRANCH" != "feature/core-secure-layer/dev" ]; then
   exit 0
 fi
 
-# git merge 또는 git push 명령만 대상
+# git merge 또는 git push 명령만 대상.
+# `git -C <path> merge ...` / `git -c <cfg> push ...` 같이 git과 서브커맨드
+# 사이에 옵션이 끼는 형태도 포괄하기 위해 "git "와 서브커맨드 사이에 와일드카드를 둔다.
 TRIGGER=""
 case "$COMMAND" in
-  *"git merge"*) TRIGGER="merge" ;;
-  *"git push"*)  TRIGGER="push"  ;;
+  *"git "*"merge"*) TRIGGER="merge" ;;
+  *"git "*"push"*)  TRIGGER="push"  ;;
   *) exit 0 ;;
 esac
 
@@ -33,8 +35,11 @@ PUSH_MSG=""
 
 # merge 트리거면 자동 push 수행
 if [ "$TRIGGER" = "merge" ]; then
-  # merge 실패(충돌 등)로 working tree가 더러우면 스킵
-  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  # merge 실패(충돌 등)로 working tree가 더러우면 스킵.
+  # .claude/settings.local.json 은 사용자 개인 permissions 파일이라
+  # 항상 M 상태로 남을 수 있어 pathspec exclude 로 무시한다.
+  DIRTY=$(git status --porcelain -- . ':(exclude).claude/settings.local.json' 2>/dev/null)
+  if [ -n "$DIRTY" ]; then
     jq -n '{ systemMessage: "⚠️  merge 후 working tree가 깨끗하지 않음 (충돌 가능) — 자동 push 스킵" }'
     exit 0
   fi
@@ -85,9 +90,9 @@ fi
 # 변경 파일 통계
 STAT=$(git diff --stat origin/develop..feature/core-secure-layer/dev 2>/dev/null)
 
-# 본문 조립
-BODY=$(cat <<PRBODY
-## 변경 요약
+# 본문 조립 — here-doc in $() 는 /tmp 쓰기가 제한된 환경에서
+# 실패할 수 있어 literal 문자열 연결로 작성. BODY가 비어 있으면 fail-closed.
+BODY="## 변경 요약
 
 ${COMMITS}
 
@@ -105,9 +110,12 @@ ${STAT}
 - [ ] CLAUDE.md 작업 규칙 준수
 
 ---
-🤖 Claude Code hook이 자동 생성
-PRBODY
-)
+🤖 Claude Code hook이 자동 생성"
+
+if [ -z "$BODY" ] || [ -z "$TITLE" ]; then
+  jq -n '{ systemMessage: "⚠️  PR 본문/제목 생성 실패 — gh pr create 호출을 중단합니다. 수동으로 PR을 생성하세요." }'
+  exit 0
+fi
 
 # PR 생성
 PR_OUT=$(gh pr create \
