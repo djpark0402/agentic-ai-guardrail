@@ -10,7 +10,7 @@ FILE=$(echo "$INPUT" | jq -r '.tool_response.filePath // .tool_input.file_path /
 
 # core-secure-layer 내부의 .py 파일만 대상
 case "$FILE" in
-  */core-secure-layer/*.py) ;;
+  */core-secure-layer/**/*.py) ;;
   *) exit 0 ;;
 esac
 
