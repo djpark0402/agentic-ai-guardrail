@@ -18,7 +18,7 @@ if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
   # 마지막 문자가 ? 또는 ?(전각) 이면 질문으로 간주
   TRIMMED=$(echo -n "$LAST_TEXT" | sed -E 's/[[:space:]]+$//')
   LAST_CHAR=$(echo -n "$TRIMMED" | tail -c 3)
-  if [[ "$LAST_CHAR" == *"?"* ]] || [[ "$LAST_CHAR" == *"?"* ]]; then
+  if [[ "$LAST_CHAR" == *"?"* ]] || [[ "$LAST_CHAR" == *"？"* ]]; then
     exit 0
   fi
 fi
