@@ -26,18 +26,51 @@ from app.services.solar_service import SolarService
 
 router = APIRouter()
 
+# 사용자 측 스트리밍 시 응답을 쪼개는 청크 길이(문자 단위).
+_SSE_CHUNK_SIZE = 20
 
-async def _sse_generator(chunks: list[str]) -> AsyncGenerator[str, None]:
-    """SSE 포맷으로 청크를 yield하는 제너레이터.
+
+def _chunk_content(content: str, size: int = _SSE_CHUNK_SIZE) -> list[str]:
+    """전체 응답 문자열을 고정 길이 청크 목록으로 분할한다.
 
     Args:
-        chunks: 전송할 텍스트 청크 목록.
+        content: 분할할 전체 문자열.
+        size: 청크 하나의 최대 문자 길이.
+
+    Returns:
+        순서대로 연결하면 원본 문자열이 복원되는 청크 목록.
+    """
+    if not content:
+        return [""]
+    return [content[i : i + size] for i in range(0, len(content), size)]
+
+
+async def _stream_content(content: str) -> AsyncGenerator[str, None]:
+    """검증이 끝난 전체 content를 SSE 포맷으로 재방출한다.
+
+    Args:
+        content: 사용자에게 전송할 전체 응답 문자열.
 
     Yields:
-        SSE 포맷 문자열.
+        SSE `data:` 프레임 문자열.
     """
-    for chunk in chunks:
+    for chunk in _chunk_content(content):
         yield f"data: {chunk}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+async def _stream_error(reason: str | None) -> AsyncGenerator[str, None]:
+    """출력 가드레일 BLOCK 시 에러 프레임 하나만 전송한다.
+
+    원본 LLM 응답은 절대 유출하지 않는다.
+
+    Args:
+        reason: BLOCK 사유 문자열.
+
+    Yields:
+        SSE 에러 프레임과 종료 마커.
+    """
+    yield f"data: [ERROR] 출력 보안 검사 실패: {reason}\n\n"
     yield "data: [DONE]\n\n"
 
 
@@ -55,9 +88,9 @@ async def chat_completions(
     가드레일 파이프라인:
     1. admin-backend에서 보안 정책 조회
     2. security-layer로 입력 프롬프트 검사
-    3. Solar API 호출
-    4. security-layer로 출력 결과 검사
-    5. 결과 반환
+    3. Solar API 비스트리밍 호출 (항상 non-stream)
+    4. security-layer로 출력 결과 검사 (사용자 전송 이전에 선행)
+    5. `stream=False`면 JSON, `stream=True`면 SSE로 재방출
 
     Args:
         request: OpenAI/Solar 호환 채팅 완성 요청.
@@ -70,7 +103,7 @@ async def chat_completions(
         스트리밍: SSE StreamingResponse.
 
     Raises:
-        HTTPException: 입력 또는 출력 보안 검사 실패 시 400.
+        HTTPException: 입력 검사 실패 시 400, 비스트리밍 출력 검사 실패 시 400.
     """
     session_id = str(uuid.uuid4())
 
@@ -88,56 +121,37 @@ async def chat_completions(
             detail=f"입력 보안 검사 실패: {input_result.reason}",
         )
 
-    # OpenAI SDK 포맷으로 메시지 변환
+    # 3단계: Solar API 비스트리밍 호출 (stream 여부와 무관하게 항상 non-stream)
     api_messages = [
         {"role": msg.role, "content": msg.content} for msg in request.messages
     ]
-
-    # 스트리밍 요청 처리
-    if request.stream:
-        collected: list[str] = []
-
-        async def _collect_and_stream() -> AsyncGenerator[str, None]:
-            """Solar 응답을 수집하고 SSE로 스트리밍한다."""
-            async for chunk in solar_service.stream_chat(messages=api_messages):
-                collected.append(chunk)
-                yield f"data: {chunk}\n\n"
-
-            # 4단계: 출력 보안 검사 (스트리밍 완료 후)
-            full_content = "".join(collected)
-            output_result = await security_service.check_output(
-                content=full_content,
-                policy=policy,
-            )
-            if output_result.status == CheckStatus.BLOCK:
-                yield (
-                    f"data: [ERROR] 출력 보안 검사 실패: "
-                    f"{output_result.reason}\n\n"
-                )
-                return
-
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            _collect_and_stream(),
-            media_type="text/event-stream",
-        )
-
-    # 3단계: Solar API 비스트리밍 호출
     content = await solar_service.chat(messages=api_messages)
 
-    # 4단계: 출력 결과 보안 검사 (더미)
+    # 4단계: 출력 결과 보안 검사 — 사용자 전송 이전에 선행하여 유출 방지
     output_result = await security_service.check_output(
         content=content,
         policy=policy,
     )
+
+    # 5-a단계: 스트리밍 요청 — SSE로 재방출
+    if request.stream:
+        if output_result.status == CheckStatus.BLOCK:
+            return StreamingResponse(
+                _stream_error(output_result.reason),
+                media_type="text/event-stream",
+            )
+        return StreamingResponse(
+            _stream_content(content),
+            media_type="text/event-stream",
+        )
+
+    # 5-b단계: 비스트리밍 요청 — 출력 BLOCK은 400, PASS는 ChatResponse
     if output_result.status == CheckStatus.BLOCK:
         raise HTTPException(
             status_code=400,
             detail=f"출력 보안 검사 실패: {output_result.reason}",
         )
 
-    # 5단계: OpenAI 호환 포맷으로 응답 반환
     return ChatResponse(
         id=f"chatcmpl-{session_id}",
         object="chat.completion",

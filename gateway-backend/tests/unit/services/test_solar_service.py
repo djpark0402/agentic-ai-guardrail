@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from app.services.solar_service import SolarService
 
 
@@ -57,43 +58,11 @@ async def test_chat_returns_content_string(service):
     assert result == "응답 텍스트"
 
 
-async def test_stream_chat_yields_chunks(service):
-    """stream_chat()이 delta 콘텐츠 청크를 yield한다."""
-    svc, mock_client = service
+async def test_solar_service_exposes_only_chat(service):
+    """SolarService는 더 이상 stream_chat을 노출하지 않는다.
 
-    async def fake_stream():
-        for text in ["안녕", "하세요", "!"]:
-            chunk = MagicMock()
-            chunk.choices[0].delta.content = text
-            yield chunk
-
-    mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
-
-    chunks = []
-    async for chunk in svc.stream_chat(
-        messages=[{"role": "user", "content": "hi"}]
-    ):
-        chunks.append(chunk)
-
-    assert chunks == ["안녕", "하세요", "!"]
-
-
-async def test_stream_chat_skips_none_delta(service):
-    """stream_chat()은 delta.content가 None인 청크를 yield하지 않는다."""
-    svc, mock_client = service
-
-    async def fake_stream():
-        for text in [None, "텍스트", None]:
-            chunk = MagicMock()
-            chunk.choices[0].delta.content = text
-            yield chunk
-
-    mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
-
-    chunks = []
-    async for chunk in svc.stream_chat(
-        messages=[{"role": "user", "content": "hi"}]
-    ):
-        chunks.append(chunk)
-
-    assert chunks == ["텍스트"]
+    LLM 호출은 항상 비스트리밍이며, 사용자에게의 스트리밍은
+    라우터 계층에서 재방출한다.
+    """
+    svc, _ = service
+    assert not hasattr(svc, "stream_chat")

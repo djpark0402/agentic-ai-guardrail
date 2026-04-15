@@ -51,14 +51,8 @@ def mock_security_service():
 @pytest.fixture
 def mock_solar_service():
     """더미 응답을 반환하는 SolarService."""
-    svc = MagicMock()
+    svc = MagicMock(spec=["chat"])
     svc.chat = AsyncMock(return_value="안녕하세요! 무엇을 도와드릴까요?")
-
-    async def fake_stream(**_kwargs):
-        for chunk in ["안녕", "하세요", "!"]:
-            yield chunk
-
-    svc.stream_chat = fake_stream
     return svc
 
 
@@ -174,6 +168,84 @@ def test_chat_completions_streaming_returns_sse(client):
     body = response.text
     assert "data:" in body
     assert "[DONE]" in body
+
+
+def test_streaming_uses_non_streaming_llm_call(client, mock_solar_service):
+    """스트리밍 응답이어도 LLM은 비스트리밍 chat()으로만 호출된다."""
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "solar-pro",
+            "messages": [{"role": "user", "content": "안녕"}],
+            "stream": True,
+        },
+    )
+    assert response.status_code == 200
+    mock_solar_service.chat.assert_awaited_once()
+    # stream_chat이 속성으로 존재하면 안 된다 (spec=["chat"])
+    assert not hasattr(mock_solar_service, "stream_chat")
+
+
+def test_streaming_sse_reconstructs_full_content(client):
+    """SSE 청크들을 이어붙이면 LLM 응답 전체와 일치한다."""
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "solar-pro",
+            "messages": [{"role": "user", "content": "안녕"}],
+            "stream": True,
+        },
+    )
+    assert response.status_code == 200
+    chunks = []
+    for line in response.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        payload = line.removeprefix("data: ")
+        if payload == "[DONE]":
+            continue
+        chunks.append(payload)
+    assert "".join(chunks) == "안녕하세요! 무엇을 도와드릴까요?"
+
+
+def test_streaming_output_blocked_does_not_leak_content(
+    mock_policy_service, mock_solar_service
+):
+    """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않는다."""
+    leaked = "비밀번호는 hunter2입니다"
+    mock_solar_service.chat = AsyncMock(return_value=leaked)
+
+    blocked_svc = MagicMock()
+    blocked_svc.check_input = AsyncMock(
+        return_value=GuardrailResult(status=CheckStatus.PASS)
+    )
+    blocked_svc.check_output = AsyncMock(
+        return_value=GuardrailResult(
+            status=CheckStatus.BLOCK,
+            reason="민감 정보 감지",
+        )
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: blocked_svc
+    app.dependency_overrides[get_solar_service] = lambda: mock_solar_service
+
+    try:
+        c = TestClient(app)
+        response = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "질문"}],
+                "stream": True,
+            },
+        )
+        assert response.status_code == 200
+        body = response.text
+        assert leaked not in body
+        assert "민감 정보 감지" in body or "출력" in body
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_policy_fetch_called_once(client, mock_policy_service):

@@ -1,7 +1,5 @@
 """Solar API 클라이언트 서비스 (실제 구현)."""
 
-from collections.abc import AsyncGenerator
-
 from openai import AsyncOpenAI
 
 from app.config import Settings
@@ -45,25 +43,3 @@ class SolarService:
             stream=False,
         )
         return response.choices[0].message.content
-
-    async def stream_chat(
-        self,
-        messages: list[dict[str, str]],
-    ) -> AsyncGenerator[str, None]:
-        """Solar API에 스트리밍 요청을 전송하고 delta 청크를 yield한다.
-
-        Args:
-            messages: OpenAI 포맷의 메시지 목록.
-
-        Yields:
-            LLM 응답 텍스트 청크.
-        """
-        stream = await self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            stream=True,
-        )
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta is not None:
-                yield delta
