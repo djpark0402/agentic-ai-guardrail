@@ -229,5 +229,5 @@ pyrightconfig.json
 
 
 ### add Oh-my-@@@ lib ###
-.omx/*
-.omc/*
+.omx
+.omc

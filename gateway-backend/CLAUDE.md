@@ -30,6 +30,10 @@ core-secure-layer의 보안 레이어를 통해 요청/응답을 검증한다.
 - **타입 힌트**: 모든 함수 시그니처에 필수
 - **에러 처리**: 모든 예외를 명시적으로 처리
 
+## 커밋 고려하기
+- 코드 리뷰에 적절한 단위를 고려하여, 커밋의 크기를 지정할 것
+- 요청한 사항에 대해 커밋을 진행하며 작업할 것
+
 ### Google 스타일 docstring 예시
 
 ```python
@@ -58,29 +62,6 @@ def fetch_guardrail_result(prompt: str, model: str) -> dict[str, Any]:
 ## 주석 규칙
 - 코드 주석(인라인 `#` 주석, docstring 설명 문장 등)은 **가능한 한 한글**로 작성한다.
 - Google 스타일 docstring의 섹션 키워드(`Args:`, `Returns:`, `Raises:`)는 영문 그대로 유지한다.
-
-## 아키텍처
-
-```
-app/
-├── main.py          # FastAPI 앱 진입점
-├── config.py        # 환경 변수 설정 (pydantic-settings)
-├── routers/         # API 라우터 (기능별 분리)
-├── services/        # 비즈니스 로직
-├── models/          # Pydantic 요청/응답 모델
-└── clients/         # 외부 API 클라이언트 (Upstage AI 등)
-tests/
-├── unit/            # 단위 테스트
-└── integration/     # 통합 테스트
-```
-
-## 환경 변수 (.env)
-
-```
-UPSTAGE_BASE_URL=https://...
-UPSTAGE_MODEL=solar-pro3-preview
-UPSTAGE_API_KEY=your_api_key
-```
 
 ## Environment Variables
 - **DO NOT** read or modify `.env` files directly.
