@@ -1,0 +1,72 @@
+[project]
+name = "gateway-backend"
+version = "0.1.0"
+description = "Agentic AI Guardrail - Gateway Backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-mock>=3.12.0",
+    "httpx>=0.27.0",
+    "ruff>=0.6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 80
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+    "D",   # pydocstyle (Google 스타일 docstring)
+    "TID", # flake8-tidy-imports (상대 import 금지)
+    "S",   # flake8-bandit (보안 취약점)
+    "G",   # flake8-logging-format
+    "PT",  # flake8-pytest-style
+    "ANN", # flake8-annotations (타입 힌트)
+]
+ignore = [
+    "D203",   # D211과 충돌
+    "D213",   # D212와 충돌
+    "D300",   # formatter 충돌 방지
+    "ANN401", # typing.Any 허용
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101", # pytest assert 허용
+    "D",    # 테스트 docstring 면제
+    "ANN",  # 테스트 타입 힌트 면제
+]
+"**/__init__.py" = [
+    "D104", # 빈 __init__.py docstring 면제
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
