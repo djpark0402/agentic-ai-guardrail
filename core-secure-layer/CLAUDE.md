@@ -44,6 +44,40 @@
 - **머지 실행 전에는 반드시 사용자에게 확인을 받을 것** — 사전에 계획을 승인받았더라도 실제 `git merge` 명령 직전에 별도 confirmation 필수
 - 같은 원칙이 `git reset --hard`, `git rebase` 등 히스토리를 변경하는 작업에도 적용됨
 
+## 레이어 개발 워크플로우 (L1~L8 `check()` 구현)
+
+L1~L8 각 레이어의 `check()` 구현은 반드시 아래 3-에이전트 순차 파이프라인으로 진행한다. 스펙은 `.claude/agents/layer-{tester,implementer,reviewer}.md` 에 정의돼 있으며 Agent tool 로 spawn 한다. **병렬 실행 금지** — 한 번에 한 레이어만.
+
+### 사전 조건
+- `feature/core-secure-layer/dev` 가 깨끗하고 origin 과 동기화됨
+- 대상 레이어의 **스펙(1~2 문장)** 이 사용자와 합의된 상태
+- 의존 레이어가 있다면 그 레이어는 이미 dev 에 머지돼 있음
+
+### 파이프라인 단계
+1. **layer-tester spawn** — 레이어 번호 + 스펙 + 의존성 전달
+   - 결과: `feature/core-secure-layer/layer-l{N}` 브랜치에 `test: L{N} 실패 테스트 추가` 커밋 1개
+2. **layer-implementer spawn** — 동일 레이어 번호 + 스펙 + 브랜치 이름 전달
+   - 결과: 같은 브랜치에 `feat: L{N} check() 구현` (+ 선택 `refactor:`) 커밋
+3. **layer-reviewer spawn** — 레이어 번호 + 스펙 + 브랜치 이름 전달
+   - 결과: `PASS` / `FAIL` verdict + 5개 범주별 findings
+
+### 단계 간 자동 연속 실행
+파이프라인 시작이 승인되면 tester → implementer → reviewer 를 **중간 확인 없이 자동 연속 실행** 한다. 각 단계 리포트는 사용자에게 간단히 요약해 보여주되 "다음 단계 진행해도 될까요?" 같은 질문은 하지 말 것.
+
+사용자 승인이 필요한 동기화 지점은 두 개뿐:
+1. **파이프라인 시작** — 레이어 스펙 합의 + 실행 승인
+2. **최종 머지** — task 브랜치 → dev `--no-ff` 머지 (아래 "머지 규칙" 과 "작업 흐름" 그대로 적용)
+
+reviewer 가 FAIL 을 내거나 중간 단계에서 blocker 가 발생하면 그 시점에 즉시 사용자에게 보고하고 의사결정을 받는다.
+
+### 실패 / blocker 처리
+- **tester blocker**: 스펙 모호성이면 사용자와 재협의 후 re-spawn. base.py 변경 같은 범위 초과면 별도 작업으로 분리.
+- **implementer blocker**: 5회 시도 후에도 실패하면, 테스트가 부당한지 구현이 부당한지 사용자와 함께 판단. 전자면 tester 재실행, 후자면 implementer 재실행 (프롬프트 개선 후).
+- **reviewer FAIL**: findings 를 보고 어떤 단계로 돌아갈지 사용자가 결정. 여러 범주가 동시 FAIL 이면 가장 상류인 tester 부터.
+
+### 머지 이후
+reviewer 가 PASS 를 내고 사용자 승인이 떨어지면 아래 "작업 흐름" 섹션의 6~10번 단계(`--no-ff` 머지 → auto push → PR 생성/갱신 → `gh pr edit`) 를 그대로 따른다.
+
 ## 작업 흐름
 1. 작업 대상을 브랜치 단위로 쪼개 계획 수립
 2. `feature/core-secure-layer/dev`에서 `feature/core-secure-layer/<작업명>` 분기
