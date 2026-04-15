@@ -15,11 +15,13 @@ if [ "$CURRENT_BRANCH" != "feature/core-secure-layer/dev" ]; then
   exit 0
 fi
 
-# git merge 또는 git push 명령만 대상
+# git merge 또는 git push 명령만 대상.
+# `git -C <path> merge ...` / `git -c <cfg> push ...` 같이 git과 서브커맨드
+# 사이에 옵션이 끼는 형태도 포괄하기 위해 "git "와 서브커맨드 사이에 와일드카드를 둔다.
 TRIGGER=""
 case "$COMMAND" in
-  *"git merge"*) TRIGGER="merge" ;;
-  *"git push"*)  TRIGGER="push"  ;;
+  *"git "*"merge"*) TRIGGER="merge" ;;
+  *"git "*"push"*)  TRIGGER="push"  ;;
   *) exit 0 ;;
 esac
 
