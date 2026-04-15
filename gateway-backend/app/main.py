@@ -4,12 +4,23 @@ from pathlib import Path
 
 import openai
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import chat
 
 app = FastAPI(title="Gateway Backend")
+
+# CORS — 사내망 전개 가정 하에 전 오리진 허용.
+# 공개 배포 시에는 allow_origins를 화이트리스트로 좁히고 인증·레이트리밋 도입.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 가드레일 채팅 라우터 마운트
 app.include_router(chat.router, prefix="/v1")
