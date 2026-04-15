@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gateway Backend · Playground</title>
+    <style>
+      :root {
+        --bg: #0b0d10;
+        --surface: #12161b;
+        --surface-2: #1a1f26;
+        --border: #2a313b;
+        --text: #e7ecf3;
+        --muted: #8a95a5;
+        --accent: #7dd3fc;
+        --accent-strong: #22d3ee;
+        --danger: #f87171;
+        --ok: #4ade80;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Segoe UI",
+          sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        line-height: 1.55;
+      }
+      main {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 48px 24px 96px;
+      }
+      header.hero {
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 32px;
+        margin-bottom: 40px;
+      }
+      h1 {
+        font-size: clamp(1.9rem, 1.2rem + 2vw, 2.8rem);
+        letter-spacing: -0.02em;
+        margin: 0 0 8px;
+      }
+      h1 .dot {
+        color: var(--accent-strong);
+      }
+      .subtitle {
+        color: var(--muted);
+        margin: 0 0 24px;
+        font-size: 1.05rem;
+      }
+      .pipeline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-family: var(--mono);
+        font-size: 0.85rem;
+      }
+      .pipeline span {
+        padding: 6px 12px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      .pipeline .arrow {
+        border: none;
+        background: none;
+        color: var(--muted);
+        padding: 6px 0;
+      }
+      section.card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 28px;
+        margin-bottom: 28px;
+      }
+      section.card h2 {
+        margin: 0 0 4px;
+        font-size: 1.25rem;
+        letter-spacing: -0.01em;
+      }
+      section.card .lede {
+        color: var(--muted);
+        margin: 0 0 20px;
+        font-size: 0.95rem;
+      }
+      .endpoint-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: var(--mono);
+        font-size: 0.95rem;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 16px;
+      }
+      .method {
+        font-weight: 700;
+        color: var(--bg);
+        background: var(--accent);
+        padding: 2px 10px;
+        border-radius: 4px;
+        font-size: 0.8rem;
+        letter-spacing: 0.06em;
+      }
+      pre {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        overflow: auto;
+        margin: 0 0 16px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      label {
+        display: block;
+        font-size: 0.8rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 6px;
+      }
+      input[type="text"],
+      textarea,
+      select {
+        width: 100%;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 0.9rem;
+      }
+      textarea {
+        resize: vertical;
+        min-height: 70px;
+      }
+      input:focus,
+      textarea:focus,
+      select:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 140px 1fr auto;
+        gap: 12px;
+        margin-bottom: 12px;
+        align-items: start;
+      }
+      button {
+        background: var(--accent-strong);
+        color: var(--bg);
+        border: none;
+        border-radius: 8px;
+        padding: 10px 18px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      button:hover {
+        filter: brightness(1.1);
+      }
+      button.ghost {
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--border);
+      }
+      button.ghost:hover {
+        color: var(--text);
+      }
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-top: 8px;
+        flex-wrap: wrap;
+      }
+      .checkbox {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      .response-meta {
+        display: flex;
+        gap: 16px;
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        margin-bottom: 12px;
+        color: var(--muted);
+      }
+      .status-ok {
+        color: var(--ok);
+      }
+      .status-bad {
+        color: var(--danger);
+      }
+      .field-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      footer {
+        color: var(--muted);
+        font-size: 0.8rem;
+        text-align: center;
+        margin-top: 40px;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <h1>Gateway Backend<span class="dot">.</span> Playground</h1>
+        <p class="subtitle">
+          Upstage Solar API 앞단의 가드레일 파이프라인을 직접 테스트해보세요.
+        </p>
+        <div class="pipeline">
+          <span>policy</span>
+          <span class="arrow">→</span>
+          <span>input check</span>
+          <span class="arrow">→</span>
+          <span>LLM (non-stream)</span>
+          <span class="arrow">→</span>
+          <span>output check</span>
+          <span class="arrow">→</span>
+          <span>user (stream 선택)</span>
+        </div>
+      </header>
+
+      <section class="card" id="spec-card">
+        <h2>POST /v1/chat/completions</h2>
+        <p class="lede" id="spec-summary">OpenAPI 스키마를 불러오는 중…</p>
+        <div class="endpoint-row">
+          <span class="method">POST</span>
+          <span>/v1/chat/completions</span>
+        </div>
+        <div class="field-grid">
+          <div>
+            <label>요청 스키마</label>
+            <pre id="spec-request">—</pre>
+          </div>
+          <div>
+            <label>응답 스키마 (비스트리밍)</label>
+            <pre id="spec-response">—</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>테스트</h2>
+        <p class="lede">
+          폼을 채우고 전송하면 실제 <code>/v1/chat/completions</code>
+          엔드포인트를 호출합니다. 스트리밍을 켜면 SSE 청크가 실시간으로
+          누적됩니다.
+        </p>
+
+        <label>model</label>
+        <input id="f-model" type="text" value="solar-pro2" />
+
+        <div style="height: 16px"></div>
+
+        <label>messages</label>
+        <div id="messages"></div>
+        <div class="toolbar">
+          <button class="ghost" type="button" id="add-msg">
+            + 메시지 추가
+          </button>
+          <label class="checkbox">
+            <input type="checkbox" id="f-stream" checked />
+            stream
+          </label>
+          <button type="button" id="send">전송</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>응답</h2>
+        <div class="response-meta">
+          <span>status: <span id="resp-status">—</span></span>
+          <span>content-type: <span id="resp-ctype">—</span></span>
+        </div>
+        <label>본문</label>
+        <pre id="resp-body">아직 요청을 보내지 않았습니다.</pre>
+      </section>
+
+      <footer>
+        기본 Swagger UI는 <a href="/docs">/docs</a>에서 계속 사용할 수 있습니다.
+      </footer>
+    </main>
+
+    <script>
+      const messagesEl = document.getElementById("messages");
+      const addMsgBtn = document.getElementById("add-msg");
+      const sendBtn = document.getElementById("send");
+      const modelInput = document.getElementById("f-model");
+      const streamInput = document.getElementById("f-stream");
+      const respStatus = document.getElementById("resp-status");
+      const respCtype = document.getElementById("resp-ctype");
+      const respBody = document.getElementById("resp-body");
+
+      function addMessageRow(role = "user", content = "") {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.innerHTML = `
+          <select>
+            <option value="system">system</option>
+            <option value="user">user</option>
+            <option value="assistant">assistant</option>
+          </select>
+          <textarea placeholder="메시지 내용"></textarea>
+          <button class="ghost" type="button">제거</button>
+        `;
+        row.querySelector("select").value = role;
+        row.querySelector("textarea").value = content;
+        row
+          .querySelector("button")
+          .addEventListener("click", () => row.remove());
+        messagesEl.appendChild(row);
+      }
+
+      addMessageRow("user", "안녕, 너는 누구야?");
+      addMsgBtn.addEventListener("click", () => addMessageRow());
+
+      function collectMessages() {
+        return [...messagesEl.querySelectorAll(".row")].map((row) => ({
+          role: row.querySelector("select").value,
+          content: row.querySelector("textarea").value,
+        }));
+      }
+
+      function setStatus(code) {
+        respStatus.textContent = code;
+        respStatus.className =
+          code >= 200 && code < 300 ? "status-ok" : "status-bad";
+      }
+
+      async function send() {
+        const body = {
+          model: modelInput.value,
+          messages: collectMessages(),
+          stream: streamInput.checked,
+        };
+        respBody.textContent = "요청 중…";
+        respStatus.textContent = "—";
+        respCtype.textContent = "—";
+
+        try {
+          const res = await fetch("/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          setStatus(res.status);
+          respCtype.textContent = res.headers.get("content-type") || "—";
+
+          if (!res.body || !body.stream) {
+            const text = await res.text();
+            try {
+              respBody.textContent = JSON.stringify(JSON.parse(text), null, 2);
+            } catch {
+              respBody.textContent = text;
+            }
+            return;
+          }
+
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let rendered = "";
+          respBody.textContent = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split("\n\n");
+            buffer = events.pop() || "";
+            for (const ev of events) {
+              const line = ev.split("\n").find((l) => l.startsWith("data: "));
+              if (!line) continue;
+              const payload = line.slice(6);
+              if (payload === "[DONE]") continue;
+              rendered += payload;
+              respBody.textContent = rendered;
+            }
+          }
+        } catch (err) {
+          setStatus("ERR");
+          respBody.textContent = String(err);
+        }
+      }
+
+      sendBtn.addEventListener("click", send);
+
+      function resolveRef(spec, ref) {
+        const parts = ref.replace(/^#\//, "").split("/");
+        return parts.reduce((acc, k) => acc?.[k], spec);
+      }
+
+      async function loadSpec() {
+        try {
+          const res = await fetch("/openapi.json");
+          const spec = await res.json();
+          const op = spec.paths?.["/v1/chat/completions"]?.post;
+          const summary =
+            op?.summary || op?.description || spec.info?.description || "";
+          document.getElementById("spec-summary").textContent =
+            summary || "OpenAI 호환 채팅 완성 엔드포인트.";
+
+          const reqRef =
+            op?.requestBody?.content?.["application/json"]?.schema?.$ref;
+          const reqSchema = reqRef ? resolveRef(spec, reqRef) : null;
+          document.getElementById("spec-request").textContent = reqSchema
+            ? JSON.stringify(reqSchema, null, 2)
+            : "(스키마 없음)";
+
+          const respSchema = spec.components?.schemas?.ChatResponse;
+          document.getElementById("spec-response").textContent = respSchema
+            ? JSON.stringify(respSchema, null, 2)
+            : "(스키마 없음)";
+        } catch (err) {
+          document.getElementById("spec-summary").textContent =
+            "OpenAPI 로드 실패: " + err;
+        }
+      }
+
+      loadSpec();
+    </script>
+  </body>
+</html>

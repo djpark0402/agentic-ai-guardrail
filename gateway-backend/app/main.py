@@ -1,8 +1,11 @@
 """Gateway Backend FastAPI 애플리케이션 진입점."""
 
+from pathlib import Path
+
 import openai
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.routers import chat
 
@@ -10,6 +13,14 @@ app = FastAPI(title="Gateway Backend")
 
 # 가드레일 채팅 라우터 마운트
 app.include_router(chat.router, prefix="/v1")
+
+# 플레이그라운드 정적 페이지 마운트 (/playground/)
+_STATIC_DIR = Path(__file__).parent / "static"
+app.mount(
+    "/playground",
+    StaticFiles(directory=_STATIC_DIR, html=True),
+    name="playground",
+)
 
 
 @app.get("/health")
