@@ -35,8 +35,11 @@ PUSH_MSG=""
 
 # merge 트리거면 자동 push 수행
 if [ "$TRIGGER" = "merge" ]; then
-  # merge 실패(충돌 등)로 working tree가 더러우면 스킵
-  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  # merge 실패(충돌 등)로 working tree가 더러우면 스킵.
+  # .claude/settings.local.json 은 사용자 개인 permissions 파일이라
+  # 항상 M 상태로 남을 수 있어 pathspec exclude 로 무시한다.
+  DIRTY=$(git status --porcelain -- . ':(exclude).claude/settings.local.json' 2>/dev/null)
+  if [ -n "$DIRTY" ]; then
     jq -n '{ systemMessage: "⚠️  merge 후 working tree가 깨끗하지 않음 (충돌 가능) — 자동 push 스킵" }'
     exit 0
   fi
