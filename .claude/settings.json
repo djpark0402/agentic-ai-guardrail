@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/pre-commit.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-commit.sh\""
           }
         ]
       }
@@ -17,20 +17,29 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/post-commit.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-commit.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/auto-pr-on-push.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/auto-pr-on-push.sh\""
           }
         ]
       },
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/ruff-format.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/ruff-format.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/ruff-format.sh\""
           }
         ]
       }
@@ -40,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/stop-check-uncommitted.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-check-uncommitted.sh\""
           }
         ]
       }
