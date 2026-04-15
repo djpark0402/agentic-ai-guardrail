@@ -1,5 +1,7 @@
 """Gateway Backend FastAPI 애플리케이션 진입점."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import openai
@@ -8,9 +10,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.dependencies import get_http_client
 from app.routers import chat
 
-app = FastAPI(title="Gateway Backend")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """앱 수명주기 동안 httpx AsyncClient 를 관리한다.
+
+    Args:
+        _app: FastAPI 앱 인스턴스.
+
+    Yields:
+        None.
+    """
+    client = get_http_client()
+    try:
+        yield
+    finally:
+        await client.aclose()
+        get_http_client.cache_clear()
+
+
+app = FastAPI(title="Gateway Backend", lifespan=lifespan)
 
 # CORS — 사내망 전개 가정 하에 전 오리진 허용.
 # 공개 배포 시에는 allow_origins를 화이트리스트로 좁히고 인증·레이트리밋 도입.

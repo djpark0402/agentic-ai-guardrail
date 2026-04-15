@@ -1,43 +1,43 @@
 """Policy 모델 테스트."""
 
-from app.models.policy import GuardrailPolicy, LayerConfig
-
-
-def test_layer_config_enabled():
-    """LayerConfig를 enabled=True로 생성할 수 있다."""
-    layer = LayerConfig(enabled=True)
-    assert layer.enabled is True
-
-
-def test_layer_config_disabled():
-    """LayerConfig를 enabled=False로 생성할 수 있다."""
-    layer = LayerConfig(enabled=False)
-    assert layer.enabled is False
+from app.models.policy import GuardrailPolicy
 
 
 def test_guardrail_policy_all_enabled():
-    """6개 레이어가 모두 enabled=True인 정책을 생성할 수 있다."""
+    """6개 레이어가 모두 활성화된 정책을 생성할 수 있다."""
     policy = GuardrailPolicy(
-        layer_1_prompt_injection=LayerConfig(enabled=True),
-        layer_2_sensitive_data=LayerConfig(enabled=True),
-        layer_3_toxicity=LayerConfig(enabled=True),
-        layer_4_hallucination=LayerConfig(enabled=True),
-        layer_5_pii=LayerConfig(enabled=True),
-        layer_6_compliance=LayerConfig(enabled=True),
+        l0=True, l1=True, l2=True, l3=True, l4=True, l5=True
     )
-    assert policy.layer_1_prompt_injection.enabled is True
-    assert policy.layer_6_compliance.enabled is True
+    assert policy.l0 is True
+    assert policy.l5 is True
+    assert policy.enabled_layers() == [0, 1, 2, 3, 4, 5]
 
 
 def test_guardrail_policy_mixed():
     """일부 레이어만 활성화된 정책을 생성할 수 있다."""
     policy = GuardrailPolicy(
-        layer_1_prompt_injection=LayerConfig(enabled=True),
-        layer_2_sensitive_data=LayerConfig(enabled=False),
-        layer_3_toxicity=LayerConfig(enabled=True),
-        layer_4_hallucination=LayerConfig(enabled=False),
-        layer_5_pii=LayerConfig(enabled=True),
-        layer_6_compliance=LayerConfig(enabled=False),
+        l0=True, l1=False, l2=True, l3=False, l4=True, l5=False
     )
-    assert policy.layer_2_sensitive_data.enabled is False
-    assert policy.layer_3_toxicity.enabled is True
+    assert policy.l1 is False
+    assert policy.l2 is True
+    assert policy.enabled_layers() == [0, 2, 4]
+
+
+def test_guardrail_policy_parses_admin_api_payload():
+    """admin-backend 응답(l0Enabled..l5Enabled)을 그대로 파싱한다."""
+    payload = {
+        "isUse": True,
+        "createdAt": "2026-04-15T06:37:51.766295Z",
+        "l0Enabled": True,
+        "name": "테스트 정책 1",
+        "l3Enabled": False,
+        "description": "테스트 정책 입니다.",
+        "l2Enabled": True,
+        "id": 10,
+        "l1Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": False,
+        "updatedAt": "2026-04-15T07:43:48.397550Z",
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.enabled_layers() == [0, 1, 2, 4]

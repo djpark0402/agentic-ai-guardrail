@@ -12,19 +12,12 @@ from app.dependencies import (
 )
 from app.main import app
 from app.models.guardrail import CheckStatus, GuardrailResult
-from app.models.policy import GuardrailPolicy, LayerConfig
+from app.models.policy import GuardrailPolicy
 
 
 def _all_enabled_policy() -> GuardrailPolicy:
     """테스트용 전체 활성화 정책을 반환한다."""
-    return GuardrailPolicy(
-        layer_1_prompt_injection=LayerConfig(enabled=True),
-        layer_2_sensitive_data=LayerConfig(enabled=True),
-        layer_3_toxicity=LayerConfig(enabled=True),
-        layer_4_hallucination=LayerConfig(enabled=True),
-        layer_5_pii=LayerConfig(enabled=True),
-        layer_6_compliance=LayerConfig(enabled=True),
-    )
+    return GuardrailPolicy(l0=True, l1=True, l2=True, l3=True, l4=True, l5=True)
 
 
 @pytest.fixture

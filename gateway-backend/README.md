@@ -15,6 +15,24 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 - 출력이 BLOCK되면 비스트리밍은 HTTP 400, 스트리밍은 에러 프레임 1건만 전송하여
   원본 응답이 클라이언트로 유출되지 않도록 한다.
 
+### 정책 조회 & 레이어 게이팅
+
+요청마다 `${ADMIN_BACKEND_URL}/api/v1/policies/active` 를 `GET` 으로 호출하여
+현재 활성 정책을 가져오고, 응답의 `l0Enabled`..`l5Enabled` 플래그에 따라
+security-layer 가 해당 레이어(L0~L5)에 대해서만 프롬프트 검사를 수행한다.
+
+| 레이어 | 의미 |
+|---|---|
+| L0 | prompt injection |
+| L1 | sensitive data |
+| L2 | toxicity |
+| L3 | hallucination |
+| L4 | PII |
+| L5 | compliance |
+
+admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전파되어 해당
+요청은 실패로 처리된다.
+
 ## 엔드포인트
 
 | Method | Path | 설명 |
