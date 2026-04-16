@@ -9,6 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.config import Settings, get_settings
 from app.dependencies import (
     get_policy_service,
     get_security_service,
@@ -21,6 +22,7 @@ from app.models.chat import (
     ChatResponseMessage,
 )
 from app.models.guardrail import CheckStatus
+from app.models.policy import GuardrailPolicy
 from app.services.policy_service import PolicyService
 from app.services.security_layer_service import SecurityLayerService
 from app.services.solar_service import SolarService
@@ -218,6 +220,7 @@ async def chat_completions(
         SecurityLayerService, Depends(get_security_service)
     ],
     solar_service: Annotated[SolarService, Depends(get_solar_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> ChatResponse | StreamingResponse:
     """Solar API 포맷의 채팅 완성 요청을 처리한다.
 
@@ -233,6 +236,7 @@ async def chat_completions(
         policy_service: 보안 정책 조회 서비스.
         security_service: 보안 레이어 검사 서비스.
         solar_service: Solar API 클라이언트 서비스.
+        settings: 애플리케이션 설정 (정책 조회 생략 여부 포함).
 
     Returns:
         비스트리밍: ChatResponse JSON 응답.
@@ -243,8 +247,13 @@ async def chat_completions(
     """
     session_id = str(uuid.uuid4())
 
-    # 1단계: admin-backend에서 보안 정책 조회 (더미)
-    policy = await policy_service.fetch_policy(session_id=session_id)
+    # 1단계: admin-backend에서 보안 정책 조회
+    if settings.skip_policy_fetch:
+        policy = GuardrailPolicy.all_disabled()
+    else:
+        policy = await policy_service.fetch_policy(
+            session_id=session_id,
+        )
 
     # 2단계: 입력 프롬프트 보안 검사 (더미)
     input_result = await security_service.check_input(

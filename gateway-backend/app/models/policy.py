@@ -28,6 +28,22 @@ class GuardrailPolicy(BaseModel):
     l4: bool = Field(alias="l4Enabled")
     l5: bool = Field(alias="l5Enabled")
 
+    @classmethod
+    def all_disabled(cls) -> "GuardrailPolicy":
+        """모든 레이어가 비활성인 기본 정책을 반환한다.
+
+        Returns:
+            L0~L5 전부 False인 GuardrailPolicy 인스턴스.
+        """
+        return cls(
+            l0=False,
+            l1=False,
+            l2=False,
+            l3=False,
+            l4=False,
+            l5=False,
+        )
+
     def enabled_layers(self) -> list[int]:
         """활성화된 레이어 인덱스 목록을 반환한다.
 

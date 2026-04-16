@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.dependencies import (
     get_policy_service,
     get_security_service,
@@ -440,3 +441,55 @@ def test_policy_fetch_error_returns_structured_503(client, mock_policy_service):
     data = resp.json()
     assert data["provider"] == "admin_backend"
     assert data["retryable"] is True
+
+
+# ── 정책 조회 생략 (SKIP_POLICY_FETCH) 테스트 ──────────────────
+
+
+def test_all_disabled_policy_has_no_enabled_layers():
+    """GuardrailPolicy.all_disabled()는 모든 레이어가 비활성이다."""
+    policy = GuardrailPolicy.all_disabled()
+    assert policy.enabled_layers() == []
+    assert policy.l0 is False
+    assert policy.l5 is False
+
+
+def test_skip_policy_fetch_skips_admin_call(
+    mock_security_service, mock_solar_service
+):
+    """SKIP_POLICY_FETCH=true이면 fetch_policy를 호출하지 않는다."""
+
+    mock_ps = MagicMock()
+    mock_ps.fetch_policy = AsyncMock()
+
+    def _skip_settings():
+        s = get_settings()
+        # 새 Settings 객체를 만들어 skip_policy_fetch=True로 오버라이드
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=True,
+        )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_ps
+    app.dependency_overrides[get_security_service] = lambda: (
+        mock_security_service
+    )
+    app.dependency_overrides[get_solar_service] = lambda: mock_solar_service
+    app.dependency_overrides[get_settings] = _skip_settings
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert resp.status_code == 200
+        mock_ps.fetch_policy.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()

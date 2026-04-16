@@ -88,6 +88,7 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 - `LLM_BASE_URL` — Solar 엔드포인트 (기본 `https://api.upstage.ai/v1`)
 - `LLM_MODEL` — 사용할 모델 (기본 `solar-pro2`)
 - `ADMIN_BACKEND_URL` — 정책 조회용 admin-backend 주소
+- `SKIP_POLICY_FETCH` — `true`로 설정하면 admin-backend 정책 조회를 생략하고 전체 레이어 비활성 상태로 동작 (기본 `false`)
 
 > `.env` 파일은 **절대 커밋하지 않는다.** 새 환경 변수가 필요하면
 > `.env.example`에 먼저 추가한다.

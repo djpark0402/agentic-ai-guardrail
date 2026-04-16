@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     llm_model: str
     upstage_api_key: SecretStr
     admin_backend_url: str = "http://localhost:8001"
+    skip_policy_fetch: bool = False
 
 
 @lru_cache
