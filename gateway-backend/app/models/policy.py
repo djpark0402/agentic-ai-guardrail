@@ -29,7 +29,7 @@ class GuardrailPolicy(BaseModel):
     l6: bool = Field(alias="l6Enabled")
 
     @classmethod
-    def all_disabled(cls) -> "GuardrailPolicy":
+    def all_disabled(cls) -> GuardrailPolicy:
         """모든 레이어가 비활성인 기본 정책을 반환한다.
 
         Returns:

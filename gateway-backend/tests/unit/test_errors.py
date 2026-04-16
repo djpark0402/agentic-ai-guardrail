@@ -292,7 +292,7 @@ class TestMapAdminBackendError:
 class TestSolarErrorHandlerLogging:
     """solar_error_handler 가 구조화된 로그를 남기는지 검증."""
 
-    def test_logs_contain_provider_and_exception_type(
+    async def test_logs_contain_provider_and_exception_type(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Solar 에러 핸들러 호출 시 로그에 핵심 필드 포함."""
@@ -309,12 +309,8 @@ class TestSolarErrorHandlerLogging:
         mock_request.state = MagicMock()
         mock_request.state.session_id = "test-session"
 
-        import asyncio
-
         with caplog.at_level(logging.ERROR, "app.main"):
-            asyncio.get_event_loop().run_until_complete(
-                solar_error_handler(mock_request, exc)
-            )
+            await solar_error_handler(mock_request, exc)
 
         assert any(
             "solar" in r.message and "AuthenticationError" in r.message
@@ -325,7 +321,7 @@ class TestSolarErrorHandlerLogging:
 class TestAdminBackendErrorHandlerLogging:
     """admin_backend_error_handler 가 구조화된 로그를 남기는지."""
 
-    def test_logs_contain_provider_and_exception_type(
+    async def test_logs_contain_provider_and_exception_type(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Admin-backend 에러 핸들러 호출 시 로그에 핵심 필드."""
@@ -342,12 +338,8 @@ class TestAdminBackendErrorHandlerLogging:
         mock_request.state = MagicMock()
         mock_request.state.session_id = "test-session"
 
-        import asyncio
-
         with caplog.at_level(logging.ERROR, "app.main"):
-            asyncio.get_event_loop().run_until_complete(
-                admin_backend_error_handler(mock_request, exc)
-            )
+            await admin_backend_error_handler(mock_request, exc)
 
         assert any(
             "admin_backend" in r.message and "ConnectError" in r.message

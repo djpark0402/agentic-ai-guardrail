@@ -115,7 +115,7 @@ async def _stream_openai_chunks(
     created: int,
     model: str,
     finish_reason: str,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """검증이 끝난 전체 content를 OpenAI SSE 규격으로 재방출한다.
 
     첫 프레임은 `role=assistant` 를 담고, 중간 프레임들은 `content` 델타를,
@@ -175,7 +175,7 @@ async def _stream_guardrail_block(
     chunk_id: str,
     created: int,
     model: str,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """출력 가드레일 BLOCK 시 OpenAI 규격 내에서 에러 프레임을 방출한다.
 
     원본 LLM 응답은 절대 유출하지 않는다. finish_reason 은 OpenAI 모더레이션

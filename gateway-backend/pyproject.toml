@@ -2,7 +2,7 @@
 name = "gateway-backend"
 version = "0.1.0"
 description = "Agentic AI Guardrail - Gateway Backend"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -12,7 +12,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "openai>=1.0.0",
     "langchain-openai>=0.3.0",
+    "core-secure-layer",
 ]
+
+[tool.uv.sources]
+core-secure-layer = { path = "../core-secure-layer" }
 
 [dependency-groups]
 dev = [
@@ -31,7 +35,7 @@ pythonpath = ["."]
 
 [tool.ruff]
 line-length = 80
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [
