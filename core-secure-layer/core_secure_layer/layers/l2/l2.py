@@ -1,30 +1,365 @@
-"""L2 가드레일 레이어 스켈레톤."""
+"""L2 가드레일 레이어 — 혼란도(perplexity) 기반 비정상 입력 탐지."""
+
+import logging
+import math
+import re
+from typing import Any
 
 from core_secure_layer.layers.base import BaseLayer
 from core_secure_layer.layers.types import (
     GuardrailRequest,
     LayerResult,
+    Severity,
+)
+
+logger = logging.getLogger(__name__)
+
+# 1차 필터: 허용 문자셋 정규식
+# 한국어(가-힣, ㄱ-ㅎ, ㅏ-ㅣ) + 영어 + 숫자 + 공백/탭/줄바꿈
+# + 기본 구두점 + 수학/기호
+_ALLOWED_RE: re.Pattern[str] = re.compile(
+    r"^[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9"
+    r"\s"
+    r".,!?:;'\"\-()\[\]{}"
+    r"@#$%^&*+=~/\\|<>_"
+    r"]*$",
+)
+
+# 2차 필터 fallback: 영어 바이그램 빈도 기반 PPL 추정
+# 영어에서 빈번한 문자 바이그램 상위 100개
+_COMMON_BIGRAMS: frozenset[str] = frozenset(
+    {
+        "th",
+        "he",
+        "in",
+        "er",
+        "an",
+        "re",
+        "on",
+        "at",
+        "en",
+        "nd",
+        "ti",
+        "es",
+        "or",
+        "te",
+        "of",
+        "ed",
+        "is",
+        "it",
+        "al",
+        "ar",
+        "st",
+        "to",
+        "nt",
+        "ng",
+        "se",
+        "ha",
+        "as",
+        "ou",
+        "io",
+        "le",
+        "ve",
+        "co",
+        "me",
+        "de",
+        "hi",
+        "ri",
+        "ro",
+        "ic",
+        "ne",
+        "ea",
+        "ra",
+        "ce",
+        "li",
+        "ch",
+        "ll",
+        "be",
+        "ma",
+        "si",
+        "om",
+        "ur",
+        "ca",
+        "el",
+        "ta",
+        "la",
+        "ns",
+        "ge",
+        "ec",
+        "ai",
+        "di",
+        "ho",
+        "sh",
+        "ow",
+        "oo",
+        "ld",
+        "us",
+        "il",
+        "ut",
+        "no",
+        "wh",
+        "tr",
+        "ee",
+        "do",
+        "da",
+        "so",
+        "ac",
+        "nc",
+        "pe",
+        "wa",
+        "wo",
+        "yo",
+        "we",
+        "lo",
+        "ot",
+        "fo",
+        "ie",
+        "ly",
+        "ry",
+        "ex",
+        "ul",
+        "ab",
+        "em",
+        "ol",
+        "ad",
+        "ni",
+        "ss",
+        "mo",
+        "am",
+        "op",
+        "un",
+    }
 )
 
 
-class L2Layer(BaseLayer):
-    """가드레일 레이어 L2 스켈레톤."""
+def _estimate_ppl_fallback(text: str) -> float:
+    """영어 바이그램 빈도 기반 PPL 추정 (모델 미사용 fallback).
 
-    name = "L2"
+    ASCII 알파벳 연속 바이그램 중 영어에서 흔하지 않은
+    바이그램의 비율로 혼란도를 추정한다.
+
+    Args:
+        text: 분석 대상 텍스트.
+
+    Returns:
+        추정 perplexity 값.
+    """
+    lowered = text.lower().strip()
+    if not lowered:
+        return 1.0
+
+    bigrams: list[str] = []
+    for i in range(len(lowered) - 1):
+        c1, c2 = lowered[i], lowered[i + 1]
+        if "a" <= c1 <= "z" and "a" <= c2 <= "z":
+            bigrams.append(lowered[i : i + 2])
+
+    if not bigrams:
+        return 1.0
+
+    uncommon = sum(1 for b in bigrams if b not in _COMMON_BIGRAMS)
+    ratio = uncommon / len(bigrams)
+    return math.exp(1 + ratio * 10)
+
+
+class L2Layer(BaseLayer):
+    """혼란도 탐지 가드레일 레이어.
+
+    2단계 필터링으로 비정상 입력을 차단한다.
+    1차: 문자셋 허용 목록 기반 차단.
+    2차: perplexity(PPL) 기반 이상 탐지.
+    예외 발생 시 fail-open(허용) 원칙을 따른다.
+    """
+
+    name: str = "L2"
+
+    def __init__(
+        self,
+        model_path: str = "",
+        ppl_threshold: float = 600.0,
+    ) -> None:
+        """L2 레이어를 초기화한다.
+
+        Args:
+            model_path: GPT-2 모델 로컬 디렉토리 경로.
+            ppl_threshold: PPL 차단 임계값.
+        """
+        self.model_path = model_path
+        self.ppl_threshold = ppl_threshold
+        self._model: Any = None
+        self._tokenizer: Any = None
+        self._model_loaded = False
+        self._load_model()
+
+    def _load_model(self) -> None:
+        """Transformers 모델을 로드한다.
+
+        로드 실패 시 경고만 남기고 2차 필터링은
+        fallback 또는 비활성 상태로 동작한다.
+        """
+        try:
+            from transformers import (
+                AutoModelForCausalLM,
+                AutoTokenizer,
+            )
+
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                self.model_path,
+            )
+            self._model = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+            )
+            self._model.eval()
+            self._model_loaded = True
+        except Exception:
+            logger.warning(
+                "GPT-2 모델 로드 실패: %s — fallback 사용",
+                self.model_path,
+            )
+            self._model_loaded = False
+
+    def _compute_ppl_with_model(
+        self,
+        text: str,
+    ) -> float:
+        """GPT-2 모델로 PPL을 계산한다.
+
+        Args:
+            text: 분석 대상 텍스트.
+
+        Returns:
+            계산된 perplexity 값.
+        """
+        import torch
+
+        inputs = self._tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+        )
+        with torch.no_grad():
+            outputs = self._model(
+                **inputs,
+                labels=inputs["input_ids"],
+            )
+        return float(torch.exp(outputs.loss).item())
+
+    def _compute_ppl(self, text: str) -> float:
+        """PPL을 계산한다 (모델 또는 fallback 사용).
+
+        Args:
+            text: 분석 대상 텍스트.
+
+        Returns:
+            추정 perplexity 값.
+
+        Raises:
+            RuntimeError: 모델과 fallback 모두 실패 시.
+        """
+        if getattr(self, "_model_loaded", False):
+            return self._compute_ppl_with_model(text)
+        return _estimate_ppl_fallback(text)
 
     async def _check(
         self,
         request: GuardrailRequest,
     ) -> LayerResult:
-        """L2 검사 실행 (미구현).
+        """L2 검사를 실행한다.
+
+        1차 문자셋 필터 → 2차 PPL 필터 순서로 검사.
 
         Args:
             request: 가드레일 요청 객체.
 
         Returns:
             레이어의 검사 결과.
-
-        Raises:
-            NotImplementedError: 구현 대기 중.
         """
-        raise NotImplementedError
+        try:
+            return self._inspect(request.user_input)
+        except Exception:
+            # fail-open: 예외 시 허용
+            return self._allow()
+
+    def _inspect(self, text: str) -> LayerResult:
+        """입력 텍스트를 순차 검사한다.
+
+        Args:
+            text: 검사할 원본 입력 문자열.
+
+        Returns:
+            검사 결과 LayerResult.
+        """
+        # 빈 문자열 / 공백만 → 허용
+        if not text or not text.strip():
+            return self._allow()
+
+        # 1차: 문자셋 허용 목록 검사
+        if not _ALLOWED_RE.match(text):
+            return self._block_charset(text)
+
+        # 2차: PPL 검사
+        ppl = self._compute_ppl(text)
+        if ppl > self.ppl_threshold:
+            return self._block_ppl(ppl)
+
+        return self._allow()
+
+    def _block_charset(self, text: str) -> LayerResult:
+        """1차 문자셋 위반으로 차단한다.
+
+        Args:
+            text: 비허용 문자가 포함된 입력 문자열.
+
+        Returns:
+            차단 상태의 LayerResult.
+        """
+        for i, ch in enumerate(text):
+            if not _ALLOWED_RE.match(ch):
+                reason = (
+                    f"disallowed character detected at position {i}: '{ch}'"
+                )
+                return LayerResult(
+                    name=self.name,
+                    allowed=False,
+                    reason=reason,
+                    severity=Severity.MEDIUM,
+                    tags=[
+                        "charset",
+                        "disallowed_character",
+                    ],
+                )
+        # 도달 불가하지만 방어적 처리
+        return self._allow()
+
+    def _block_ppl(self, ppl: float) -> LayerResult:
+        """2차 PPL 초과로 차단한다.
+
+        Args:
+            ppl: 계산된 perplexity 값.
+
+        Returns:
+            차단 상태의 LayerResult.
+        """
+        reason = (
+            f"high perplexity: {ppl:.1f} (threshold: {self.ppl_threshold:.1f})"
+        )
+        return LayerResult(
+            name=self.name,
+            allowed=False,
+            reason=reason,
+            severity=Severity.MEDIUM,
+            tags=["perplexity", "anomaly"],
+        )
+
+    def _allow(self) -> LayerResult:
+        """허용 결과를 생성한다.
+
+        Returns:
+            허용 상태의 LayerResult.
+        """
+        return LayerResult(
+            name=self.name,
+            allowed=True,
+            confidence=1.0,
+            severity=Severity.NONE,
+        )
