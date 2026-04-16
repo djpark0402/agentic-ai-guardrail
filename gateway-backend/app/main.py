@@ -1,5 +1,6 @@
 """Gateway Backend FastAPI 애플리케이션 진입점."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,6 +18,8 @@ from app.errors import (
     map_solar_error,
 )
 from app.routers import chat
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -86,18 +89,32 @@ async def default_model() -> dict[str, str]:
 
 @app.exception_handler(openai.APIError)
 async def solar_error_handler(
-    _request: Request, exc: openai.APIError
+    request: Request, exc: openai.APIError
 ) -> JSONResponse:
     """Solar(openai) 예외를 구조화된 JSON 으로 반환한다.
 
     Args:
-        _request: FastAPI 요청 객체.
+        request: FastAPI 요청 객체.
         exc: OpenAI API 오류 인스턴스.
 
     Returns:
         구조화된 에러 JSON 응답.
     """
     status, detail = map_solar_error(exc)
+    sid = getattr(
+        getattr(request, "state", None),
+        "session_id",
+        None,
+    )
+    logger.error(
+        "upstream_error: provider=%s "
+        "exception_type=%s upstream_status=%s "
+        "session_id=%s",
+        detail.provider,
+        type(exc).__name__,
+        detail.upstream_status,
+        sid,
+    )
     return JSONResponse(
         status_code=status,
         content=detail.model_dump(),
@@ -106,18 +123,32 @@ async def solar_error_handler(
 
 @app.exception_handler(httpx.HTTPError)
 async def admin_backend_error_handler(
-    _request: Request, exc: httpx.HTTPError
+    request: Request, exc: httpx.HTTPError
 ) -> JSONResponse:
     """admin-backend(httpx) 예외를 구조화된 JSON 으로 반환.
 
     Args:
-        _request: FastAPI 요청 객체.
+        request: FastAPI 요청 객체.
         exc: httpx 오류 인스턴스.
 
     Returns:
         구조화된 에러 JSON 응답.
     """
     status, detail = map_admin_backend_error(exc)
+    sid = getattr(
+        getattr(request, "state", None),
+        "session_id",
+        None,
+    )
+    logger.error(
+        "upstream_error: provider=%s "
+        "exception_type=%s upstream_status=%s "
+        "session_id=%s",
+        detail.provider,
+        type(exc).__name__,
+        detail.upstream_status,
+        sid,
+    )
     return JSONResponse(
         status_code=status,
         content=detail.model_dump(),

@@ -1,7 +1,10 @@
 """upstream 에러 매핑 함수 단위 테스트."""
 
+import logging
+
 import httpx
 import openai
+import pytest
 
 from app.errors import (
     UpstreamErrorDetail,
@@ -281,3 +284,72 @@ class TestMapAdminBackendError:
         assert status == 503
         assert detail.retryable is True
         assert detail.provider == "admin_backend"
+
+
+# ── 핸들러 로깅 통합 테스트 ──────────────────────────────────
+
+
+class TestSolarErrorHandlerLogging:
+    """solar_error_handler 가 구조화된 로그를 남기는지 검증."""
+
+    def test_logs_contain_provider_and_exception_type(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Solar 에러 핸들러 호출 시 로그에 핵심 필드 포함."""
+        from unittest.mock import MagicMock
+
+        from app.main import solar_error_handler
+
+        exc = _solar_status_error(
+            openai.AuthenticationError,
+            401,
+            code="api_key_suspended",
+        )
+        mock_request = MagicMock()
+        mock_request.state = MagicMock()
+        mock_request.state.session_id = "test-session"
+
+        import asyncio
+
+        with caplog.at_level(logging.ERROR, "app.main"):
+            asyncio.get_event_loop().run_until_complete(
+                solar_error_handler(mock_request, exc)
+            )
+
+        assert any(
+            "solar" in r.message and "AuthenticationError" in r.message
+            for r in caplog.records
+        )
+
+
+class TestAdminBackendErrorHandlerLogging:
+    """admin_backend_error_handler 가 구조화된 로그를 남기는지."""
+
+    def test_logs_contain_provider_and_exception_type(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Admin-backend 에러 핸들러 호출 시 로그에 핵심 필드."""
+        from unittest.mock import MagicMock
+
+        from app.main import admin_backend_error_handler
+
+        request = httpx.Request("GET", "https://admin/api")
+        exc = httpx.ConnectError(
+            message="Connection refused",
+            request=request,
+        )
+        mock_request = MagicMock()
+        mock_request.state = MagicMock()
+        mock_request.state.session_id = "test-session"
+
+        import asyncio
+
+        with caplog.at_level(logging.ERROR, "app.main"):
+            asyncio.get_event_loop().run_until_complete(
+                admin_backend_error_handler(mock_request, exc)
+            )
+
+        assert any(
+            "admin_backend" in r.message and "ConnectError" in r.message
+            for r in caplog.records
+        )
