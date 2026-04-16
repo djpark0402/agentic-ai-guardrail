@@ -101,6 +101,13 @@ async def _run_layers(
                 f" — {result.reason}"
                 f"{_DIM} ({time_str}){_RESET}",
             )
+            print(
+                f"         {_DIM}"
+                f"severity={result.severity.value}"
+                f" confidence={result.confidence}"
+                f" tags={result.tags}"
+                f"{_RESET}",
+            )
 
     print()
 
