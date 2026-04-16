@@ -12,7 +12,7 @@ class L7Layer(BaseLayer):
 
     name = "L7"
 
-    async def check(
+    async def _check(
         self,
         request: GuardrailRequest,
     ) -> LayerResult:
