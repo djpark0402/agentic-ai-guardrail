@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from core_secure_layer.layers.base import BaseLayer
 from core_secure_layer.layers.types import (
@@ -34,9 +35,10 @@ class SafetyResult:
 class L6Layer(BaseLayer):
     """로컬 safety 모델로 입력 안전성을 판별하는 레이어.
 
-    Kanana-Safeguard-8B, Llama Guard 등 사전 학습된 안전성
-    판별 모델의 출력을 파싱하여 safe/unsafe 를 결정한다.
-    모델 미로드, 추론 예외, 파싱 실패 시 fail-open 으로 허용.
+    Kanana-Safeguard-8B, Llama Guard 등 사전 학습된
+    안전성 판별 모델의 출력을 파싱하여 safe/unsafe 를
+    결정한다. 모델 미로드, 추론 예외, 파싱 실패 시
+    fail-open 으로 허용.
     """
 
     name: str = "L6"
@@ -51,13 +53,51 @@ class L6Layer(BaseLayer):
             model_name: 사용할 safety 모델 이름.
         """
         self.model_name = model_name
+        self._model: Any = None
+        self._tokenizer: Any = None
         self._model_loaded = False
+        self._load_model()
+
+    def _load_model(self) -> None:
+        """Safety 모델과 토크나이저를 로드한다.
+
+        로드 실패 시 경고만 남기고 fail-open 동작.
+        """
+        model_path = _MODEL_BASE_DIR / self.model_name
+        if not model_path.exists():
+            logger.warning(
+                "모델 경로 없음: %s",
+                model_path,
+            )
+            return
+        try:
+            import transformers
+
+            transformers.logging.set_verbosity_error()
+            self._tokenizer = transformers.AutoTokenizer.from_pretrained(
+                str(model_path),
+            )
+            self._model = transformers.AutoModelForCausalLM.from_pretrained(
+                str(model_path),
+                device_map="auto",
+                torch_dtype="float16",
+            )
+            self._model.eval()
+            self._model_loaded = True
+            logger.info(
+                "Safety 모델 로드 완료: %s",
+                self.model_name,
+            )
+        except Exception:
+            logger.warning(
+                "Safety 모델 로드 실패: %s",
+                self.model_name,
+                exc_info=True,
+            )
+            self._model_loaded = False
 
     def _predict(self, text: str) -> str | None:
         """모델 추론을 실행한다.
-
-        실제 모델이 로드되지 않은 스켈레톤 상태에서는
-        None 을 반환한다. 모델 로드 후 오버라이드된다.
 
         Args:
             text: 판별 대상 텍스트.
@@ -65,7 +105,48 @@ class L6Layer(BaseLayer):
         Returns:
             모델 출력 문자열. 실패 시 None.
         """
-        return None
+        if not self._model_loaded:
+            return None
+
+        try:
+            import torch
+
+            messages = [
+                {"role": "user", "content": text},
+            ]
+            encoded = self._tokenizer.apply_chat_template(
+                messages,
+                return_tensors="pt",
+                add_generation_prompt=True,
+            )
+            # BatchEncoding 또는 텐서 대응
+            if hasattr(encoded, "input_ids"):
+                input_ids = encoded.input_ids.to(
+                    self._model.device,
+                )
+            else:
+                input_ids = encoded.to(
+                    self._model.device,
+                )
+
+            with torch.no_grad():
+                output_ids = self._model.generate(
+                    input_ids,
+                    max_new_tokens=64,
+                    do_sample=False,
+                )
+            input_len = input_ids.shape[1]
+            generated = output_ids[0, input_len:]
+            return self._tokenizer.decode(
+                generated,
+                skip_special_tokens=True,
+            )
+        except Exception:
+            logger.warning(
+                "모델 추론 실패",
+                exc_info=True,
+            )
+            return None
 
     def _parse_output(
         self,
@@ -85,25 +166,39 @@ class L6Layer(BaseLayer):
         if raw_output is None:
             return None
 
-        lines = raw_output.strip().splitlines()
-        if not lines or not lines[0].strip():
+        import re
+
+        text = raw_output.strip().lower()
+        if not text:
             return None
 
-        verdict = lines[0].strip().lower()
-
-        if verdict == "safe":
+        # <SAFE> 또는 safe
+        if "<safe>" in text or text == "safe":
             return SafetyResult(is_safe=True)
 
-        if verdict == "unsafe":
-            category: str | None = None
-            if len(lines) > 1 and lines[1].strip():
-                category = lines[1].strip()
+        # <UNSAFE-S4> 또는 unsafe\nS4 형태
+        unsafe_match = re.search(
+            r"<unsafe(?:-([^>]+))?>",
+            text,
+        )
+        if unsafe_match:
+            category = unsafe_match.group(1)
             return SafetyResult(
                 is_safe=False,
-                category=category,
+                category=category.upper() if category else None,
             )
 
-        # safe/unsafe 이외의 출력은 파싱 실패
+        # 줄 기반 파싱 (Llama Guard 등)
+        lines = text.splitlines()
+        if lines and lines[0].strip() == "unsafe":
+            category_val: str | None = None
+            if len(lines) > 1 and lines[1].strip():
+                category_val = lines[1].strip()
+            return SafetyResult(
+                is_safe=False,
+                category=category_val,
+            )
+
         return None
 
     def _make_allowed(self) -> LayerResult:
@@ -154,7 +249,7 @@ class L6Layer(BaseLayer):
         """L6 안전성 검사를 실행한다.
 
         모델이 로드되지 않았거나 추론/파싱 실패 시
-        fail-open 으로 허용한다. 오탐 절대 불허 원칙.
+        fail-open 으로 허용한다.
 
         Args:
             request: 가드레일 요청 객체.
@@ -163,17 +258,15 @@ class L6Layer(BaseLayer):
             레이어의 검사 결과.
         """
         if not self._model_loaded:
-            logger.info(
-                "모델 미로드 상태 — fail-open 허용: %s",
-                self.model_name,
-            )
             return self._make_allowed()
 
         try:
-            raw_output = self._predict(request.user_input)
+            raw_output = self._predict(
+                request.user_input,
+            )
         except Exception:
             logger.warning(
-                "모델 추론 중 예외 발생 — fail-open 허용",
+                "L6 추론 예외 — fail-open",
                 exc_info=True,
             )
             return self._make_allowed()
@@ -182,7 +275,7 @@ class L6Layer(BaseLayer):
 
         if safety is None:
             logger.warning(
-                "모델 출력 파싱 실패 — fail-open 허용: %s",
+                "파싱 실패 — fail-open: %s",
                 raw_output,
             )
             return self._make_allowed()
