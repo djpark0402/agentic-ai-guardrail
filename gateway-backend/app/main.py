@@ -66,6 +66,19 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/v1/models/default")
+async def default_model() -> dict[str, str]:
+    """환경 변수에 설정된 기본 모델명을 반환한다.
+
+    Returns:
+        기본 모델명을 담은 딕셔너리.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    return {"default_model": settings.llm_model}
+
+
 @app.exception_handler(openai.APIError)
 async def openai_error_handler(
     _request: Request, exc: openai.APIError

@@ -274,7 +274,7 @@
         </p>
 
         <label>model</label>
-        <input id="f-model" type="text" value="solar-pro2" />
+        <input id="f-model" type="text" placeholder="모델명 로드 중…" />
 
         <div style="height: 16px"></div>
 
@@ -465,6 +465,20 @@
         }
       }
 
+      async function loadDefaultModel() {
+        try {
+          const res = await fetch("/v1/models/default");
+          const data = await res.json();
+          if (data.default_model) {
+            modelInput.value = data.default_model;
+            modelInput.placeholder = "";
+          }
+        } catch {
+          modelInput.placeholder = "모델명을 입력하세요";
+        }
+      }
+
+      loadDefaultModel();
       loadSpec();
     </script>
   </body>
