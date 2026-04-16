@@ -92,3 +92,147 @@ async def test_check_input_logs_enabled_layers(service, caplog):
             messages=[Message(role="user", content="x")], policy=policy
         )
     assert "[1, 3, 4, 6]" in caplog.text
+
+
+# ── core-secure-layer 실연동 테스트 ─────────────────────────
+
+
+async def test_run_layer_input_not_implemented_returns_pass(
+    service,
+):
+    """미구현 레이어는 NotImplementedError를 PASS로 처리한다."""
+    messages = [Message(role="user", content="테스트")]
+    result = await service._run_layer_input(1, messages)
+    assert result.status == CheckStatus.PASS
+
+
+async def test_run_layer_output_not_implemented_returns_pass(
+    service,
+):
+    """미구현 출력 레이어는 NotImplementedError를 PASS로 처리한다."""
+    result = await service._run_layer_output(1, "응답 텍스트")
+    assert result.status == CheckStatus.PASS
+
+
+async def test_run_layer_input_unmapped_index_returns_pass(
+    service,
+):
+    """매핑되지 않은 인덱스는 PASS를 반환한다."""
+    messages = [Message(role="user", content="테스트")]
+    result = await service._run_layer_input(99, messages)
+    assert result.status == CheckStatus.PASS
+
+
+async def test_run_layer_input_block_propagates(service, mocker):
+    """레이어가 차단하면 BLOCK 결과가 전파된다."""
+    from core_secure_layer.layers.types import (
+        LayerResult,
+        Severity,
+    )
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L1"
+    mock_layer.check.return_value = LayerResult(
+        name="L1",
+        allowed=False,
+        reason="injection detected",
+        severity=Severity.HIGH,
+    )
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        return_value=mock_layer,
+    )
+
+    messages = [Message(role="user", content="악성 입력")]
+    result = await service._run_layer_input(1, messages)
+    assert result.status == CheckStatus.BLOCK
+    assert result.reason == "injection detected"
+    assert result.layer == "L1"
+
+
+async def test_run_layer_input_pass_propagates(service, mocker):
+    """레이어가 통과하면 PASS 결과가 전파된다."""
+    from core_secure_layer.layers.types import LayerResult
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L1"
+    mock_layer.check.return_value = LayerResult(name="L1", allowed=True)
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        return_value=mock_layer,
+    )
+
+    messages = [Message(role="user", content="정상 입력")]
+    result = await service._run_layer_input(1, messages)
+    assert result.status == CheckStatus.PASS
+    assert result.layer == "L1"
+
+
+async def test_run_layer_output_block_propagates(service, mocker):
+    """출력 레이어가 차단하면 BLOCK 결과가 전파된다."""
+    from core_secure_layer.layers.types import (
+        LayerResult,
+        Severity,
+    )
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L3"
+    mock_layer.check.return_value = LayerResult(
+        name="L3",
+        allowed=False,
+        reason="sensitive data leak",
+        severity=Severity.CRITICAL,
+    )
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        return_value=mock_layer,
+    )
+
+    result = await service._run_layer_output(3, "민감 데이터 포함")
+    assert result.status == CheckStatus.BLOCK
+    assert result.reason == "sensitive data leak"
+    assert result.layer == "L3"
+
+
+async def test_check_input_short_circuits_on_block(mocker):
+    """첫 BLOCK 발생 시 후속 레이어를 호출하지 않는다."""
+    from core_secure_layer.layers.types import (
+        LayerResult,
+        Severity,
+    )
+
+    call_log = []
+
+    async def fake_check(request):
+        call_log.append(mock_l1.name)
+        return LayerResult(
+            name="L1",
+            allowed=False,
+            reason="blocked",
+            severity=Severity.HIGH,
+        )
+
+    mock_l1 = mocker.MagicMock()
+    mock_l1.name = "L1"
+    mock_l1.check = fake_check
+
+    mock_l2 = mocker.MagicMock()
+    mock_l2.name = "L2"
+    mock_l2.check = mocker.AsyncMock()
+
+    def fake_get_layer(idx):
+        return {1: mock_l1, 2: mock_l2}.get(idx)
+
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        side_effect=fake_get_layer,
+    )
+
+    service = SecurityLayerService()
+    policy = _policy(l3=False, l4=False, l5=False, l6=False)
+    messages = [Message(role="user", content="test")]
+    result = await service.check_input(messages=messages, policy=policy)
+
+    assert result.status == CheckStatus.BLOCK
+    assert call_log == ["L1"]
+    mock_l2.check.assert_not_called()

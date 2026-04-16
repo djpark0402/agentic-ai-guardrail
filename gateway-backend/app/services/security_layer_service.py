@@ -5,6 +5,12 @@ import logging
 from app.models.chat import Message
 from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
+from app.services.guardrail_converter import (
+    content_to_request,
+    layer_result_to_guardrail_result,
+    messages_to_request,
+)
+from app.services.layer_registry import get_layer
 
 logger = logging.getLogger(__name__)
 
@@ -12,9 +18,9 @@ logger = logging.getLogger(__name__)
 class SecurityLayerService:
     """core-secure-layer 를 통한 L1~L6 보안 검사 서비스.
 
-    policy 에서 활성화된 레이어(`lN == True`)만 순차적으로 실행한다.
-    현재는 core_secure_layer 실연동 이전이므로 각 레이어 훅이 PASS 를
-    반환하며, 실제 라이브러리가 붙으면 훅 지점만 교체한다.
+    policy 에서 활성화된 레이어(`lN == True`)만 순차적으로
+    실행한다. 미구현 레이어(``NotImplementedError``)는 PASS 로
+    처리하여 구현 완료된 레이어만 실제 검사를 수행한다.
     """
 
     async def check_input(
@@ -74,35 +80,53 @@ class SecurityLayerService:
         layer_idx: int,
         messages: list[Message],
     ) -> GuardrailResult:
-        """개별 입력 레이어 실행 훅 (core_secure_layer 연동 지점).
+        """core-secure-layer 를 통해 입력 레이어를 실행한다.
 
         Args:
             layer_idx: 실행할 레이어 인덱스 (1~6).
             messages: 검사 대상 메시지 목록.
 
         Returns:
-            레이어 실행 결과. 현재 더미는 항상 PASS 를 반환한다.
+            레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
-        logger.debug(
-            "입력 레이어 실행: L%d (메시지 수=%d)", layer_idx, len(messages)
-        )
-        return GuardrailResult(status=CheckStatus.PASS)
+        layer = get_layer(layer_idx)
+        if layer is None:
+            logger.debug("레이어 L%d: 매핑 없음, PASS", layer_idx)
+            return GuardrailResult(status=CheckStatus.PASS)
+
+        request = messages_to_request(messages)
+        try:
+            result = await layer.check(request)
+        except NotImplementedError:
+            logger.debug("레이어 %s: 미구현, PASS", layer.name)
+            return GuardrailResult(status=CheckStatus.PASS)
+
+        return layer_result_to_guardrail_result(result)
 
     async def _run_layer_output(
         self,
         layer_idx: int,
         content: str,
     ) -> GuardrailResult:
-        """개별 출력 레이어 실행 훅 (core_secure_layer 연동 지점).
+        """core-secure-layer 를 통해 출력 레이어를 실행한다.
 
         Args:
             layer_idx: 실행할 레이어 인덱스 (1~6).
             content: 검사 대상 응답 텍스트.
 
         Returns:
-            레이어 실행 결과. 현재 더미는 항상 PASS 를 반환한다.
+            레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
-        logger.debug(
-            "출력 레이어 실행: L%d (content_len=%d)", layer_idx, len(content)
-        )
-        return GuardrailResult(status=CheckStatus.PASS)
+        layer = get_layer(layer_idx)
+        if layer is None:
+            logger.debug("레이어 L%d: 매핑 없음, PASS", layer_idx)
+            return GuardrailResult(status=CheckStatus.PASS)
+
+        request = content_to_request(content)
+        try:
+            result = await layer.check(request)
+        except NotImplementedError:
+            logger.debug("레이어 %s: 미구현, PASS", layer.name)
+            return GuardrailResult(status=CheckStatus.PASS)
+
+        return layer_result_to_guardrail_result(result)
