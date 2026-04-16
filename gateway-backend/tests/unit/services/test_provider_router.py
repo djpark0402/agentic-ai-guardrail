@@ -142,22 +142,25 @@ class TestResolve:
         mocker.patch("app.services.llm_service.ChatOpenAI")
         settings = _make_settings(openai_key="sk-test")
         router = ProviderRouter(settings=settings)
-        svc = router.resolve("gpt-4o")
+        svc, model = router.resolve("gpt-4o")
         assert svc.provider_name == "openai"
+        assert model == "gpt-4o"
 
     def test_resolve_solar_model(self, mocker):
         mocker.patch("app.services.llm_service.ChatOpenAI")
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
-        svc = router.resolve("solar-pro")
+        svc, model = router.resolve("solar-pro")
         assert svc.provider_name == "solar"
+        assert model == "solar-pro"
 
-    def test_resolve_ollama_model(self, mocker):
+    def test_resolve_ollama_strips_prefix(self, mocker):
         mocker.patch("app.services.llm_service.ChatOpenAI")
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
-        svc = router.resolve("ollama/llama3")
+        svc, model = router.resolve("ollama/llama3")
         assert svc.provider_name == "ollama"
+        assert model == "llama3"
 
 
 class TestAvailableProviders:

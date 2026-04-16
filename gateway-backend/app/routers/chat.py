@@ -277,7 +277,8 @@ async def chat_completions(
         exclude={"messages", "stream"},
         exclude_none=True,
     )
-    llm_service = provider_router.resolve(request.model)
+    llm_service, resolved_model = provider_router.resolve(request.model)
+    passthrough["model"] = resolved_model
     completion = await llm_service.chat(messages=api_messages, **passthrough)
     content = completion.choices[0].message.content or ""
 

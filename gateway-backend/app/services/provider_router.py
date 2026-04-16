@@ -135,20 +135,23 @@ class ProviderRouter:
         msg = f"지원하지 않는 provider: {provider}"
         raise ValueError(msg)
 
-    def resolve(self, model: str) -> LLMService:
-        """모델명을 분석하여 적절한 LLMService를 반환한다.
+    def resolve(self, model: str) -> tuple[LLMService, str]:
+        """모델명을 분석하여 적절한 LLMService와 실제 모델명을 반환한다.
+
+        접두사가 있으면 제거하여 실제 모델명만 반환한다.
+        예: "ollama/llama3" → (OllamaService, "llama3")
 
         Args:
-            model: 요청의 모델명.
+            model: 요청의 모델명 (접두사 포함 가능).
 
         Returns:
-            라우팅된 LLMService 인스턴스.
+            (LLMService, 실제 모델명) 튜플.
 
         Raises:
             ValueError: provider가 미설정이거나 알 수 없을 때.
         """
-        provider, _model_name = self.parse_model(model)
-        return self.get_service(provider)
+        provider, model_name = self.parse_model(model)
+        return self.get_service(provider), model_name
 
     def available_providers(self) -> list[dict[str, Any]]:
         """설정된 provider 목록을 반환한다.

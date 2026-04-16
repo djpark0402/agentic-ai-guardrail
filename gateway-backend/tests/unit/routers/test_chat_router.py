@@ -71,7 +71,7 @@ def _make_mock_provider_router(llm_service=None):
     """더미 ProviderRouter mock을 생성한다."""
     svc = llm_service or _make_mock_llm_service()
     router = MagicMock()
-    router.resolve = MagicMock(return_value=svc)
+    router.resolve = MagicMock(return_value=(svc, "solar-pro"))
     return router, svc
 
 
@@ -106,7 +106,7 @@ def mock_provider_router():
 @pytest.fixture
 def mock_llm_service(mock_provider_router):
     """mock_provider_router 에서 resolve 가 반환하는 LLMService."""
-    return mock_provider_router.resolve.return_value
+    return mock_provider_router.resolve.return_value[0]
 
 
 @pytest.fixture
@@ -334,7 +334,7 @@ def test_streaming_output_blocked_does_not_leak_content(
 ):
     """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않는다."""
     leaked = "비밀번호는 hunter2입니다"
-    llm_svc = mock_provider_router.resolve.return_value
+    llm_svc = mock_provider_router.resolve.return_value[0]
     llm_svc.chat = AsyncMock(return_value=_make_completion(leaked))
 
     blocked_svc = MagicMock()
