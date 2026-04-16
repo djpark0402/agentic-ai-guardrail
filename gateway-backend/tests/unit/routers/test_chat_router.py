@@ -1,5 +1,6 @@
 """Chat 라우터 테스트."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,6 +14,39 @@ from app.dependencies import (
 from app.main import app
 from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
+
+
+def _make_completion(
+    content: str,
+    *,
+    model: str = "solar-pro",
+    created: int = 1_700_000_000,
+    finish_reason: str = "stop",
+    usage: dict | None = None,
+    tool_calls: list | None = None,
+) -> SimpleNamespace:
+    """Solar/OpenAI ChatCompletion 형태의 더미 응답 객체를 만든다."""
+    usage_ns = (
+        SimpleNamespace(model_dump=lambda: dict(usage)) if usage else None
+    )
+    return SimpleNamespace(
+        id="chatcmpl-upstream",
+        object="chat.completion",
+        created=created,
+        model=model,
+        choices=[
+            SimpleNamespace(
+                index=0,
+                message=SimpleNamespace(
+                    role="assistant",
+                    content=content,
+                    tool_calls=tool_calls,
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+        usage=usage_ns,
+    )
 
 
 def _all_enabled_policy() -> GuardrailPolicy:
@@ -43,9 +77,11 @@ def mock_security_service():
 
 @pytest.fixture
 def mock_solar_service():
-    """더미 응답을 반환하는 SolarService."""
+    """더미 ChatCompletion 을 반환하는 SolarService."""
     svc = MagicMock(spec=["chat"])
-    svc.chat = AsyncMock(return_value="안녕하세요! 무엇을 도와드릴까요?")
+    svc.chat = AsyncMock(
+        return_value=_make_completion("안녕하세요! 무엇을 도와드릴까요?")
+    )
     return svc
 
 
@@ -206,7 +242,7 @@ def test_streaming_output_blocked_does_not_leak_content(
 ):
     """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않는다."""
     leaked = "비밀번호는 hunter2입니다"
-    mock_solar_service.chat = AsyncMock(return_value=leaked)
+    mock_solar_service.chat = AsyncMock(return_value=_make_completion(leaked))
 
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(

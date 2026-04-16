@@ -122,10 +122,18 @@ async def chat_completions(
         )
 
     # 3단계: Solar API 비스트리밍 호출 (stream 여부와 무관하게 항상 non-stream)
+    # messages 는 None/옵션 필드를 제거한 뒤 그대로 Solar 로 전달하여
+    # tool/multimodal 메시지도 온전히 보존한다.
     api_messages = [
-        {"role": msg.role, "content": msg.content} for msg in request.messages
+        msg.model_dump(exclude_none=True) for msg in request.messages
     ]
-    content = await solar_service.chat(messages=api_messages)
+    # 요청 바디의 OpenAI 호환 파라미터를 Solar 호출에 pass-through.
+    passthrough = request.model_dump(
+        exclude={"messages", "stream"},
+        exclude_none=True,
+    )
+    completion = await solar_service.chat(messages=api_messages, **passthrough)
+    content = completion.choices[0].message.content or ""
 
     # 4단계: 출력 결과 보안 검사 — 사용자 전송 이전에 선행하여 유출 방지
     output_result = await security_service.check_output(
@@ -152,19 +160,49 @@ async def chat_completions(
             detail=f"출력 보안 검사 실패: {output_result.reason}",
         )
 
+    # Solar 원본 completion 의 메타데이터(id 제외)를 그대로 보존하여
+    # OpenAI 호환 클라이언트가 usage/finish_reason/tool_calls 를 받을 수 있게
+    # 한다. id 는 가드레일 세션 추적을 위해 게이트웨이가 재할당.
     return ChatResponse(
         id=f"chatcmpl-{session_id}",
         object="chat.completion",
-        created=int(time.time()),
-        model=request.model,
+        created=getattr(completion, "created", None) or int(time.time()),
+        model=getattr(completion, "model", None) or request.model,
         choices=[
             ChatResponseChoice(
-                index=0,
+                index=choice.index,
                 message=ChatResponseMessage(
-                    role="assistant",
-                    content=content,
+                    role=choice.message.role,
+                    content=(choice.message.content or ""),
+                    tool_calls=_dump_tool_calls(choice.message),
                 ),
-                finish_reason="stop",
+                finish_reason=choice.finish_reason,
             )
+            for choice in completion.choices
         ],
+        usage=(
+            completion.usage.model_dump()
+            if getattr(completion, "usage", None) is not None
+            else None
+        ),
     )
+
+
+def _dump_tool_calls(
+    message: object,
+) -> list[dict[str, object]] | None:
+    """Solar 응답 메시지의 tool_calls 를 dict 목록으로 변환한다.
+
+    Args:
+        message: ChatCompletion choice 의 message 객체.
+
+    Returns:
+        tool_calls 가 존재하면 dict 목록, 없으면 None.
+    """
+    tool_calls = getattr(message, "tool_calls", None)
+    if not tool_calls:
+        return None
+    return [
+        tc.model_dump() if hasattr(tc, "model_dump") else dict(tc)
+        for tc in tool_calls
+    ]
