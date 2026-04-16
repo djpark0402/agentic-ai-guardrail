@@ -1,6 +1,7 @@
 """L2 가드레일 레이어 — 혼란도(perplexity) 기반 비정상 입력 탐지."""
 
 import logging
+import pathlib
 import re
 from typing import Any
 
@@ -12,6 +13,11 @@ from core_secure_layer.layers.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 기본 모델 경로: l2/model/ 디렉토리
+_DEFAULT_MODEL_PATH: str = str(
+    pathlib.Path(__file__).resolve().parent / "model",
+)
 
 # 1차 필터: 허용 문자셋 정규식
 # 한국어(가-힣, ㄱ-ㅎ, ㅏ-ㅣ) + 영어 + 숫자 + 공백/탭/줄바꿈
@@ -38,7 +44,7 @@ class L2Layer(BaseLayer):
 
     def __init__(
         self,
-        model_path: str = "",
+        model_path: str = _DEFAULT_MODEL_PATH,
         ppl_threshold: float = 600.0,
     ) -> None:
         """L2 레이어를 초기화한다.
