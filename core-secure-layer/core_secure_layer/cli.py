@@ -1,11 +1,39 @@
 """가드레일 레이어 인터랙티브 CLI 테스트 도구."""
 
 import asyncio
+import os
+from typing import Any
 
 from core_secure_layer.layers.types import (
     GuardrailRequest,
     Severity,
 )
+
+
+def _build_solar_llm() -> Any:
+    """Solar LLM을 .env에서 로드한다.
+
+    Returns:
+        ChatOpenAI 인스턴스 또는 None.
+    """
+    try:
+        from dotenv import load_dotenv
+        from langchain_openai import ChatOpenAI
+
+        load_dotenv()
+        api_key = os.getenv("SOLAR_API_KEY", "")
+        if not api_key:
+            return None
+        return ChatOpenAI(
+            api_key=api_key,
+            base_url=os.getenv(
+                "SOLAR_BASE_URL",
+                "https://api.upstage.ai/v1/solar",
+            ),
+            model=os.getenv("SOLAR_MODEL_NAME", "solar-pro"),
+        )
+    except Exception:
+        return None
 
 
 def _severity_color(severity: Severity) -> str:
@@ -56,7 +84,8 @@ def _build_layers() -> list[tuple[str, object]]:
 
     from core_secure_layer.layers.l4.l4 import L4Layer
 
-    layers.append(("L4", L4Layer()))
+    llm = _build_solar_llm()
+    layers.append(("L4", L4Layer(llm=llm)))
 
     from core_secure_layer.layers.l5.l5 import L5Layer
 
