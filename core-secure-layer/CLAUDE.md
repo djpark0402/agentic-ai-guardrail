@@ -4,6 +4,12 @@
 - Python + LangChain
 - 의존성 관리 및 가상환경은 본 모듈 내에서 독립적으로 구성
 
+## 가드레일 판정 원칙
+- **미탐(false negative)은 허용, 오탐(false positive)은 절대 불허**
+- 인코딩/위협을 못 찾아서 통과시키는 것은 허용한다 — 후속 레이어에서 잡을 수 있다
+- 정상 문장을 차단하는 것은 절대 안 된다 — 사용자 경험을 해치는 오탐이 보안보다 나쁘다
+- 이 원칙은 모든 레이어(L1~L8)의 설계와 구현에 적용된다
+
 ## 개발 방법론
 - **TDD 필수**: 모든 기능은 실패하는 테스트 작성 → 구현 → 리팩터링 순서로 진행
 - 테스트 없이 구현 코드부터 작성하지 말 것
@@ -44,20 +50,43 @@
 - **머지 실행 전에는 반드시 사용자에게 확인을 받을 것** — 사전에 계획을 승인받았더라도 실제 `git merge` 명령 직전에 별도 confirmation 필수
 - 같은 원칙이 `git reset --hard`, `git rebase` 등 히스토리를 변경하는 작업에도 적용됨
 
-## 레이어 개발 워크플로우 (L1~L8 `check()` 구현)
+## 레이어 개발 워크플로우 (L1~L8 `_check()` 구현)
 
-L1~L8 각 레이어의 `check()` 구현은 반드시 아래 3-에이전트 순차 파이프라인으로 진행한다. 스펙은 `.claude/agents/layer-{tester,implementer,reviewer}.md` 에 정의돼 있으며 Agent tool 로 spawn 한다. **병렬 실행 금지** — 한 번에 한 레이어만.
+L1~L8 각 레이어의 `_check()` 구현은 반드시 아래 워크플로우로 진행한다. **병렬 실행 금지** — 한 번에 한 레이어만.
 
 ### 사전 조건
 - `feature/core-secure-layer/dev` 가 깨끗하고 origin 과 동기화됨
-- 대상 레이어의 **스펙(1~2 문장)** 이 사용자와 합의된 상태
 - 의존 레이어가 있다면 그 레이어는 이미 dev 에 머지돼 있음
 
-### 파이프라인 단계
+### 0단계: 설계 문서 작성 (파이프라인 진입 전 필수)
+
+task 브랜치(`feature/core-secure-layer/layer-l{N}`)를 생성하고, **첫 커밋으로** `docs/l{N}-design.md` 를 작성한다.
+
+**작성 방식:**
+- Claude 가 사용자에게 질문을 던지며 **대화형으로 고도화** 한다
+- 초안을 만들고 → 사용자 피드백 → 수정 → 합의될 때까지 반복
+- 사용자가 문서를 승인하면 `docs: L{N} 설계 문서 추가` 커밋
+
+**문서 필수 섹션:**
+1. **목적** — 이 레이어가 왜 필요한지 (1~2 문장)
+2. **판정 기준** — 허용/차단을 결정하는 구체적 로직
+3. **입력/출력** — `GuardrailRequest` 에서 어떤 필드를 사용하고, `LayerResult` 에 무엇을 채우는지
+4. **엣지 케이스** — 빈 입력, 대소문자, 유니코드, 경계값 등 고려 사항
+5. **보안 고려** — fail-closed 원칙, 우회 가능성, 방어적 기본값
+6. **의존성** — 선행 레이어, 외부 라이브러리, LangChain 사용 여부
+7. **향후 확장** — 현재 범위 밖이지만 나중에 고려할 사항
+
+**파일 경로:** `core-secure-layer/docs/l{N}-design.md`
+
+### 에이전트 파이프라인 (설계 문서 승인 후)
+
+스펙은 `.claude/agents/layer-{tester,implementer,reviewer}.md` 에 정의돼 있으며 Agent tool 로 spawn 한다.
+
+#### 파이프라인 단계
 1. **layer-tester spawn** — 레이어 번호 + 스펙 + 의존성 전달
    - 결과: `feature/core-secure-layer/layer-l{N}` 브랜치에 `test: L{N} 실패 테스트 추가` 커밋 1개
 2. **layer-implementer spawn** — 동일 레이어 번호 + 스펙 + 브랜치 이름 전달
-   - 결과: 같은 브랜치에 `feat: L{N} check() 구현` (+ 선택 `refactor:`) 커밋
+   - 결과: 같은 브랜치에 `feat: L{N} _check() 구현` (+ 선택 `refactor:`) 커밋
 3. **layer-reviewer spawn** — 레이어 번호 + 스펙 + 브랜치 이름 전달
    - 결과: `PASS` / `FAIL` verdict + 5개 범주별 findings
 
