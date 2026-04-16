@@ -21,17 +21,22 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 ### 정책 조회 & 레이어 게이팅
 
 요청마다 `${ADMIN_BACKEND_URL}/api/v1/policies/active` 를 `GET` 으로 호출하여
-현재 활성 정책을 가져오고, 응답의 `l0Enabled`..`l5Enabled` 플래그에 따라
-security-layer 가 해당 레이어(L0~L5)에 대해서만 프롬프트 검사를 수행한다.
+현재 활성 정책을 가져오고, 응답의 `l1Enabled`..`l6Enabled` 플래그에 따라
+`core-secure-layer` 가 해당 레이어(L1~L6)에 대해서만 검사를 수행한다.
 
 | 레이어 | 의미 |
 |---|---|
-| L0 | prompt injection |
-| L1 | sensitive data |
-| L2 | toxicity |
-| L3 | hallucination |
-| L4 | PII |
-| L5 | compliance |
+| L1 | prompt injection |
+| L2 | sensitive data |
+| L3 | toxicity |
+| L4 | hallucination |
+| L5 | PII |
+| L6 | compliance |
+
+`core-secure-layer` 의 각 레이어(`L1Layer`~`L6Layer`)를
+`layer_registry` 를 통해 싱글턴으로 관리하며, 아직 구현되지 않은
+레이어(`NotImplementedError`)는 자동으로 PASS 처리된다.
+레이어 구현이 완료되면 gateway 변경 없이 즉시 활성화된다.
 
 admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전파되어 해당
 요청은 실패로 처리된다.
@@ -128,7 +133,9 @@ app/
 │   ├── llm_service.py         # 범용 LLM 서비스 (LangChain ChatOpenAI 기반)
 │   ├── solar_service.py       # Solar 전용 래퍼 (LLMService 상속)
 │   ├── provider_router.py     # 모델명 기반 provider 자동 라우팅
-│   ├── security_layer_service.py
+│   ├── security_layer_service.py  # core-secure-layer 연동 보안 검사
+│   ├── layer_registry.py      # policy index → core layer 싱글턴 매핑
+│   ├── guardrail_converter.py # gateway ↔ core 타입 변환
 │   └── policy_service.py
 └── static/
     └── index.html       # 플레이그라운드 페이지
