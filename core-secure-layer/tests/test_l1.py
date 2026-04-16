@@ -228,3 +228,43 @@ class TestFailOpen:
         req = GuardrailRequest(user_input="hello", metadata=None)
         result = await layer.check(req)
         assert result.allowed is True
+
+    async def test_url_detector_exception_allows(self, layer, monkeypatch):
+        # URL 탐지 함수가 예외를 던져도 허용
+        def _boom(text):
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(
+            "core_secure_layer.layers.l1.l1._detect_url_encoding",
+            _boom,
+        )
+        result = await layer.check(_req("hello%20world"))
+        assert result.allowed is True
+
+    async def test_base64_detector_exception_allows(self, layer, monkeypatch):
+        # Base64 탐지 함수가 예외를 던져도 허용
+        def _boom(text):
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(
+            "core_secure_layer.layers.l1.l1._detect_base64",
+            _boom,
+        )
+        # URL/Hex 는 정상이지만 Base64 에서 터짐 → fail-open
+        result = await layer.check(_req("SGVsbG8gV29ybGQ="))
+        assert result.allowed is True
+
+    async def test_hex_detector_exception_allows(self, layer, monkeypatch):
+        # Hex 탐지 함수가 예외를 던져도 허용
+        def _boom(text):
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(
+            "core_secure_layer.layers.l1.l1._detect_hex_escape",
+            _boom,
+        )
+        result = await layer.check(_req("\\x41"))
+        assert result.allowed is True
