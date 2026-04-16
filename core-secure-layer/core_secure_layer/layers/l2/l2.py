@@ -1,7 +1,6 @@
 """L2 가드레일 레이어 — 혼란도(perplexity) 기반 비정상 입력 탐지."""
 
 import logging
-import math
 import re
 from typing import Any
 
@@ -25,142 +24,6 @@ _ALLOWED_RE: re.Pattern[str] = re.compile(
     r"]*$",
 )
 
-# 2차 필터 fallback: 영어 바이그램 빈도 기반 PPL 추정
-# 영어에서 빈번한 문자 바이그램 상위 100개
-_COMMON_BIGRAMS: frozenset[str] = frozenset(
-    {
-        "th",
-        "he",
-        "in",
-        "er",
-        "an",
-        "re",
-        "on",
-        "at",
-        "en",
-        "nd",
-        "ti",
-        "es",
-        "or",
-        "te",
-        "of",
-        "ed",
-        "is",
-        "it",
-        "al",
-        "ar",
-        "st",
-        "to",
-        "nt",
-        "ng",
-        "se",
-        "ha",
-        "as",
-        "ou",
-        "io",
-        "le",
-        "ve",
-        "co",
-        "me",
-        "de",
-        "hi",
-        "ri",
-        "ro",
-        "ic",
-        "ne",
-        "ea",
-        "ra",
-        "ce",
-        "li",
-        "ch",
-        "ll",
-        "be",
-        "ma",
-        "si",
-        "om",
-        "ur",
-        "ca",
-        "el",
-        "ta",
-        "la",
-        "ns",
-        "ge",
-        "ec",
-        "ai",
-        "di",
-        "ho",
-        "sh",
-        "ow",
-        "oo",
-        "ld",
-        "us",
-        "il",
-        "ut",
-        "no",
-        "wh",
-        "tr",
-        "ee",
-        "do",
-        "da",
-        "so",
-        "ac",
-        "nc",
-        "pe",
-        "wa",
-        "wo",
-        "yo",
-        "we",
-        "lo",
-        "ot",
-        "fo",
-        "ie",
-        "ly",
-        "ry",
-        "ex",
-        "ul",
-        "ab",
-        "em",
-        "ol",
-        "ad",
-        "ni",
-        "ss",
-        "mo",
-        "am",
-        "op",
-        "un",
-    }
-)
-
-
-def _estimate_ppl_fallback(text: str) -> float:
-    """영어 바이그램 빈도 기반 PPL 추정 (모델 미사용 fallback).
-
-    ASCII 알파벳 연속 바이그램 중 영어에서 흔하지 않은
-    바이그램의 비율로 혼란도를 추정한다.
-
-    Args:
-        text: 분석 대상 텍스트.
-
-    Returns:
-        추정 perplexity 값.
-    """
-    lowered = text.lower().strip()
-    if not lowered:
-        return 1.0
-
-    bigrams: list[str] = []
-    for i in range(len(lowered) - 1):
-        c1, c2 = lowered[i], lowered[i + 1]
-        if "a" <= c1 <= "z" and "a" <= c2 <= "z":
-            bigrams.append(lowered[i : i + 2])
-
-    if not bigrams:
-        return 1.0
-
-    uncommon = sum(1 for b in bigrams if b not in _COMMON_BIGRAMS)
-    ratio = uncommon / len(bigrams)
-    return math.exp(1 + ratio * 10)
-
 
 class L2Layer(BaseLayer):
     """혼란도 탐지 가드레일 레이어.
@@ -168,7 +31,7 @@ class L2Layer(BaseLayer):
     2단계 필터링으로 비정상 입력을 차단한다.
     1차: 문자셋 허용 목록 기반 차단.
     2차: perplexity(PPL) 기반 이상 탐지.
-    예외 발생 시 fail-open(허용) 원칙을 따른다.
+    모델 미로드 시 2차는 허용으로 처리한다.
     """
 
     name: str = "L2"
@@ -195,7 +58,7 @@ class L2Layer(BaseLayer):
         """Transformers 모델을 로드한다.
 
         로드 실패 시 경고만 남기고 2차 필터링은
-        fallback 또는 비활성 상태로 동작한다.
+        비활성 상태로 동작한다 (허용 처리).
         """
         try:
             from transformers import (
@@ -213,15 +76,12 @@ class L2Layer(BaseLayer):
             self._model_loaded = True
         except Exception:
             logger.warning(
-                "GPT-2 모델 로드 실패: %s — fallback 사용",
+                "GPT-2 모델 로드 실패: %s — 2차 필터링 비활성",
                 self.model_path,
             )
             self._model_loaded = False
 
-    def _compute_ppl_with_model(
-        self,
-        text: str,
-    ) -> float:
+    def _compute_ppl(self, text: str) -> float:
         """GPT-2 모델로 PPL을 계산한다.
 
         Args:
@@ -244,22 +104,6 @@ class L2Layer(BaseLayer):
             )
         return float(torch.exp(outputs.loss).item())
 
-    def _compute_ppl(self, text: str) -> float:
-        """PPL을 계산한다 (모델 또는 fallback 사용).
-
-        Args:
-            text: 분석 대상 텍스트.
-
-        Returns:
-            추정 perplexity 값.
-
-        Raises:
-            RuntimeError: 모델과 fallback 모두 실패 시.
-        """
-        if getattr(self, "_model_loaded", False):
-            return self._compute_ppl_with_model(text)
-        return _estimate_ppl_fallback(text)
-
     async def _check(
         self,
         request: GuardrailRequest,
@@ -277,7 +121,6 @@ class L2Layer(BaseLayer):
         try:
             return self._inspect(request.user_input)
         except Exception:
-            # fail-open: 예외 시 허용
             return self._allow()
 
     def _inspect(self, text: str) -> LayerResult:
@@ -297,7 +140,10 @@ class L2Layer(BaseLayer):
         if not _ALLOWED_RE.match(text):
             return self._block_charset(text)
 
-        # 2차: PPL 검사
+        # 2차: PPL 검사 (모델 미로드 시 허용)
+        if not getattr(self, "_model_loaded", False):
+            return self._allow()
+
         ppl = self._compute_ppl(text)
         if ppl > self.ppl_threshold:
             return self._block_ppl(ppl)
@@ -328,7 +174,6 @@ class L2Layer(BaseLayer):
                         "disallowed_character",
                     ],
                 )
-        # 도달 불가하지만 방어적 처리
         return self._allow()
 
     def _block_ppl(self, ppl: float) -> LayerResult:
