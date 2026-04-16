@@ -386,6 +386,7 @@
           const decoder = new TextDecoder();
           let buffer = "";
           let rendered = "";
+          let errorNote = "";
           respBody.textContent = "";
 
           while (true) {
@@ -399,8 +400,29 @@
               if (!line) continue;
               const payload = line.slice(6);
               if (payload === "[DONE]") continue;
-              rendered += payload;
-              respBody.textContent = rendered;
+              // OpenAI 호환 chat.completion.chunk JSON 파싱.
+              let chunk;
+              try {
+                chunk = JSON.parse(payload);
+              } catch {
+                rendered += payload;
+                respBody.textContent = rendered;
+                continue;
+              }
+              const choice = chunk.choices?.[0] || {};
+              const delta = choice.delta || {};
+              if (typeof delta.content === "string") {
+                rendered += delta.content;
+              }
+              if (chunk.error) {
+                errorNote =
+                  "\n\n[guardrail] " +
+                  (chunk.error.message || "blocked") +
+                  " (finish_reason=" +
+                  (choice.finish_reason || "?") +
+                  ")";
+              }
+              respBody.textContent = rendered + errorNote;
             }
           }
         } catch (err) {

@@ -1,5 +1,6 @@
 """Chat 라우터 테스트."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -215,8 +216,21 @@ def test_streaming_uses_non_streaming_llm_call(client, mock_solar_service):
     assert not hasattr(mock_solar_service, "stream_chat")
 
 
-def test_streaming_sse_reconstructs_full_content(client):
-    """SSE 청크들을 이어붙이면 LLM 응답 전체와 일치한다."""
+def _parse_sse_chunks(body: str) -> list[dict]:
+    """SSE 본문에서 JSON chunk 프레임만 뽑아 파싱한다."""
+    parsed: list[dict] = []
+    for line in body.splitlines():
+        if not line.startswith("data: "):
+            continue
+        payload = line.removeprefix("data: ")
+        if payload == "[DONE]":
+            continue
+        parsed.append(json.loads(payload))
+    return parsed
+
+
+def test_streaming_chunks_are_openai_compliant_json(client):
+    """각 SSE 프레임이 chat.completion.chunk JSON 스키마를 따른다."""
     response = client.post(
         "/v1/chat/completions",
         json={
@@ -226,15 +240,66 @@ def test_streaming_sse_reconstructs_full_content(client):
         },
     )
     assert response.status_code == 200
-    chunks = []
-    for line in response.text.splitlines():
-        if not line.startswith("data: "):
-            continue
-        payload = line.removeprefix("data: ")
-        if payload == "[DONE]":
-            continue
-        chunks.append(payload)
-    assert "".join(chunks) == "안녕하세요! 무엇을 도와드릴까요?"
+    assert response.text.rstrip().endswith("data: [DONE]")
+
+    chunks = _parse_sse_chunks(response.text)
+    assert len(chunks) >= 3  # role + 최소 1개 delta + finish
+    for chunk in chunks:
+        assert chunk["object"] == "chat.completion.chunk"
+        assert "id" in chunk
+        assert "created" in chunk
+        assert "model" in chunk
+        assert chunk["choices"][0]["index"] == 0
+        assert "delta" in chunk["choices"][0]
+
+    # 첫 프레임은 role 선언
+    assert chunks[0]["choices"][0]["delta"].get("role") == "assistant"
+    assert chunks[0]["choices"][0]["finish_reason"] is None
+
+    # 마지막 프레임은 finish_reason 을 가진다
+    assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+    assert chunks[-1]["choices"][0]["delta"] == {}
+
+
+def test_streaming_chunks_concatenate_to_full_content(client):
+    """delta.content 를 이어붙이면 원본 LLM 응답과 동일하다."""
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "solar-pro",
+            "messages": [{"role": "user", "content": "안녕"}],
+            "stream": True,
+        },
+    )
+    assert response.status_code == 200
+
+    chunks = _parse_sse_chunks(response.text)
+    rebuilt = "".join(
+        c["choices"][0]["delta"].get("content", "") for c in chunks
+    )
+    assert rebuilt == "안녕하세요! 무엇을 도와드릴까요?"
+
+
+def test_streaming_uses_solar_completion_metadata(client, mock_solar_service):
+    """스트리밍 청크의 model/created 가 Solar 원본 completion 값을 사용한다."""
+    mock_solar_service.chat = AsyncMock(
+        return_value=_make_completion(
+            "hi",
+            model="solar-pro2",
+            created=1_717_000_000,
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "solar-pro",
+            "messages": [{"role": "user", "content": "안녕"}],
+            "stream": True,
+        },
+    )
+    chunks = _parse_sse_chunks(response.text)
+    assert chunks[0]["model"] == "solar-pro2"
+    assert chunks[0]["created"] == 1_717_000_000
 
 
 def test_streaming_output_blocked_does_not_leak_content(
@@ -273,6 +338,13 @@ def test_streaming_output_blocked_does_not_leak_content(
         body = response.text
         assert leaked not in body
         assert "민감 정보 감지" in body or "출력" in body
+
+        chunks = _parse_sse_chunks(body)
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk["choices"][0]["finish_reason"] == "content_filter"
+        assert chunk["choices"][0]["delta"] == {}
+        assert chunk.get("error", {}).get("type") == "guardrail_block"
     finally:
         app.dependency_overrides.clear()
 

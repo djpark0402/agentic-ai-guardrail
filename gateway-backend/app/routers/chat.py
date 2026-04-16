@@ -1,9 +1,10 @@
 """Chat 완성 라우터 — 핵심 가드레일 파이프라인."""
 
+import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -29,6 +30,12 @@ router = APIRouter()
 # 사용자 측 스트리밍 시 응답을 쪼개는 청크 길이(문자 단위).
 _SSE_CHUNK_SIZE = 20
 
+# 스트리밍 응답에 프록시 버퍼링이 끼지 않도록 하기 위한 헤더.
+_SSE_HEADERS: dict[str, str] = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+}
+
 
 def _chunk_content(content: str, size: int = _SSE_CHUNK_SIZE) -> list[str]:
     """전체 응답 문자열을 고정 길이 청크 목록으로 분할한다.
@@ -38,39 +45,168 @@ def _chunk_content(content: str, size: int = _SSE_CHUNK_SIZE) -> list[str]:
         size: 청크 하나의 최대 문자 길이.
 
     Returns:
-        순서대로 연결하면 원본 문자열이 복원되는 청크 목록.
+        순서대로 연결하면 원본 문자열이 복원되는 청크 목록. 빈 입력에 대해서도
+        한 개의 빈 문자열 청크를 반환하여 호출 측이 항상 delta 프레임을
+        하나는 내보낼 수 있게 한다.
     """
     if not content:
         return [""]
     return [content[i : i + size] for i in range(0, len(content), size)]
 
 
-async def _stream_content(content: str) -> AsyncGenerator[str, None]:
-    """검증이 끝난 전체 content를 SSE 포맷으로 재방출한다.
+def _format_sse_frame(payload: dict[str, Any]) -> str:
+    r"""SSE `data:` 프레임 한 건을 OpenAI 규격으로 직렬화한다.
+
+    Args:
+        payload: chat.completion.chunk 객체에 해당하는 딕셔너리.
+
+    Returns:
+        `data: {...}\n\n` 형태의 SSE 프레임 문자열.
+    """
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+def _build_chunk(
+    *,
+    chunk_id: str,
+    created: int,
+    model: str,
+    delta: dict[str, Any],
+    finish_reason: str | None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """OpenAI `chat.completion.chunk` 객체를 조립한다.
+
+    Args:
+        chunk_id: 이 스트림 전체가 공유하는 응답 ID.
+        created: Unix timestamp.
+        model: 응답 모델 이름.
+        delta: 이번 프레임에서 추가될 델타 필드.
+        finish_reason: 마지막 프레임이면 종료 이유, 중간 프레임이면 None.
+        extra: 비표준 확장 필드(예: guardrail error 블록).
+
+    Returns:
+        JSON 직렬화 가능한 chunk 딕셔너리.
+    """
+    chunk: dict[str, Any] = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    if extra:
+        chunk.update(extra)
+    return chunk
+
+
+async def _stream_openai_chunks(
+    content: str,
+    *,
+    chunk_id: str,
+    created: int,
+    model: str,
+    finish_reason: str,
+) -> AsyncGenerator[str, None]:
+    """검증이 끝난 전체 content를 OpenAI SSE 규격으로 재방출한다.
+
+    첫 프레임은 `role=assistant` 를 담고, 중간 프레임들은 `content` 델타를,
+    마지막 프레임은 finish_reason 을 싣는다. 마지막에 `data: [DONE]` 마커를
+    한 번 더 전송한다.
 
     Args:
         content: 사용자에게 전송할 전체 응답 문자열.
+        chunk_id: 스트림 응답 ID (세션 ID 연계).
+        created: Unix timestamp.
+        model: 응답 모델 이름.
+        finish_reason: Solar 가 제공한 종료 이유. 비어 있으면 "stop".
 
     Yields:
-        SSE `data:` 프레임 문자열.
+        OpenAI 호환 SSE 프레임 문자열.
     """
+    # 1. role 선언 프레임
+    yield _format_sse_frame(
+        _build_chunk(
+            chunk_id=chunk_id,
+            created=created,
+            model=model,
+            delta={"role": "assistant"},
+            finish_reason=None,
+        )
+    )
+    # 2. content delta 프레임들
     for chunk in _chunk_content(content):
-        yield f"data: {chunk}\n\n"
+        if not chunk:
+            continue
+        yield _format_sse_frame(
+            _build_chunk(
+                chunk_id=chunk_id,
+                created=created,
+                model=model,
+                delta={"content": chunk},
+                finish_reason=None,
+            )
+        )
+    # 3. finish 프레임
+    yield _format_sse_frame(
+        _build_chunk(
+            chunk_id=chunk_id,
+            created=created,
+            model=model,
+            delta={},
+            finish_reason=finish_reason or "stop",
+        )
+    )
+    # 4. 종료 마커
     yield "data: [DONE]\n\n"
 
 
-async def _stream_error(reason: str | None) -> AsyncGenerator[str, None]:
-    """출력 가드레일 BLOCK 시 에러 프레임 하나만 전송한다.
+async def _stream_guardrail_block(
+    reason: str | None,
+    *,
+    chunk_id: str,
+    created: int,
+    model: str,
+) -> AsyncGenerator[str, None]:
+    """출력 가드레일 BLOCK 시 OpenAI 규격 내에서 에러 프레임을 방출한다.
 
-    원본 LLM 응답은 절대 유출하지 않는다.
+    원본 LLM 응답은 절대 유출하지 않는다. finish_reason 은 OpenAI 모더레이션
+    관례대로 "content_filter" 로 세팅하고, 비표준 `error` 블록에 사유를 담아
+    LiteLLM 등 일부 클라이언트가 인식할 수 있게 한다.
 
     Args:
         reason: BLOCK 사유 문자열.
+        chunk_id: 스트림 응답 ID.
+        created: Unix timestamp.
+        model: 응답 모델 이름.
 
     Yields:
-        SSE 에러 프레임과 종료 마커.
+        단일 에러 chunk 프레임과 종료 마커.
     """
-    yield f"data: [ERROR] 출력 보안 검사 실패: {reason}\n\n"
+    message = (
+        f"출력 보안 검사 실패: {reason}" if reason else "출력 보안 검사 실패"
+    )
+    yield _format_sse_frame(
+        _build_chunk(
+            chunk_id=chunk_id,
+            created=created,
+            model=model,
+            delta={},
+            finish_reason="content_filter",
+            extra={
+                "error": {
+                    "type": "guardrail_block",
+                    "message": message,
+                }
+            },
+        )
+    )
     yield "data: [DONE]\n\n"
 
 
@@ -141,16 +277,36 @@ async def chat_completions(
         policy=policy,
     )
 
-    # 5-a단계: 스트리밍 요청 — SSE로 재방출
+    # 스트리밍/비스트리밍 공통 메타데이터 — Solar 원본 completion 우선, 없으면
+    # 게이트웨이에서 fallback 값을 주입한다.
+    chunk_id = f"chatcmpl-{session_id}"
+    created = getattr(completion, "created", None) or int(time.time())
+    model_name = getattr(completion, "model", None) or request.model
+    finish_reason = completion.choices[0].finish_reason or "stop"
+
+    # 5-a단계: 스트리밍 요청 — OpenAI 호환 SSE 규격으로 재방출
     if request.stream:
         if output_result.status == CheckStatus.BLOCK:
             return StreamingResponse(
-                _stream_error(output_result.reason),
+                _stream_guardrail_block(
+                    output_result.reason,
+                    chunk_id=chunk_id,
+                    created=created,
+                    model=model_name,
+                ),
                 media_type="text/event-stream",
+                headers=_SSE_HEADERS,
             )
         return StreamingResponse(
-            _stream_content(content),
+            _stream_openai_chunks(
+                content,
+                chunk_id=chunk_id,
+                created=created,
+                model=model_name,
+                finish_reason=finish_reason,
+            ),
             media_type="text/event-stream",
+            headers=_SSE_HEADERS,
         )
 
     # 5-b단계: 비스트리밍 요청 — 출력 BLOCK은 400, PASS는 ChatResponse
@@ -164,10 +320,10 @@ async def chat_completions(
     # OpenAI 호환 클라이언트가 usage/finish_reason/tool_calls 를 받을 수 있게
     # 한다. id 는 가드레일 세션 추적을 위해 게이트웨이가 재할당.
     return ChatResponse(
-        id=f"chatcmpl-{session_id}",
+        id=chunk_id,
         object="chat.completion",
-        created=getattr(completion, "created", None) or int(time.time()),
-        model=getattr(completion, "model", None) or request.model,
+        created=created,
+        model=model_name,
         choices=[
             ChatResponseChoice(
                 index=choice.index,
