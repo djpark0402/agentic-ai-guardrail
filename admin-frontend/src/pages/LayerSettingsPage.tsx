@@ -1,18 +1,18 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 
-const LAYER_KEYS = ['l0Enabled', 'l1Enabled', 'l2Enabled', 'l3Enabled', 'l4Enabled', 'l5Enabled'] as const;
+const LAYER_KEYS = ['l1Enabled', 'l2Enabled', 'l3Enabled', 'l4Enabled', 'l5Enabled', 'l6Enabled'] as const;
 type LayerKey = (typeof LAYER_KEYS)[number];
 
 type Policy = {
   id: number;
   name: string;
   description: string | null;
-  l0Enabled: boolean;
   l1Enabled: boolean;
   l2Enabled: boolean;
   l3Enabled: boolean;
   l4Enabled: boolean;
   l5Enabled: boolean;
+  l6Enabled: boolean;
   isUse: boolean;
   createdAt: string;
   updatedAt: string;
@@ -21,23 +21,23 @@ type Policy = {
 type Draft = {
   name: string;
   description: string;
-  l0Enabled: boolean;
   l1Enabled: boolean;
   l2Enabled: boolean;
   l3Enabled: boolean;
   l4Enabled: boolean;
   l5Enabled: boolean;
+  l6Enabled: boolean;
 };
 
 const EMPTY_DRAFT: Draft = {
   name: '',
   description: '',
-  l0Enabled: true,
   l1Enabled: true,
   l2Enabled: true,
   l3Enabled: true,
   l4Enabled: true,
   l5Enabled: true,
+  l6Enabled: true,
 };
 
 const API = '/api/v1/policies';
@@ -85,12 +85,12 @@ export function LayerSettingsPage() {
     setEditDraft({
       name: policy.name,
       description: policy.description ?? '',
-      l0Enabled: policy.l0Enabled,
       l1Enabled: policy.l1Enabled,
       l2Enabled: policy.l2Enabled,
       l3Enabled: policy.l3Enabled,
       l4Enabled: policy.l4Enabled,
       l5Enabled: policy.l5Enabled,
+      l6Enabled: policy.l6Enabled,
     });
   }
 
@@ -113,12 +113,12 @@ export function LayerSettingsPage() {
         body: JSON.stringify({
           name: editDraft.name.trim(),
           description: editDraft.description,
-          l0Enabled: editDraft.l0Enabled,
           l1Enabled: editDraft.l1Enabled,
           l2Enabled: editDraft.l2Enabled,
           l3Enabled: editDraft.l3Enabled,
           l4Enabled: editDraft.l4Enabled,
           l5Enabled: editDraft.l5Enabled,
+          l6Enabled: editDraft.l6Enabled,
         }),
       });
       if (!res.ok) {
@@ -174,12 +174,12 @@ export function LayerSettingsPage() {
         body: JSON.stringify({
           name: newDraft.name.trim(),
           description: newDraft.description,
-          l0Enabled: newDraft.l0Enabled,
           l1Enabled: newDraft.l1Enabled,
           l2Enabled: newDraft.l2Enabled,
           l3Enabled: newDraft.l3Enabled,
           l4Enabled: newDraft.l4Enabled,
           l5Enabled: newDraft.l5Enabled,
+          l6Enabled: newDraft.l6Enabled,
         }),
       });
       if (!res.ok) {
@@ -215,7 +215,7 @@ export function LayerSettingsPage() {
     <div>
       <h2 className="page-title">정책 설정</h2>
       <p className="page-subtitle">
-        정책별 L0~L5 레이어를 설정합니다. 현재 활성(●) 표시된 정책 한 개만 게이트웨이에 적용됩니다.
+        정책별 L1~L6 레이어를 설정합니다. 현재 활성(●) 표시된 정책 한 개만 게이트웨이에 적용됩니다.
       </p>
 
       {error && <div className="alert" role="alert">{error}</div>}

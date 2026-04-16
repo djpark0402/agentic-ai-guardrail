@@ -49,12 +49,12 @@ class PolicyControllerTest {
         Map<String, Object> body = Map.of(
                 "name", "default-strict",
                 "description", "기본 엄격",
-                "l0Enabled", true,
                 "l1Enabled", true,
-                "l2Enabled", false,
+                "l2Enabled", true,
                 "l3Enabled", false,
-                "l4Enabled", true,
-                "l5Enabled", true
+                "l4Enabled", false,
+                "l5Enabled", true,
+                "l6Enabled", true
         );
 
         mockMvc.perform(post("/api/v1/policies")
@@ -106,12 +106,12 @@ class PolicyControllerTest {
         Map<String, Object> update = Map.of(
                 "name", "target",
                 "description", "updated",
-                "l0Enabled", false,
                 "l1Enabled", false,
-                "l2Enabled", true,
+                "l2Enabled", false,
                 "l3Enabled", true,
-                "l4Enabled", false,
-                "l5Enabled", false
+                "l4Enabled", true,
+                "l5Enabled", false,
+                "l6Enabled", false
         );
         mockMvc.perform(put("/api/v1/policies/{id}", id)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -192,16 +192,16 @@ class PolicyControllerTest {
         assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_DELETE);
     }
 
-    private Long createPolicy(String name, boolean l0, boolean l1, boolean l2, boolean l3, boolean l4, boolean l5) throws Exception {
+    private Long createPolicy(String name, boolean l1, boolean l2, boolean l3, boolean l4, boolean l5, boolean l6) throws Exception {
         Map<String, Object> body = Map.of(
                 "name", name,
                 "description", "",
-                "l0Enabled", l0,
                 "l1Enabled", l1,
                 "l2Enabled", l2,
                 "l3Enabled", l3,
                 "l4Enabled", l4,
-                "l5Enabled", l5
+                "l5Enabled", l5,
+                "l6Enabled", l6
         );
         String response = mockMvc.perform(post("/api/v1/policies")
                         .contentType(MediaType.APPLICATION_JSON)

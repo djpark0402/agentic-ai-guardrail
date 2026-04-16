@@ -9,12 +9,12 @@ const mockPolicies = [
     id: 1,
     name: 'default-strict',
     description: '기본 엄격',
-    l0Enabled: true,
     l1Enabled: true,
-    l2Enabled: false,
+    l2Enabled: true,
     l3Enabled: false,
-    l4Enabled: true,
+    l4Enabled: false,
     l5Enabled: true,
+    l6Enabled: true,
     isUse: true,
     createdAt: '2026-04-14T00:00:00Z',
     updatedAt: '2026-04-14T00:00:00Z',
@@ -23,12 +23,12 @@ const mockPolicies = [
     id: 2,
     name: 'dev-lenient',
     description: '개발용',
-    l0Enabled: false,
     l1Enabled: false,
-    l2Enabled: true,
-    l3Enabled: false,
+    l2Enabled: false,
+    l3Enabled: true,
     l4Enabled: false,
     l5Enabled: false,
+    l6Enabled: false,
     isUse: false,
     createdAt: '2026-04-14T01:00:00Z',
     updatedAt: '2026-04-14T01:00:00Z',
@@ -69,7 +69,7 @@ describe('LayerSettingsPage', () => {
       new Response(JSON.stringify(mockPolicies), { status: 200 }),
     );
     renderPage();
-    const toggle = await screen.findByRole('switch', { name: /default-strict l2Enabled/ });
+    const toggle = await screen.findByRole('switch', { name: /default-strict l3Enabled/ });
     await userEvent.click(toggle);
     expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PUT')).toBe(false);
   });
@@ -85,7 +85,7 @@ describe('LayerSettingsPage', () => {
     await screen.findByText('default-strict');
 
     await userEvent.click(screen.getAllByRole('button', { name: '수정' })[0]);
-    await userEvent.click(screen.getByRole('switch', { name: /default-strict l2Enabled/ }));
+    await userEvent.click(screen.getByRole('switch', { name: /default-strict l3Enabled/ }));
     await userEvent.click(screen.getByRole('button', { name: '저장' }));
 
     await waitFor(() => {
@@ -134,7 +134,7 @@ describe('LayerSettingsPage', () => {
     });
   });
 
-  it('새 정책 추가 시 L0~L5 스위치 조작 후 POST가 해당 값으로 전송된다', async () => {
+  it('새 정책 추가 시 L1~L6 스위치 조작 후 POST가 해당 값으로 전송된다', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify(mockPolicies), { status: 200 }))
@@ -144,7 +144,7 @@ describe('LayerSettingsPage', () => {
     renderPage();
     await userEvent.click(await screen.findByRole('button', { name: /새 정책/ }));
     await userEvent.type(screen.getByLabelText('정책명'), '신규');
-    await userEvent.click(screen.getByRole('switch', { name: '새 정책 l0Enabled' }));
+    await userEvent.click(screen.getByRole('switch', { name: '새 정책 l1Enabled' }));
     await userEvent.click(screen.getByRole('button', { name: '저장' }));
 
     await waitFor(() => {
@@ -157,7 +157,7 @@ describe('LayerSettingsPage', () => {
       expect(postCall).toBeTruthy();
       const body = JSON.parse((postCall![1] as RequestInit).body as string);
       expect(body.name).toBe('신규');
-      expect(body.l0Enabled).toBe(false); // 초기 true에서 토글로 false
+      expect(body.l1Enabled).toBe(false); // 초기 true에서 토글로 false
     });
   });
 

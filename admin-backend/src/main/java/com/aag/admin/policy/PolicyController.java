@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-@Tag(name = "Policy", description = "L0~L5 가드레일 정책 관리 API")
+@Tag(name = "Policy", description = "L1~L6 가드레일 정책 관리 API")
 @RestController
 @RequestMapping("/api/v1/policies")
 public class PolicyController {
@@ -119,12 +119,12 @@ public class PolicyController {
     private void applyRequest(Policy policy, PolicyRequest request) {
         policy.setName(request.getName());
         policy.setDescription(request.getDescription());
-        policy.setL0Enabled(request.isL0Enabled());
         policy.setL1Enabled(request.isL1Enabled());
         policy.setL2Enabled(request.isL2Enabled());
         policy.setL3Enabled(request.isL3Enabled());
         policy.setL4Enabled(request.isL4Enabled());
         policy.setL5Enabled(request.isL5Enabled());
+        policy.setL6Enabled(request.isL6Enabled());
     }
 
     private String policyDetail(Policy policy) {
@@ -137,12 +137,12 @@ public class PolicyController {
         map.put("name", policy.getName());
         map.put("description", policy.getDescription());
         map.put("isUse", policy.isUse());
-        map.put("l0Enabled", policy.isL0Enabled());
         map.put("l1Enabled", policy.isL1Enabled());
         map.put("l2Enabled", policy.isL2Enabled());
         map.put("l3Enabled", policy.isL3Enabled());
         map.put("l4Enabled", policy.isL4Enabled());
         map.put("l5Enabled", policy.isL5Enabled());
+        map.put("l6Enabled", policy.isL6Enabled());
         map.put("createdAt", policy.getCreatedAt());
         map.put("updatedAt", policy.getUpdatedAt());
         return map;

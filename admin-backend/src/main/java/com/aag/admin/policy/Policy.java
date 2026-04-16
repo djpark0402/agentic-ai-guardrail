@@ -18,9 +18,6 @@ public class Policy {
     @Column(length = 500)
     private String description;
 
-    @Column(name = "l0_enabled", nullable = false)
-    private boolean l0Enabled;
-
     @Column(name = "l1_enabled", nullable = false)
     private boolean l1Enabled;
 
@@ -35,6 +32,9 @@ public class Policy {
 
     @Column(name = "l5_enabled", nullable = false)
     private boolean l5Enabled;
+
+    @Column(name = "l6_enabled", nullable = false)
+    private boolean l6Enabled;
 
     @Column(name = "is_use", nullable = false)
     private boolean isUse;
@@ -51,8 +51,6 @@ public class Policy {
     public void setName(String name) { this.name = name; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
-    public boolean isL0Enabled() { return l0Enabled; }
-    public void setL0Enabled(boolean l0Enabled) { this.l0Enabled = l0Enabled; }
     public boolean isL1Enabled() { return l1Enabled; }
     public void setL1Enabled(boolean l1Enabled) { this.l1Enabled = l1Enabled; }
     public boolean isL2Enabled() { return l2Enabled; }
@@ -63,6 +61,8 @@ public class Policy {
     public void setL4Enabled(boolean l4Enabled) { this.l4Enabled = l4Enabled; }
     public boolean isL5Enabled() { return l5Enabled; }
     public void setL5Enabled(boolean l5Enabled) { this.l5Enabled = l5Enabled; }
+    public boolean isL6Enabled() { return l6Enabled; }
+    public void setL6Enabled(boolean l6Enabled) { this.l6Enabled = l6Enabled; }
     public boolean isUse() { return isUse; }
     public void setUse(boolean use) { this.isUse = use; }
     public Instant getCreatedAt() { return createdAt; }
