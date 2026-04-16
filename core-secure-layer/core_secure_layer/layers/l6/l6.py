@@ -77,11 +77,13 @@ class L6Layer(BaseLayer):
             self._tokenizer = transformers.AutoTokenizer.from_pretrained(
                 str(model_path),
             )
+            import torch
+
+            self._device = "mps" if torch.backends.mps.is_available() else "cpu"
             self._model = transformers.AutoModelForCausalLM.from_pretrained(
                 str(model_path),
-                device_map="auto",
-                torch_dtype="float16",
-            )
+                torch_dtype=torch.float16,
+            ).to(self._device)
             self._model.eval()
             self._model_loaded = True
             logger.info(

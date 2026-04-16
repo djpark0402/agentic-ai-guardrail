@@ -77,9 +77,12 @@ class L2Layer(BaseLayer):
             self._tokenizer = transformers.AutoTokenizer.from_pretrained(
                 self.model_path,
             )
+            import torch
+
+            self._device = "mps" if torch.backends.mps.is_available() else "cpu"
             self._model = transformers.AutoModelForCausalLM.from_pretrained(
                 self.model_path,
-            )
+            ).to(self._device)
             self._model.eval()
             self._model_loaded = True
         except Exception:
@@ -102,11 +105,13 @@ class L2Layer(BaseLayer):
 
         import torch
 
+        device = getattr(self, "_device", "cpu")
         inputs = self._tokenizer(
             text,
             return_tensors="pt",
             truncation=True,
         )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         with warnings.catch_warnings(), torch.no_grad():
             warnings.filterwarnings(
                 "ignore",

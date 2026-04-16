@@ -91,9 +91,9 @@ def _build_layers() -> list[tuple[str, object]]:
 
     layers.append(("L5", L5Layer()))
 
-    from core_secure_layer.layers.l6.l6 import L6Layer
-
-    layers.append(("L6", L6Layer()))
+    # L6: 8B 모델이라 메모리 부담이 큼 — CLI 테스트 시 비활성
+    # from core_secure_layer.layers.l6.l6 import L6Layer
+    # layers.append(("L6", L6Layer()))
 
     return layers
 
