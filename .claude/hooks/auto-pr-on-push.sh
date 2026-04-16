@@ -122,7 +122,9 @@ PR_OUT=$(gh pr create \
   --base develop \
   --head feature/core-secure-layer/dev \
   --title "$TITLE" \
-  --body "$BODY" 2>&1)
+  --body "$BODY" \
+  --assignee djpark0402 \
+  --reviewer kimpizza,leesj8115,Copliot 2>&1)
 
 if echo "$PR_OUT" | grep -qE 'https?://'; then
   PR_URL=$(echo "$PR_OUT" | grep -oE 'https?://[^ ]+' | head -1)
