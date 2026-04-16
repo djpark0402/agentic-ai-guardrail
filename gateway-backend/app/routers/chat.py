@@ -1,6 +1,7 @@
 """Chat 완성 라우터 — 핵심 가드레일 파이프라인."""
 
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -26,6 +27,8 @@ from app.models.policy import GuardrailPolicy
 from app.services.policy_service import PolicyService
 from app.services.provider_router import ProviderRouter
 from app.services.security_layer_service import SecurityLayerService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -246,19 +249,42 @@ async def chat_completions(
         HTTPException: 입력 검사 실패 시 400, 비스트리밍 출력 검사 실패 시 400.
     """
     session_id = str(uuid.uuid4())
+    t_request = time.perf_counter()
+
+    logger.info(
+        "[%s] 요청 수신: model=%s stream=%s messages=%d건",
+        session_id,
+        request.model,
+        request.stream,
+        len(request.messages),
+    )
 
     # 1단계: admin-backend에서 보안 정책 조회
+    t0 = time.perf_counter()
     if settings.skip_policy_fetch:
         policy = GuardrailPolicy.all_disabled()
     else:
         policy = await policy_service.fetch_policy(
             session_id=session_id,
         )
+    logger.info(
+        "[%s] 1단계 정책 조회 완료: %.1fms enabled_layers=%s",
+        session_id,
+        (time.perf_counter() - t0) * 1000,
+        policy.enabled_layers(),
+    )
 
-    # 2단계: 입력 프롬프트 보안 검사 (더미)
+    # 2단계: 입력 프롬프트 보안 검사
+    t0 = time.perf_counter()
     input_result = await security_service.check_input(
         messages=request.messages,
         policy=policy,
+    )
+    logger.info(
+        "[%s] 2단계 입력 검사 완료: %.1fms result=%s",
+        session_id,
+        (time.perf_counter() - t0) * 1000,
+        input_result.status.value,
     )
     if input_result.status == CheckStatus.BLOCK:
         raise HTTPException(
@@ -269,6 +295,7 @@ async def chat_completions(
     # 3단계: 모델명 기반 provider 자동 감지 후 LLM 비스트리밍 호출
     # messages 는 None/옵션 필드를 제거한 뒤 그대로 전달하여
     # tool/multimodal 메시지도 온전히 보존한다.
+    t0 = time.perf_counter()
     api_messages = [
         msg.model_dump(exclude_none=True) for msg in request.messages
     ]
@@ -281,11 +308,25 @@ async def chat_completions(
     passthrough["model"] = resolved_model
     completion = await llm_service.chat(messages=api_messages, **passthrough)
     content = completion.choices[0].message.content or ""
+    logger.info(
+        "[%s] 3단계 LLM 호출 완료: %.1fms provider=%s model=%s",
+        session_id,
+        (time.perf_counter() - t0) * 1000,
+        llm_service.provider_name,
+        resolved_model,
+    )
 
     # 4단계: 출력 결과 보안 검사 — 사용자 전송 이전에 선행하여 유출 방지
+    t0 = time.perf_counter()
     output_result = await security_service.check_output(
         content=content,
         policy=policy,
+    )
+    logger.info(
+        "[%s] 4단계 출력 검사 완료: %.1fms result=%s",
+        session_id,
+        (time.perf_counter() - t0) * 1000,
+        output_result.status.value,
     )
 
     # 스트리밍/비스트리밍 공통 메타데이터 — Solar 원본 completion 우선, 없으면
@@ -295,9 +336,16 @@ async def chat_completions(
     model_name = getattr(completion, "model", None) or request.model
     finish_reason = completion.choices[0].finish_reason or "stop"
 
+    total_ms = (time.perf_counter() - t_request) * 1000
+
     # 5-a단계: 스트리밍 요청 — OpenAI 호환 SSE 규격으로 재방출
     if request.stream:
         if output_result.status == CheckStatus.BLOCK:
+            logger.info(
+                "[%s] 5단계 응답 전송: stream=True (BLOCK) 총 %.1fms",
+                session_id,
+                total_ms,
+            )
             return StreamingResponse(
                 _stream_guardrail_block(
                     output_result.reason,
@@ -308,6 +356,11 @@ async def chat_completions(
                 media_type="text/event-stream",
                 headers=_SSE_HEADERS,
             )
+        logger.info(
+            "[%s] 5단계 응답 전송: stream=True 총 %.1fms",
+            session_id,
+            total_ms,
+        )
         return StreamingResponse(
             _stream_openai_chunks(
                 content,
@@ -322,10 +375,21 @@ async def chat_completions(
 
     # 5-b단계: 비스트리밍 요청 — 출력 BLOCK은 400, PASS는 ChatResponse
     if output_result.status == CheckStatus.BLOCK:
+        logger.info(
+            "[%s] 5단계 응답 전송: stream=False (BLOCK) 총 %.1fms",
+            session_id,
+            total_ms,
+        )
         raise HTTPException(
             status_code=400,
             detail=f"출력 보안 검사 실패: {output_result.reason}",
         )
+
+    logger.info(
+        "[%s] 5단계 응답 전송: stream=False 총 %.1fms",
+        session_id,
+        total_ms,
+    )
 
     # Solar 원본 completion 의 메타데이터(id 제외)를 그대로 보존하여
     # OpenAI 호환 클라이언트가 usage/finish_reason/tool_calls 를 받을 수 있게
