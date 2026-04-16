@@ -1,6 +1,7 @@
 """L3 가드레일 레이어 — 공격 패턴 유사도 기반 차단."""
 
 import logging
+import pathlib
 from typing import Any
 
 from core_secure_layer.layers.base import BaseLayer
@@ -11,6 +12,11 @@ from core_secure_layer.layers.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+_L3_DIR: pathlib.Path = pathlib.Path(__file__).resolve().parent
+_DEFAULT_DB_PATH: str = str(_L3_DIR / "vectordb")
+_MODEL_BASE_DIR: pathlib.Path = _L3_DIR / "model"
+_DEFAULT_MODEL_NAME: str = "all-MiniLM-L6-v2"
 
 
 class L3Layer(BaseLayer):
@@ -25,8 +31,8 @@ class L3Layer(BaseLayer):
 
     def __init__(
         self,
-        db_path: str = "l3/vectordb",
-        model_path: str = "l3/model",
+        db_path: str = _DEFAULT_DB_PATH,
+        model_name: str = _DEFAULT_MODEL_NAME,
         similarity_threshold: float = 0.8,
         top_k: int = 5,
     ) -> None:
@@ -34,12 +40,15 @@ class L3Layer(BaseLayer):
 
         Args:
             db_path: ChromaDB 영속 저장 경로.
-            model_path: sentence-transformers 모델 경로.
+            model_name: 임베딩 모델 폴더명 (예:
+                ``"all-MiniLM-L6-v2"``).
             similarity_threshold: 평균 유사도 차단 임계값.
             top_k: 검색할 유사 패턴 수.
         """
         self.db_path = db_path
-        self.model_path = model_path
+        self.model_path = str(
+            _MODEL_BASE_DIR / model_name,
+        )
         self.similarity_threshold = similarity_threshold
         self.top_k = top_k
         self._model: Any = None

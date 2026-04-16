@@ -57,11 +57,11 @@ class TestConstructorContract:
     """L3Layer 생성자가 필수 파라미터를 받는지 확인."""
 
     def test_accepts_all_params(self):
-        # 생성자가 db_path, model_path, similarity_threshold,
+        # 생성자가 db_path, model_name, similarity_threshold,
         # top_k 를 받아야 한다
         inst = L3Layer(
             db_path=_FAKE_DB_PATH,
-            model_path=_FAKE_MODEL_PATH,
+            model_name="fake-model",
             similarity_threshold=0.9,
             top_k=3,
         )
@@ -71,7 +71,7 @@ class TestConstructorContract:
         # 기본 similarity_threshold 는 0.8
         inst = L3Layer(
             db_path=_FAKE_DB_PATH,
-            model_path=_FAKE_MODEL_PATH,
+            model_name="fake-model",
         )
         assert inst.similarity_threshold == _DEFAULT_THRESHOLD
 
@@ -79,7 +79,7 @@ class TestConstructorContract:
         # 기본 top_k 는 5
         inst = L3Layer(
             db_path=_FAKE_DB_PATH,
-            model_path=_FAKE_MODEL_PATH,
+            model_name="fake-model",
         )
         assert inst.top_k == _DEFAULT_TOP_K
 
