@@ -187,16 +187,15 @@ class L3Layer(BaseLayer):
         if not results:
             return self._allow()
 
-        avg_sim = sum(r["similarity"] for r in results) / len(results)
+        top = max(results, key=lambda r: r["similarity"])
+        top_sim = top["similarity"]
 
-        if avg_sim > self.similarity_threshold:
-            # 가장 유사도가 높은 패턴 찾기
-            top = max(results, key=lambda r: r["similarity"])
+        if top_sim > self.similarity_threshold:
             pattern_name = top["name"]
             reason = (
                 f"similar to attack pattern "
                 f'"{pattern_name}" '
-                f"(similarity: {avg_sim:.2f})"
+                f"(similarity: {top_sim:.2f})"
             )
             return LayerResult(
                 name=self.name,
