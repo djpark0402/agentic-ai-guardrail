@@ -1,16 +1,23 @@
 package com.aag.admin.policy;
 
+import com.aag.admin.audit.Action;
+import com.aag.admin.audit.ActorType;
+import com.aag.admin.audit.AuditLog;
+import com.aag.admin.audit.AuditLogRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 
+import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -25,14 +32,29 @@ class PolicyControllerTest {
     @Autowired
     ObjectMapper objectMapper;
 
+    @Autowired
+    PolicyRepository repository;
+
+    @Autowired
+    AuditLogRepository auditLogRepository;
+
+    @BeforeEach
+    void cleanDb() {
+        auditLogRepository.deleteAll();
+        repository.deleteAll();
+    }
+
     @Test
-    void createPolicy_returns201_withLocation() throws Exception {
+    void createPolicy_returns201_writesAuditLog() throws Exception {
         Map<String, Object> body = Map.of(
-                "name", "block-pii",
-                "description", "Block PII leakage",
-                "ruleType", "REGEX",
-                "pattern", "\\d{3}-\\d{2}-\\d{4}",
-                "enabled", true
+                "name", "default-strict",
+                "description", "기본 엄격",
+                "l0Enabled", true,
+                "l1Enabled", true,
+                "l2Enabled", false,
+                "l3Enabled", false,
+                "l4Enabled", true,
+                "l5Enabled", true
         );
 
         mockMvc.perform(post("/api/v1/policies")
@@ -40,7 +62,15 @@ class PolicyControllerTest {
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").exists())
-                .andExpect(jsonPath("$.name").value("block-pii"));
+                .andExpect(jsonPath("$.name").value("default-strict"))
+                .andExpect(jsonPath("$.isUse").value(false));
+
+        List<AuditLog> logs = auditLogRepository.findAll();
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).getActionId()).isEqualTo(ActorType.ADMIN);
+        assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_CREATE);
+        assertThat(logs.get(0).isSuccess()).isTrue();
+        assertThat(logs.get(0).getDetail()).contains("name=default-strict");
     }
 
     @Test
@@ -51,13 +81,15 @@ class PolicyControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isBadRequest());
+
+        assertThat(auditLogRepository.count()).isZero();
     }
 
     @Test
-    void listPolicies_returnsPagedResult() throws Exception {
-        mockMvc.perform(get("/api/v1/policies").param("page", "0").param("size", "10"))
+    void listPolicies_returnsArray() throws Exception {
+        mockMvc.perform(get("/api/v1/policies"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content").isArray());
+                .andExpect(jsonPath("$").isArray());
     }
 
     @Test
@@ -67,53 +99,114 @@ class PolicyControllerTest {
     }
 
     @Test
-    void updatePolicy_returns200() throws Exception {
-        Map<String, Object> create = Map.of(
-                "name", "update-target",
-                "description", "d",
-                "ruleType", "REGEX",
-                "pattern", ".*",
-                "enabled", true
-        );
-        String response = mockMvc.perform(post("/api/v1/policies")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(create)))
-                .andReturn().getResponse().getContentAsString();
-        Long id = ((Number) objectMapper.readValue(response, Map.class).get("id")).longValue();
+    void updatePolicy_writesAuditLog() throws Exception {
+        Long id = createPolicy("target", true, true, true, true, true, true);
+        auditLogRepository.deleteAll();
 
         Map<String, Object> update = Map.of(
-                "name", "update-target",
+                "name", "target",
                 "description", "updated",
-                "ruleType", "REGEX",
-                "pattern", ".*",
-                "enabled", false
+                "l0Enabled", false,
+                "l1Enabled", false,
+                "l2Enabled", true,
+                "l3Enabled", true,
+                "l4Enabled", false,
+                "l5Enabled", false
         );
         mockMvc.perform(put("/api/v1/policies/{id}", id)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(update)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.enabled").value(false));
+                .andExpect(status().isOk());
+
+        List<AuditLog> logs = auditLogRepository.findAll();
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_UPDATE);
+        assertThat(logs.get(0).getActionId()).isEqualTo(ActorType.ADMIN);
     }
 
     @Test
-    void deletePolicy_returns204() throws Exception {
-        Map<String, Object> create = Map.of(
-                "name", "delete-target",
-                "description", "d",
-                "ruleType", "REGEX",
-                "pattern", ".*",
-                "enabled", true
-        );
-        String response = mockMvc.perform(post("/api/v1/policies")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(create)))
-                .andReturn().getResponse().getContentAsString();
-        Long id = ((Number) objectMapper.readValue(response, Map.class).get("id")).longValue();
+    void activatePolicy_writesAuditLog_andSwitchesActive() throws Exception {
+        Long first = createPolicy("first", true, false, false, false, false, false);
+        Long second = createPolicy("second", false, true, false, false, false, false);
+        auditLogRepository.deleteAll();
+
+        mockMvc.perform(post("/api/v1/policies/{id}/activate", first))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isUse").value(true));
+
+        mockMvc.perform(post("/api/v1/policies/{id}/activate", second))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isUse").value(true));
+
+        mockMvc.perform(get("/api/v1/policies/{id}", first))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isUse").value(false));
+
+        List<AuditLog> logs = auditLogRepository.findAll();
+        assertThat(logs).hasSize(2);
+        assertThat(logs).allMatch(l -> l.getAction() == Action.POLICY_ACTIVATE && l.getActionId() == ActorType.ADMIN);
+    }
+
+    @Test
+    void activeEndpoint_writesGatewayAuditLog_whenActiveExists() throws Exception {
+        Long id = createPolicy("active-one", true, true, true, true, true, true);
+        mockMvc.perform(post("/api/v1/policies/{id}/activate", id));
+        auditLogRepository.deleteAll();
+
+        mockMvc.perform(get("/api/v1/policies/active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id));
+
+        List<AuditLog> logs = auditLogRepository.findAll();
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).getActionId()).isEqualTo(ActorType.GATEWAY);
+        assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_REQUEST);
+        assertThat(logs.get(0).isSuccess()).isTrue();
+    }
+
+    @Test
+    void activeEndpoint_writesFailureAuditLog_whenNothingActive() throws Exception {
+        createPolicy("unused", false, false, false, false, false, false);
+        auditLogRepository.deleteAll();
+
+        mockMvc.perform(get("/api/v1/policies/active"))
+                .andExpect(status().isNotFound());
+
+        List<AuditLog> logs = auditLogRepository.findAll();
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).getActionId()).isEqualTo(ActorType.GATEWAY);
+        assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_REQUEST);
+        assertThat(logs.get(0).isSuccess()).isFalse();
+    }
+
+    @Test
+    void deletePolicy_writesAuditLog() throws Exception {
+        Long id = createPolicy("delete-target", true, true, true, true, true, true);
+        auditLogRepository.deleteAll();
 
         mockMvc.perform(delete("/api/v1/policies/{id}", id))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/api/v1/policies/{id}", id))
-                .andExpect(status().isNotFound());
+        List<AuditLog> logs = auditLogRepository.findAll();
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_DELETE);
+    }
+
+    private Long createPolicy(String name, boolean l0, boolean l1, boolean l2, boolean l3, boolean l4, boolean l5) throws Exception {
+        Map<String, Object> body = Map.of(
+                "name", name,
+                "description", "",
+                "l0Enabled", l0,
+                "l1Enabled", l1,
+                "l2Enabled", l2,
+                "l3Enabled", l3,
+                "l4Enabled", l4,
+                "l5Enabled", l5
+        );
+        String response = mockMvc.perform(post("/api/v1/policies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andReturn().getResponse().getContentAsString();
+        return ((Number) objectMapper.readValue(response, Map.class).get("id")).longValue();
     }
 }

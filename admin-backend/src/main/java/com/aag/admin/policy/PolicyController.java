@@ -1,53 +1,77 @@
 package com.aag.admin.policy;
 
+import com.aag.admin.audit.Action;
+import com.aag.admin.audit.ActorType;
+import com.aag.admin.audit.AuditLogService;
 import com.aag.admin.common.NotFoundException;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
 import java.time.Instant;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
+@Tag(name = "Policy", description = "L0~L5 가드레일 정책 관리 API")
 @RestController
 @RequestMapping("/api/v1/policies")
 public class PolicyController {
 
     private final PolicyRepository repository;
+    private final AuditLogService auditLogService;
 
-    public PolicyController(PolicyRepository repository) {
+    public PolicyController(PolicyRepository repository, AuditLogService auditLogService) {
         this.repository = repository;
+        this.auditLogService = auditLogService;
     }
 
+    @Operation(summary = "정책 생성", description = "관리자(ADMIN) 전용")
     @PostMapping
     public ResponseEntity<Map<String, Object>> create(@Valid @RequestBody PolicyRequest request) {
         Policy policy = new Policy();
-        policy.setName(request.getName());
-        policy.setDescription(request.getDescription());
-        policy.setRuleType(request.getRuleType());
-        policy.setPattern(request.getPattern());
-        policy.setEnabled(request.isEnabled());
+        applyRequest(policy, request);
+        policy.setUse(false);
         Policy saved = repository.save(policy);
+        auditLogService.record(ActorType.ADMIN, Action.POLICY_CREATE, true, policyDetail(saved));
         return ResponseEntity.created(URI.create("/api/v1/policies/" + saved.getId()))
                 .body(toResponse(saved));
     }
 
+    @Operation(summary = "정책 목록 조회")
     @GetMapping
-    public Map<String, Object> list(@RequestParam(defaultValue = "0") int page,
-                                    @RequestParam(defaultValue = "20") int size) {
-        Page<Policy> result = repository.findAll(PageRequest.of(page, size));
-        Map<String, Object> body = new HashMap<>();
-        body.put("content", result.getContent().stream().map(this::toResponse).toList());
-        body.put("totalElements", result.getTotalElements());
-        body.put("totalPages", result.getTotalPages());
-        body.put("page", result.getNumber());
-        body.put("size", result.getSize());
-        return body;
+    public List<Map<String, Object>> list() {
+        return repository.findAllByOrderByCreatedAtAsc().stream()
+                .map(this::toResponse)
+                .toList();
     }
 
+    @Operation(
+            summary = "[Gateway 전용] 현재 활성 정책 조회",
+            description = """
+                    게이트웨이에서 호출하는 엔드포인트입니다.
+                    is_use=true 인 정책 1건을 반환합니다. 호출 시 GATEWAY 호출자로 감사 로그가 남습니다.
+                    활성 정책이 없으면 404를 반환합니다.
+                    """
+    )
+    @GetMapping("/active")
+    public Map<String, Object> active() {
+        Optional<Policy> policyOpt = repository.findByIsUseTrue();
+        if (policyOpt.isEmpty()) {
+            auditLogService.record(ActorType.GATEWAY, Action.POLICY_REQUEST, false, "no active policy");
+            throw new NotFoundException("no active policy");
+        }
+        Policy policy = policyOpt.get();
+        auditLogService.record(ActorType.GATEWAY, Action.POLICY_REQUEST, true, policyDetail(policy));
+        return toResponse(policy);
+    }
+
+    @Operation(summary = "정책 단건 조회")
     @GetMapping("/{id}")
     public Map<String, Object> get(@PathVariable Long id) {
         Policy policy = repository.findById(id)
@@ -55,36 +79,70 @@ public class PolicyController {
         return toResponse(policy);
     }
 
+    @Operation(summary = "정책 수정", description = "관리자(ADMIN) 전용")
     @PutMapping("/{id}")
     public Map<String, Object> update(@PathVariable Long id, @Valid @RequestBody PolicyRequest request) {
         Policy policy = repository.findById(id)
                 .orElseThrow(() -> new NotFoundException("policy not found: " + id));
-        policy.setName(request.getName());
-        policy.setDescription(request.getDescription());
-        policy.setRuleType(request.getRuleType());
-        policy.setPattern(request.getPattern());
-        policy.setEnabled(request.isEnabled());
+        applyRequest(policy, request);
         policy.setUpdatedAt(Instant.now());
-        return toResponse(repository.save(policy));
+        Policy saved = repository.save(policy);
+        auditLogService.record(ActorType.ADMIN, Action.POLICY_UPDATE, true, policyDetail(saved));
+        return toResponse(saved);
     }
 
+    @Operation(summary = "정책 활성화", description = "다른 활성 정책은 자동 비활성화됩니다")
+    @PostMapping("/{id}/activate")
+    @Transactional
+    public Map<String, Object> activate(@PathVariable Long id) {
+        Policy policy = repository.findById(id)
+                .orElseThrow(() -> new NotFoundException("policy not found: " + id));
+        repository.clearActiveExcept(id);
+        policy.setUse(true);
+        policy.setUpdatedAt(Instant.now());
+        Policy saved = repository.save(policy);
+        auditLogService.record(ActorType.ADMIN, Action.POLICY_ACTIVATE, true, policyDetail(saved));
+        return toResponse(saved);
+    }
+
+    @Operation(summary = "정책 삭제")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
-        if (!repository.existsById(id)) {
-            throw new NotFoundException("policy not found: " + id);
-        }
-        repository.deleteById(id);
+        Policy policy = repository.findById(id)
+                .orElseThrow(() -> new NotFoundException("policy not found: " + id));
+        String detail = policyDetail(policy);
+        repository.delete(policy);
+        auditLogService.record(ActorType.ADMIN, Action.POLICY_DELETE, true, detail);
         return ResponseEntity.noContent().build();
     }
 
+    private void applyRequest(Policy policy, PolicyRequest request) {
+        policy.setName(request.getName());
+        policy.setDescription(request.getDescription());
+        policy.setL0Enabled(request.isL0Enabled());
+        policy.setL1Enabled(request.isL1Enabled());
+        policy.setL2Enabled(request.isL2Enabled());
+        policy.setL3Enabled(request.isL3Enabled());
+        policy.setL4Enabled(request.isL4Enabled());
+        policy.setL5Enabled(request.isL5Enabled());
+    }
+
+    private String policyDetail(Policy policy) {
+        return "id=" + policy.getId() + ", name=" + policy.getName();
+    }
+
     private Map<String, Object> toResponse(Policy policy) {
-        Map<String, Object> map = new HashMap<>();
+        Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", policy.getId());
         map.put("name", policy.getName());
         map.put("description", policy.getDescription());
-        map.put("ruleType", policy.getRuleType());
-        map.put("pattern", policy.getPattern());
-        map.put("enabled", policy.isEnabled());
+        map.put("isUse", policy.isUse());
+        map.put("l0Enabled", policy.isL0Enabled());
+        map.put("l1Enabled", policy.isL1Enabled());
+        map.put("l2Enabled", policy.isL2Enabled());
+        map.put("l3Enabled", policy.isL3Enabled());
+        map.put("l4Enabled", policy.isL4Enabled());
+        map.put("l5Enabled", policy.isL5Enabled());
         map.put("createdAt", policy.getCreatedAt());
         map.put("updatedAt", policy.getUpdatedAt());
         return map;
