@@ -11,6 +11,8 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
                                                                                     └ stream=true 시 SSE 재방출
 ```
 
+- **Multi-provider 지원:** 모델명으로 provider를 자동 감지한다.
+  `gpt-*`, `o1-*`, `o3-*` → OpenAI / 그 외 → Solar (기본값).
 - LLM 호출은 **항상 비스트리밍**이다. 전체 응답을 받은 뒤 출력 가드레일 검사를
   먼저 수행한 다음, 사용자 응답만 선택적으로 SSE로 재방출한다.
 - 출력이 BLOCK되면 비스트리밍은 HTTP 400, 스트리밍은 에러 프레임 1건만 전송하여
@@ -85,9 +87,17 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 
 `.env.example`를 복사하여 `.env`를 만든다. 주요 항목:
 
+**Solar (필수)**
 - `UPSTAGE_API_KEY` — Upstage Solar API 키
 - `LLM_BASE_URL` — Solar 엔드포인트 (기본 `https://api.upstage.ai/v1`)
-- `LLM_MODEL` — 사용할 모델 (기본 `solar-pro2`)
+- `LLM_MODEL` — Solar 기본 모델명
+
+**OpenAI (선택)**
+- `OPENAI_API_KEY` — OpenAI API 키 (미설정 시 OpenAI 모델 요청은 에러)
+- `OPENAI_BASE_URL` — OpenAI 엔드포인트 (기본 `https://api.openai.com/v1`)
+- `OPENAI_MODEL` — OpenAI 기본 모델명 (기본 `gpt-4o`)
+
+**공통**
 - `ADMIN_BACKEND_URL` — 정책 조회용 admin-backend 주소
 - `SKIP_POLICY_FETCH` — `true`로 설정하면 admin-backend 정책 조회를 생략하고 전체 레이어 비활성 상태로 동작 (기본 `false`)
 
@@ -105,7 +115,9 @@ app/
 ├── routers/
 │   └── chat.py          # /v1/chat/completions 가드레일 파이프라인
 ├── services/
-│   ├── solar_service.py       # LangChain ChatOpenAI 기반 Solar 클라이언트
+│   ├── llm_service.py         # 범용 LLM 서비스 (LangChain ChatOpenAI 기반)
+│   ├── solar_service.py       # Solar 전용 래퍼 (LLMService 상속)
+│   ├── provider_router.py     # 모델명 기반 provider 자동 라우팅
 │   ├── security_layer_service.py
 │   └── policy_service.py
 └── static/

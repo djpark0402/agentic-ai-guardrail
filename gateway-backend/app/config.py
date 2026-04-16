@@ -21,9 +21,17 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Solar (Upstage)
     llm_base_url: str = "https://api.upstage.ai/v1"
     llm_model: str
     upstage_api_key: SecretStr
+
+    # OpenAI (optional — 미설정 시 OpenAI 모델 요청은 에러)
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o"
+
+    # 공통
     admin_backend_url: str = "http://localhost:8001"
     skip_policy_fetch: bool = False
 

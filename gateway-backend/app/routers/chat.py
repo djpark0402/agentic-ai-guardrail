@@ -12,8 +12,8 @@ from fastapi.responses import StreamingResponse
 from app.config import Settings, get_settings
 from app.dependencies import (
     get_policy_service,
+    get_provider_router,
     get_security_service,
-    get_solar_service,
 )
 from app.models.chat import (
     ChatRequest,
@@ -24,8 +24,8 @@ from app.models.chat import (
 from app.models.guardrail import CheckStatus
 from app.models.policy import GuardrailPolicy
 from app.services.policy_service import PolicyService
+from app.services.provider_router import ProviderRouter
 from app.services.security_layer_service import SecurityLayerService
-from app.services.solar_service import SolarService
 
 router = APIRouter()
 
@@ -219,23 +219,23 @@ async def chat_completions(
     security_service: Annotated[
         SecurityLayerService, Depends(get_security_service)
     ],
-    solar_service: Annotated[SolarService, Depends(get_solar_service)],
+    provider_router: Annotated[ProviderRouter, Depends(get_provider_router)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ChatResponse | StreamingResponse:
-    """Solar API 포맷의 채팅 완성 요청을 처리한다.
+    """OpenAI 호환 채팅 완성 요청을 처리한다.
 
     가드레일 파이프라인:
     1. admin-backend에서 보안 정책 조회
     2. security-layer로 입력 프롬프트 검사
-    3. Solar API 비스트리밍 호출 (항상 non-stream)
+    3. 모델명 기반 provider 자동 감지 후 LLM 비스트리밍 호출
     4. security-layer로 출력 결과 검사 (사용자 전송 이전에 선행)
     5. `stream=False`면 JSON, `stream=True`면 SSE로 재방출
 
     Args:
-        request: OpenAI/Solar 호환 채팅 완성 요청.
+        request: OpenAI 호환 채팅 완성 요청.
         policy_service: 보안 정책 조회 서비스.
         security_service: 보안 레이어 검사 서비스.
-        solar_service: Solar API 클라이언트 서비스.
+        provider_router: 모델명 기반 LLM provider 라우터.
         settings: 애플리케이션 설정 (정책 조회 생략 여부 포함).
 
     Returns:
@@ -266,18 +266,19 @@ async def chat_completions(
             detail=f"입력 보안 검사 실패: {input_result.reason}",
         )
 
-    # 3단계: Solar API 비스트리밍 호출 (stream 여부와 무관하게 항상 non-stream)
-    # messages 는 None/옵션 필드를 제거한 뒤 그대로 Solar 로 전달하여
+    # 3단계: 모델명 기반 provider 자동 감지 후 LLM 비스트리밍 호출
+    # messages 는 None/옵션 필드를 제거한 뒤 그대로 전달하여
     # tool/multimodal 메시지도 온전히 보존한다.
     api_messages = [
         msg.model_dump(exclude_none=True) for msg in request.messages
     ]
-    # 요청 바디의 OpenAI 호환 파라미터를 Solar 호출에 pass-through.
+    # 요청 바디의 OpenAI 호환 파라미터를 LLM 호출에 pass-through.
     passthrough = request.model_dump(
         exclude={"messages", "stream"},
         exclude_none=True,
     )
-    completion = await solar_service.chat(messages=api_messages, **passthrough)
+    llm_service = provider_router.resolve(request.model)
+    completion = await llm_service.chat(messages=api_messages, **passthrough)
     content = completion.choices[0].message.content or ""
 
     # 4단계: 출력 결과 보안 검사 — 사용자 전송 이전에 선행하여 유출 방지
