@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class SecurityLayerService:
-    """core-secure-layer 를 통한 L0~L5 보안 검사 서비스.
+    """core-secure-layer 를 통한 L1~L6 보안 검사 서비스.
 
     policy 에서 활성화된 레이어(`lN == True`)만 순차적으로 실행한다.
     현재는 core_secure_layer 실연동 이전이므로 각 레이어 훅이 PASS 를
@@ -77,7 +77,7 @@ class SecurityLayerService:
         """개별 입력 레이어 실행 훅 (core_secure_layer 연동 지점).
 
         Args:
-            layer_idx: 실행할 레이어 인덱스 (0~5).
+            layer_idx: 실행할 레이어 인덱스 (1~6).
             messages: 검사 대상 메시지 목록.
 
         Returns:
@@ -96,7 +96,7 @@ class SecurityLayerService:
         """개별 출력 레이어 실행 훅 (core_secure_layer 연동 지점).
 
         Args:
-            layer_idx: 실행할 레이어 인덱스 (0~5).
+            layer_idx: 실행할 레이어 인덱스 (1~6).
             content: 검사 대상 응답 텍스트.
 
         Returns:

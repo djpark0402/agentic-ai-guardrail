@@ -36,7 +36,7 @@ class PolicyService:
             session_id: 세션 식별자 (로깅 목적).
 
         Returns:
-            L0~L5 활성화 플래그를 담은 `GuardrailPolicy`.
+            L1~L6 활성화 플래그를 담은 `GuardrailPolicy`.
 
         Raises:
             httpx.HTTPError: admin-backend 호출 실패(네트워크/4xx/5xx) 시.

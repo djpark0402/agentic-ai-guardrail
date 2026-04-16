@@ -53,7 +53,7 @@ def _make_completion(
 
 def _all_enabled_policy():
     """테스트용 전체 활성화 정책을 반환한다."""
-    return GuardrailPolicy(l0=True, l1=True, l2=True, l3=True, l4=True, l5=True)
+    return GuardrailPolicy(l1=True, l2=True, l3=True, l4=True, l5=True, l6=True)
 
 
 def _make_mock_llm_service(completion=None):
@@ -477,8 +477,8 @@ def test_all_disabled_policy_has_no_enabled_layers():
     """GuardrailPolicy.all_disabled()는 모든 레이어가 비활성이다."""
     policy = GuardrailPolicy.all_disabled()
     assert policy.enabled_layers() == []
-    assert policy.l0 is False
-    assert policy.l5 is False
+    assert policy.l1 is False
+    assert policy.l6 is False
 
 
 def test_skip_policy_fetch_skips_admin_call(
