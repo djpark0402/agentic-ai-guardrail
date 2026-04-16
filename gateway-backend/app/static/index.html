@@ -231,14 +231,15 @@
 
       .content-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
         gap: 24px;
         margin-bottom: 24px;
       }
 
-      .stack {
+      .test-grid {
         display: grid;
         gap: 24px;
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 0.86fr);
+        align-items: start;
       }
 
       section.card {
@@ -272,6 +273,31 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         margin-bottom: 14px;
+      }
+
+      .split-header {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .split-header h2,
+      .response-shell h3 {
+        margin: 0 0 6px;
+        letter-spacing: -0.02em;
+      }
+
+      .split-header h2 {
+        font-size: 1.32rem;
+      }
+
+      .split-header p,
+      .response-shell p {
+        color: var(--muted);
+        margin: 0;
+        font-size: 0.96rem;
       }
 
       .endpoint-row {
@@ -473,6 +499,29 @@
         color: var(--muted);
       }
 
+      .response-shell {
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 251, 244, 0.92), rgba(255, 246, 249, 0.82));
+        border: 1px solid rgba(240, 204, 216, 0.84);
+      }
+
+      .response-shell pre {
+        min-height: 320px;
+      }
+
+      #spec-card .field-grid {
+        grid-template-columns: 1fr;
+      }
+
+      #spec-card pre {
+        min-height: 180px;
+        max-height: 360px;
+      }
+
       .response-meta #resp-status,
       .response-meta #resp-ctype {
         font-weight: 700;
@@ -495,7 +544,7 @@
 
       @media (max-width: 980px) {
         .hero-grid,
-        .content-grid,
+        .test-grid,
         .field-grid {
           grid-template-columns: 1fr;
         }
@@ -523,6 +572,10 @@
         .toolbar > * {
           width: 100%;
           justify-content: center;
+        }
+
+        .split-header {
+          flex-direction: column;
         }
 
         .pipeline .arrow {
@@ -567,8 +620,8 @@
           <aside class="hero-note">
             <h2>한 화면에서 빠르게 확인</h2>
             <p>
-              OpenAPI 스키마, 요청 폼, 실제 응답을 나란히 두고 가드레일 동작을
-              바로 비교할 수 있습니다.
+              테스트 요청과 실제 응답을 먼저 확인하고, 필요할 때 아래에서
+              OpenAPI 스키마를 펼쳐 비교할 수 있습니다.
             </p>
             <div class="blossom-list">
               <span>기본 모델 자동 로드</span>
@@ -580,36 +633,20 @@
       </header>
 
       <div class="content-grid">
-        <section class="card" id="spec-card">
-          <div class="card-kicker">API Surface</div>
-          <h2>POST /v1/chat/completions</h2>
-          <p class="lede" id="spec-summary">OpenAPI 스키마를 불러오는 중…</p>
-          <div class="endpoint-row">
-            <span class="method">POST</span>
-            <span>/v1/chat/completions</span>
-          </div>
-          <div class="field-grid">
+        <section class="card" id="test-card">
+          <div class="card-kicker">Interactive Test</div>
+          <div class="split-header">
             <div>
-              <label>요청 스키마</label>
-              <pre id="spec-request">—</pre>
-            </div>
-            <div>
-              <label>응답 스키마 (비스트리밍)</label>
-              <pre id="spec-response">—</pre>
+              <h2>테스트와 응답을 한 화면에서 확인</h2>
+              <p>
+                폼을 채우고 전송하면 실제
+                <code>/v1/chat/completions</code> 엔드포인트를 호출합니다.
+                스트리밍을 켜면 SSE 청크가 실시간으로 누적됩니다.
+              </p>
             </div>
           </div>
-        </section>
 
-        <div class="stack">
-          <section class="card">
-            <div class="card-kicker">Interactive Test</div>
-            <h2>테스트</h2>
-            <p class="lede">
-              폼을 채우고 전송하면 실제 <code>/v1/chat/completions</code>
-              엔드포인트를 호출합니다. 스트리밍을 켜면 SSE 청크가 실시간으로
-              누적됩니다.
-            </p>
-
+          <div class="test-grid">
             <div class="form-shell">
               <label>model</label>
               <input id="f-model" type="text" placeholder="모델명 로드 중…" />
@@ -629,19 +666,44 @@
                 <button type="button" id="send">전송</button>
               </div>
             </div>
-          </section>
 
-          <section class="card">
-            <div class="card-kicker">Response Watch</div>
-            <h2>응답</h2>
-            <div class="response-meta">
-              <span>status: <span id="resp-status">—</span></span>
-              <span>content-type: <span id="resp-ctype">—</span></span>
+            <div class="response-shell">
+              <div>
+                <div class="card-kicker">Response Watch</div>
+                <h3>응답</h3>
+                <p>요청 결과와 콘텐츠 유형을 바로 확인할 수 있습니다.</p>
+              </div>
+              <div class="response-meta">
+                <span>status: <span id="resp-status">—</span></span>
+                <span>content-type: <span id="resp-ctype">—</span></span>
+              </div>
+              <div>
+                <label>본문</label>
+                <pre id="resp-body">아직 요청을 보내지 않았습니다.</pre>
+              </div>
             </div>
-            <label>본문</label>
-            <pre id="resp-body">아직 요청을 보내지 않았습니다.</pre>
-          </section>
-        </div>
+          </div>
+        </section>
+
+        <section class="card" id="spec-card">
+          <div class="card-kicker">API Surface</div>
+          <h2>POST /v1/chat/completions</h2>
+          <p class="lede" id="spec-summary">OpenAPI 스키마를 불러오는 중…</p>
+          <div class="endpoint-row">
+            <span class="method">POST</span>
+            <span>/v1/chat/completions</span>
+          </div>
+          <div class="field-grid">
+            <div>
+              <label>요청 스키마</label>
+              <pre id="spec-request">—</pre>
+            </div>
+            <div>
+              <label>응답 스키마 (비스트리밍)</label>
+              <pre id="spec-response">—</pre>
+            </div>
+          </div>
+        </section>
       </div>
 
       <footer>
