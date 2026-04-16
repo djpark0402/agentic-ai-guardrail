@@ -14,9 +14,9 @@ from core_secure_layer.layers.types import (
 
 logger = logging.getLogger(__name__)
 
-# 기본 모델 경로: l2/model/ 디렉토리
-_DEFAULT_MODEL_PATH: str = str(
-    pathlib.Path(__file__).resolve().parent / "model",
+# 기본 모델 베이스 경로: l2/model/ 디렉토리
+_MODEL_BASE_DIR: pathlib.Path = (
+    pathlib.Path(__file__).resolve().parent / "model"
 )
 
 # 1차 필터: 허용 문자셋 정규식
@@ -44,16 +44,19 @@ class L2Layer(BaseLayer):
 
     def __init__(
         self,
-        model_path: str = _DEFAULT_MODEL_PATH,
+        model_name: str = "gpt2",
         ppl_threshold: float = 600.0,
     ) -> None:
         """L2 레이어를 초기화한다.
 
         Args:
-            model_path: GPT-2 모델 로컬 디렉토리 경로.
+            model_name: 모델 폴더명 (``"gpt2"`` 또는
+                ``"kogpt2"``).
             ppl_threshold: PPL 차단 임계값.
         """
-        self.model_path = model_path
+        self.model_path = str(
+            _MODEL_BASE_DIR / model_name,
+        )
         self.ppl_threshold = ppl_threshold
         self._model: Any = None
         self._tokenizer: Any = None

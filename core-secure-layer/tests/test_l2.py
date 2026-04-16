@@ -47,16 +47,23 @@ def _req(text):
 
 
 class TestConstructorContract:
-    """L2Layer 생성자가 model_path, ppl_threshold 를 받는지 확인."""
+    """L2Layer 생성자가 model_name, ppl_threshold 를 받는지 확인."""
 
-    def test_accepts_model_path_and_threshold(self):
+    def test_accepts_model_name_and_threshold(self):
         inst = L2Layer(
-            model_path=_FAKE_MODEL_PATH,
+            model_name="gpt2",
             ppl_threshold=_DEFAULT_THRESHOLD,
         )
         assert inst.name == "L2"
-        assert inst.model_path == _FAKE_MODEL_PATH
+        assert "gpt2" in inst.model_path
         assert inst.ppl_threshold == _DEFAULT_THRESHOLD
+
+    def test_kogpt2_model_path(self):
+        inst = L2Layer(
+            model_name="kogpt2",
+            ppl_threshold=_DEFAULT_THRESHOLD,
+        )
+        assert "kogpt2" in inst.model_path
 
 
 # ──────────────────────────────────────────────
@@ -264,7 +271,7 @@ class TestEdgeCases:
 
     async def test_custom_threshold(self):
         custom_layer = L2Layer(
-            model_path=_FAKE_MODEL_PATH,
+            model_name="gpt2",
             ppl_threshold=100.0,
         )
         result = await custom_layer.check(
@@ -343,7 +350,7 @@ class TestFailOpen:
 
     async def test_model_load_failure_allows(self):
         broken_layer = L2Layer(
-            model_path="/nonexistent/model/path",
+            model_name="nonexistent_model",
             ppl_threshold=_DEFAULT_THRESHOLD,
         )
         result = await broken_layer.check(
