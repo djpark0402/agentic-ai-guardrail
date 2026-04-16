@@ -6,301 +6,608 @@
     <title>Gateway Backend · Playground</title>
     <style>
       :root {
-        --bg: #0b0d10;
-        --surface: #12161b;
-        --surface-2: #1a1f26;
-        --border: #2a313b;
-        --text: #e7ecf3;
-        --muted: #8a95a5;
-        --accent: #7dd3fc;
-        --accent-strong: #22d3ee;
-        --danger: #f87171;
-        --ok: #4ade80;
+        --bg: #fff8fb;
+        --bg-soft: #fff1f5;
+        --surface: rgba(255, 255, 255, 0.88);
+        --surface-strong: #ffffff;
+        --surface-alt: #fff4f7;
+        --border: #f0ccd8;
+        --border-strong: #e6b4c7;
+        --text: #5b3448;
+        --muted: #8a6676;
+        --accent: #f39ab6;
+        --accent-strong: #d85b8d;
+        --accent-soft: #ffe1ea;
+        --highlight: #fff7d9;
+        --danger: #c95673;
+        --ok: #2d8a69;
+        --shadow: 0 24px 60px rgba(211, 109, 150, 0.12);
+        --shadow-soft: 0 12px 30px rgba(211, 109, 150, 0.08);
         --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        --sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Segoe UI",
-          sans-serif;
+        --sans: "Pretendard", "Iowan Old Style", "Apple SD Gothic Neo",
+          -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
+
       * {
         box-sizing: border-box;
       }
+
       html,
       body {
         margin: 0;
-        background: var(--bg);
+        min-height: 100%;
+      }
+
+      body {
+        position: relative;
+        background:
+          radial-gradient(circle at top left, rgba(255, 219, 232, 0.95), transparent 28%),
+          radial-gradient(circle at top right, rgba(255, 239, 213, 0.88), transparent 22%),
+          linear-gradient(180deg, #fffafc 0%, #fff5f7 45%, #fffdf7 100%);
         color: var(--text);
         font-family: var(--sans);
-        line-height: 1.55;
+        line-height: 1.6;
+        overflow-x: hidden;
       }
+
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        inset: auto auto 12% -90px;
+        width: 260px;
+        height: 260px;
+        pointer-events: none;
+        background:
+          radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.86) 0 16%, transparent 17%),
+          radial-gradient(circle at 50% 50%, rgba(244, 172, 196, 0.3) 0 52%, transparent 53%);
+        filter: blur(2px);
+        opacity: 0.85;
+        transform: rotate(-12deg);
+      }
+
+      body::after {
+        inset: 72px -100px auto auto;
+        width: 300px;
+        height: 300px;
+        opacity: 0.5;
+        transform: rotate(16deg);
+      }
+
+      a {
+        color: var(--accent-strong);
+      }
+
+      code {
+        font-family: var(--mono);
+        font-size: 0.92em;
+        background: rgba(255, 255, 255, 0.76);
+        border: 1px solid rgba(230, 180, 199, 0.8);
+        border-radius: 999px;
+        padding: 0.12rem 0.48rem;
+      }
+
       main {
-        max-width: 1040px;
+        position: relative;
+        max-width: 1180px;
         margin: 0 auto;
-        padding: 48px 24px 96px;
+        padding: 40px 20px 88px;
       }
-      header.hero {
-        border-bottom: 1px solid var(--border);
-        padding-bottom: 32px;
-        margin-bottom: 40px;
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 243, 247, 0.9)),
+          radial-gradient(circle at top right, rgba(255, 232, 240, 0.95), transparent 40%);
+        border: 1px solid rgba(230, 180, 199, 0.8);
+        border-radius: 32px;
+        box-shadow: var(--shadow);
+        padding: 34px;
+        margin-bottom: 26px;
       }
+
+      .hero::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(circle at 82% 18%, rgba(244, 170, 196, 0.28) 0 10%, transparent 11%),
+          radial-gradient(circle at 88% 28%, rgba(255, 255, 255, 0.95) 0 4%, transparent 5%),
+          radial-gradient(circle at 76% 30%, rgba(244, 170, 196, 0.16) 0 7%, transparent 8%),
+          radial-gradient(circle at 18% 100%, rgba(255, 247, 217, 0.95) 0 22%, transparent 23%);
+        pointer-events: none;
+      }
+
+      .hero-grid {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
+        gap: 24px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(255, 245, 248, 0.9);
+        border: 1px solid rgba(230, 180, 199, 0.72);
+        color: var(--accent-strong);
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 18px;
+      }
+
       h1 {
-        font-size: clamp(1.9rem, 1.2rem + 2vw, 2.8rem);
-        letter-spacing: -0.02em;
-        margin: 0 0 8px;
+        font-size: clamp(2.2rem, 1.5rem + 2vw, 3.6rem);
+        line-height: 1.05;
+        letter-spacing: -0.04em;
+        margin: 0 0 12px;
       }
+
       h1 .dot {
         color: var(--accent-strong);
       }
+
       .subtitle {
         color: var(--muted);
-        margin: 0 0 24px;
-        font-size: 1.05rem;
+        margin: 0;
+        max-width: 40rem;
+        font-size: 1.06rem;
       }
+
+      .hero-note {
+        position: relative;
+        background: rgba(255, 251, 244, 0.85);
+        border: 1px solid rgba(240, 221, 182, 0.92);
+        border-radius: 24px;
+        padding: 22px 24px;
+        box-shadow: var(--shadow-soft);
+      }
+
+      .hero-note h2 {
+        margin: 0 0 8px;
+        font-size: 1.02rem;
+        letter-spacing: -0.02em;
+      }
+
+      .hero-note p {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 0.96rem;
+      }
+
+      .blossom-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .blossom-list span {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.93rem;
+      }
+
+      .blossom-list span::before {
+        content: "✿";
+        color: var(--accent-strong);
+      }
+
       .pipeline {
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
-        font-family: var(--mono);
-        font-size: 0.85rem;
+        gap: 10px;
+        margin-top: 26px;
       }
+
       .pipeline span {
-        padding: 6px 12px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 6px;
+        padding: 9px 14px;
+        font-family: var(--mono);
+        font-size: 0.84rem;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(230, 180, 199, 0.8);
+        border-radius: 999px;
+        box-shadow: 0 8px 20px rgba(211, 109, 150, 0.06);
       }
+
       .pipeline .arrow {
         border: none;
-        background: none;
+        background: transparent;
+        box-shadow: none;
         color: var(--muted);
-        padding: 6px 0;
+        padding: 9px 0;
       }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
+        gap: 24px;
+        margin-bottom: 24px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 24px;
+      }
+
       section.card {
         background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 12px;
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(230, 180, 199, 0.74);
+        border-radius: 28px;
+        box-shadow: var(--shadow-soft);
         padding: 28px;
-        margin-bottom: 28px;
       }
+
       section.card h2 {
-        margin: 0 0 4px;
-        font-size: 1.25rem;
-        letter-spacing: -0.01em;
+        margin: 0 0 6px;
+        font-size: 1.32rem;
+        letter-spacing: -0.02em;
       }
+
       section.card .lede {
         color: var(--muted);
         margin: 0 0 20px;
-        font-size: 0.95rem;
+        font-size: 0.96rem;
       }
+
+      .card-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--accent-strong);
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 14px;
+      }
+
       .endpoint-row {
         display: flex;
         align-items: center;
         gap: 12px;
         font-family: var(--mono);
         font-size: 0.95rem;
-        background: var(--surface-2);
+        background: linear-gradient(180deg, #fff8fb, #fff2f6);
         border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px 16px;
-        margin-bottom: 16px;
+        border-radius: 18px;
+        padding: 14px 16px;
+        margin-bottom: 18px;
       }
+
       .method {
         font-weight: 700;
-        color: var(--bg);
-        background: var(--accent);
-        padding: 2px 10px;
-        border-radius: 4px;
-        font-size: 0.8rem;
-        letter-spacing: 0.06em;
+        color: #fffafc;
+        background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+        padding: 4px 11px;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        letter-spacing: 0.08em;
       }
-      pre {
-        background: var(--surface-2);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 16px;
-        font-family: var(--mono);
-        font-size: 0.85rem;
-        overflow: auto;
-        margin: 0 0 16px;
-        white-space: pre-wrap;
-        word-break: break-word;
+
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin-bottom: 4px;
       }
+
       label {
         display: block;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
+        font-weight: 700;
       }
+
+      pre,
       input[type="text"],
       textarea,
       select {
         width: 100%;
-        background: var(--surface-2);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(230, 180, 199, 0.84);
+        border-radius: 18px;
         color: var(--text);
-        font-family: var(--mono);
-        font-size: 0.9rem;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
       }
+
+      pre {
+        padding: 16px;
+        font-family: var(--mono);
+        font-size: 0.84rem;
+        overflow: auto;
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-height: 220px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 247, 250, 0.92));
+      }
+
+      input[type="text"],
+      textarea,
+      select {
+        padding: 12px 14px;
+        font-family: var(--mono);
+        font-size: 0.92rem;
+      }
+
       textarea {
         resize: vertical;
-        min-height: 70px;
+        min-height: 82px;
       }
+
       input:focus,
       textarea:focus,
       select:focus {
-        outline: 2px solid var(--accent);
+        outline: 3px solid rgba(243, 154, 182, 0.24);
         outline-offset: 1px;
+        border-color: var(--accent-strong);
       }
+
+      .form-shell {
+        padding: 18px;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 248, 251, 0.9), rgba(255, 243, 247, 0.76));
+        border: 1px solid rgba(240, 204, 216, 0.84);
+      }
+
+      .spacer {
+        height: 18px;
+      }
+
       .row {
         display: grid;
-        grid-template-columns: 140px 1fr auto;
+        grid-template-columns: 150px minmax(0, 1fr) auto;
         gap: 12px;
         margin-bottom: 12px;
         align-items: start;
       }
+
       button {
-        background: var(--accent-strong);
-        color: var(--bg);
         border: none;
-        border-radius: 8px;
-        padding: 10px 18px;
-        font-weight: 600;
+        border-radius: 999px;
+        padding: 11px 18px;
+        font-weight: 700;
         cursor: pointer;
         font-family: inherit;
+        transition:
+          transform 140ms ease,
+          box-shadow 140ms ease,
+          filter 140ms ease;
       }
+
       button:hover {
-        filter: brightness(1.1);
+        transform: translateY(-1px);
+        filter: brightness(1.02);
       }
+
+      button:active {
+        transform: translateY(0);
+      }
+
+      #send {
+        background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+        color: #fffafc;
+        box-shadow: 0 14px 24px rgba(216, 91, 141, 0.24);
+      }
+
       button.ghost {
-        background: transparent;
+        background: rgba(255, 255, 255, 0.82);
         color: var(--muted);
-        border: 1px solid var(--border);
+        border: 1px solid rgba(230, 180, 199, 0.9);
+        box-shadow: none;
       }
+
       button.ghost:hover {
         color: var(--text);
       }
+
       .toolbar {
         display: flex;
         gap: 12px;
         align-items: center;
-        margin-top: 8px;
+        margin-top: 10px;
         flex-wrap: wrap;
       }
+
       .checkbox {
-        display: flex;
+        display: inline-flex;
         align-items: center;
         gap: 8px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid rgba(230, 180, 199, 0.84);
         color: var(--muted);
-        font-size: 0.9rem;
+        font-size: 0.92rem;
       }
+
       .response-meta {
         display: flex;
-        gap: 16px;
+        gap: 10px;
+        flex-wrap: wrap;
         font-family: var(--mono);
-        font-size: 0.85rem;
-        margin-bottom: 12px;
+        font-size: 0.84rem;
+        margin-bottom: 14px;
+      }
+
+      .response-meta span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(230, 180, 199, 0.84);
         color: var(--muted);
       }
+
       .status-ok {
         color: var(--ok);
       }
+
       .status-bad {
         color: var(--danger);
       }
-      .field-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
-        margin-bottom: 16px;
-      }
+
       footer {
         color: var(--muted);
-        font-size: 0.8rem;
+        font-size: 0.82rem;
         text-align: center;
-        margin-top: 40px;
+        margin-top: 20px;
       }
-      a {
-        color: var(--accent);
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .content-grid,
+        .field-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        main {
+          padding: 22px 14px 68px;
+        }
+
+        .hero,
+        section.card {
+          border-radius: 24px;
+          padding: 22px;
+        }
+
+        .row {
+          grid-template-columns: 1fr;
+        }
+
+        .toolbar {
+          align-items: stretch;
+        }
+
+        .toolbar > * {
+          width: 100%;
+          justify-content: center;
+        }
+
+        .pipeline .arrow {
+          display: none;
+        }
       }
     </style>
   </head>
   <body>
     <main>
       <header class="hero">
-        <h1>Gateway Backend<span class="dot">.</span> Playground</h1>
-        <p class="subtitle">
-          Upstage Solar API 앞단의 가드레일 파이프라인을 직접 테스트해보세요.
-        </p>
-        <div class="pipeline">
-          <span>policy</span>
-          <span class="arrow">→</span>
-          <span>input check</span>
-          <span class="arrow">→</span>
-          <span>LLM (non-stream)</span>
-          <span class="arrow">→</span>
-          <span>output check</span>
-          <span class="arrow">→</span>
-          <span>user (stream 선택)</span>
+        <div class="hero-grid">
+          <div>
+            <div class="eyebrow">Spring Guardrail Lab</div>
+            <h1>Gateway Backend<span class="dot">.</span> Playground</h1>
+            <p class="subtitle">
+              Upstage Solar API 앞단의 가드레일 파이프라인을, 벚꽃처럼 가볍고
+              선명한 화면에서 직접 테스트해보세요.
+            </p>
+            <div class="pipeline">
+              <span>policy</span>
+              <span class="arrow">→</span>
+              <span>input check</span>
+              <span class="arrow">→</span>
+              <span>LLM (non-stream)</span>
+              <span class="arrow">→</span>
+              <span>output check</span>
+              <span class="arrow">→</span>
+              <span>user (stream 선택)</span>
+            </div>
+          </div>
+          <aside class="hero-note">
+            <h2>한 화면에서 빠르게 확인</h2>
+            <p>
+              OpenAPI 스키마, 요청 폼, 실제 응답을 나란히 두고 가드레일 동작을
+              바로 비교할 수 있습니다.
+            </p>
+            <div class="blossom-list">
+              <span>기본 모델 자동 로드</span>
+              <span>SSE 응답 실시간 누적</span>
+              <span>BLOCK 시 원문 대신 구조화된 오류 노출</span>
+            </div>
+          </aside>
         </div>
       </header>
 
-      <section class="card" id="spec-card">
-        <h2>POST /v1/chat/completions</h2>
-        <p class="lede" id="spec-summary">OpenAPI 스키마를 불러오는 중…</p>
-        <div class="endpoint-row">
-          <span class="method">POST</span>
-          <span>/v1/chat/completions</span>
-        </div>
-        <div class="field-grid">
-          <div>
-            <label>요청 스키마</label>
-            <pre id="spec-request">—</pre>
+      <div class="content-grid">
+        <section class="card" id="spec-card">
+          <div class="card-kicker">API Surface</div>
+          <h2>POST /v1/chat/completions</h2>
+          <p class="lede" id="spec-summary">OpenAPI 스키마를 불러오는 중…</p>
+          <div class="endpoint-row">
+            <span class="method">POST</span>
+            <span>/v1/chat/completions</span>
           </div>
-          <div>
-            <label>응답 스키마 (비스트리밍)</label>
-            <pre id="spec-response">—</pre>
+          <div class="field-grid">
+            <div>
+              <label>요청 스키마</label>
+              <pre id="spec-request">—</pre>
+            </div>
+            <div>
+              <label>응답 스키마 (비스트리밍)</label>
+              <pre id="spec-response">—</pre>
+            </div>
           </div>
+        </section>
+
+        <div class="stack">
+          <section class="card">
+            <div class="card-kicker">Interactive Test</div>
+            <h2>테스트</h2>
+            <p class="lede">
+              폼을 채우고 전송하면 실제 <code>/v1/chat/completions</code>
+              엔드포인트를 호출합니다. 스트리밍을 켜면 SSE 청크가 실시간으로
+              누적됩니다.
+            </p>
+
+            <div class="form-shell">
+              <label>model</label>
+              <input id="f-model" type="text" placeholder="모델명 로드 중…" />
+
+              <div class="spacer"></div>
+
+              <label>messages</label>
+              <div id="messages"></div>
+              <div class="toolbar">
+                <button class="ghost" type="button" id="add-msg">
+                  + 메시지 추가
+                </button>
+                <label class="checkbox">
+                  <input type="checkbox" id="f-stream" checked />
+                  stream
+                </label>
+                <button type="button" id="send">전송</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-kicker">Response Watch</div>
+            <h2>응답</h2>
+            <div class="response-meta">
+              <span>status: <span id="resp-status">—</span></span>
+              <span>content-type: <span id="resp-ctype">—</span></span>
+            </div>
+            <label>본문</label>
+            <pre id="resp-body">아직 요청을 보내지 않았습니다.</pre>
+          </section>
         </div>
-      </section>
-
-      <section class="card">
-        <h2>테스트</h2>
-        <p class="lede">
-          폼을 채우고 전송하면 실제 <code>/v1/chat/completions</code>
-          엔드포인트를 호출합니다. 스트리밍을 켜면 SSE 청크가 실시간으로
-          누적됩니다.
-        </p>
-
-        <label>model</label>
-        <input id="f-model" type="text" placeholder="모델명 로드 중…" />
-
-        <div style="height: 16px"></div>
-
-        <label>messages</label>
-        <div id="messages"></div>
-        <div class="toolbar">
-          <button class="ghost" type="button" id="add-msg">
-            + 메시지 추가
-          </button>
-          <label class="checkbox">
-            <input type="checkbox" id="f-stream" checked />
-            stream
-          </label>
-          <button type="button" id="send">전송</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>응답</h2>
-        <div class="response-meta">
-          <span>status: <span id="resp-status">—</span></span>
-          <span>content-type: <span id="resp-ctype">—</span></span>
-        </div>
-        <label>본문</label>
-        <pre id="resp-body">아직 요청을 보내지 않았습니다.</pre>
-      </section>
+      </div>
 
       <footer>
         기본 Swagger UI는 <a href="/docs">/docs</a>에서 계속 사용할 수 있습니다.
