@@ -70,17 +70,19 @@ class L2Layer(BaseLayer):
         비활성 상태로 동작한다 (허용 처리).
         """
         try:
-            from transformers import (
-                AutoModelForCausalLM,
-                AutoTokenizer,
-            )
+            import transformers
 
-            self._tokenizer = AutoTokenizer.from_pretrained(
+            transformers.logging.set_verbosity_error()
+
+            self._tokenizer = transformers.AutoTokenizer.from_pretrained(
                 self.model_path,
             )
-            self._model = AutoModelForCausalLM.from_pretrained(
+            import torch
+
+            self._device = "mps" if torch.backends.mps.is_available() else "cpu"
+            self._model = transformers.AutoModelForCausalLM.from_pretrained(
                 self.model_path,
-            )
+            ).to(self._device)
             self._model.eval()
             self._model_loaded = True
         except Exception:
@@ -99,14 +101,22 @@ class L2Layer(BaseLayer):
         Returns:
             계산된 perplexity 값.
         """
+        import warnings
+
         import torch
 
+        device = getattr(self, "_device", "cpu")
         inputs = self._tokenizer(
             text,
             return_tensors="pt",
             truncation=True,
         )
-        with torch.no_grad():
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        with warnings.catch_warnings(), torch.no_grad():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*loss_type.*",
+            )
             outputs = self._model(
                 **inputs,
                 labels=inputs["input_ids"],

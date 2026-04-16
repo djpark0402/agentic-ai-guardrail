@@ -1,8 +1,9 @@
 """L5 가드레일 레이어: PII/민감정보 2단계 탐지.
 
 1단계 Regex(기본 + extra_patterns)로 정형 PII를 탐지하고,
-2단계 NER 모델로 엔티티 조합(PERSON+LOCATION,
-PERSON+DATE_OF_BIRTH)을 차단한다.
+2단계 NER 모델로 PII 엔티티를 탐지한다.
+PII 특화 NER 모델(이름, 주소, 전화번호 등)이 엔티티를
+감지하면 즉시 차단한다.
 fail-open 원칙: 모델 미로드나 예외 시 허용.
 """
 
@@ -51,8 +52,25 @@ _DEFAULT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
-# NER 차단 조합: PERSON과 함께 있으면 차단하는 엔티티
-_NER_BLOCK_COMBOS: frozenset[str] = frozenset({"LOCATION", "DATE_OF_BIRTH"})
+# NER 엔티티에서 B- / I- 접두사를 제거한 레이블 매핑
+# PII 특화 NER 모델은 "B-이름", "I-전화번호" 등 반환
+_ENTITY_LABEL_MAP: dict[str, str] = {
+    "이름": "person",
+    "전화번호": "phone_number",
+    "휴대전화번호": "mobile_number",
+    "주민등록번호": "resident_id",
+    "계좌번호": "account_number",
+    "카드번호": "card_number",
+    "여권번호": "passport_number",
+    "운전면허번호": "driver_license",
+    "전자메일": "email",
+    "로그인ID": "login_id",
+    "상세주소": "address",
+    "우편번호": "zip_code",
+    "가맹점명": "merchant",
+    "결제금액": "payment_amount",
+    "신용점수": "credit_score",
+}
 
 
 class L5Layer(BaseLayer):
@@ -165,10 +183,10 @@ class L5Layer(BaseLayer):
         return None
 
     def _check_ner(self, text: str) -> LayerResult | None:
-        """2단계: NER 모델로 엔티티 조합을 검사한다.
+        """2단계: NER 모델로 PII 엔티티를 탐지한다.
 
-        PERSON + LOCATION 또는 PERSON + DATE_OF_BIRTH
-        조합이 동시 감지되면 차단한다.
+        PII 특화 NER 모델이 엔티티를 감지하면
+        즉시 차단한다.
 
         Args:
             text: 검사 대상 텍스트.
@@ -182,47 +200,31 @@ class L5Layer(BaseLayer):
         try:
             entities = self._ner_predict(text)
         except Exception:
-            # fail-open: 예외 시 허용
             logger.debug("NER 추론 중 예외 발생, fail-open")
             return None
 
-        entity_types: set[str] = set()
-        # PERSON 엔티티의 첫 위치 기록
-        person_start: int | None = None
-        # 차단 조합 엔티티 이름 기록
-        combo_entity: str | None = None
+        if not entities:
+            return None
 
-        for ent in entities:
-            etype = ent.get("entity", "")
-            start = ent.get("start", 0)
-            entity_types.add(etype)
+        # 첫 번째 감지된 엔티티로 차단
+        first = entities[0]
+        raw_label = first.get("entity", "")
+        # B-이름, I-전화번호 → 이름, 전화번호
+        clean_label = raw_label.split("-", 1)[-1]
+        pii_type = _ENTITY_LABEL_MAP.get(
+            clean_label,
+            clean_label,
+        )
+        start = first.get("start", 0)
 
-            if etype == "PERSON" and person_start is None:
-                person_start = start
-            if etype in _NER_BLOCK_COMBOS and combo_entity is None:
-                combo_entity = etype
-
-        # PERSON이 있고 차단 조합 엔티티도 있으면 차단
-        if "PERSON" in entity_types and (entity_types & _NER_BLOCK_COMBOS):
-            # 보고 위치: PERSON의 위치 사용
-            report_pos = person_start if person_start is not None else 0
-            combo_label = (
-                f"person+{combo_entity.lower()}"
-                if combo_entity
-                else "person+unknown"
-            )
-            return LayerResult(
-                name=self.name,
-                allowed=False,
-                reason=(
-                    f"PII detected: {combo_label} at position {report_pos}"
-                ),
-                severity=Severity.HIGH,
-                confidence=0.0,
-                tags=["pii", "ner", "person"],
-            )
-
-        return None
+        return LayerResult(
+            name=self.name,
+            allowed=False,
+            reason=(f"PII detected: {pii_type} at position {start}"),
+            severity=Severity.HIGH,
+            confidence=0.0,
+            tags=["pii", "ner", pii_type],
+        )
 
     async def _check(
         self,
