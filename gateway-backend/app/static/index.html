@@ -717,7 +717,16 @@
           if (!res.body || !body.stream) {
             const text = await res.text();
             try {
-              respBody.textContent = JSON.stringify(JSON.parse(text), null, 2);
+              const parsed = JSON.parse(text);
+              if (parsed.provider) {
+                respBody.textContent =
+                  "[" + parsed.provider + "] " + parsed.detail + "\n" +
+                  "HTTP " + (parsed.upstream_status || res.status) + "\n" +
+                  "Code: " + (parsed.upstream_code || "—") + "\n" +
+                  "Retryable: " + parsed.retryable;
+              } else {
+                respBody.textContent = JSON.stringify(parsed, null, 2);
+              }
             } catch {
               respBody.textContent = text;
             }
