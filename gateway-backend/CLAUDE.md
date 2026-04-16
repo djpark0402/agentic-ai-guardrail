@@ -1,9 +1,5 @@
 # gateway-backend
 
-## 프로젝트 개요
-Agentic AI Guardrail의 API Gateway. Upstage AI(Solar Pro 3) 호출을 프록시하며
-core-secure-layer의 보안 레이어를 통해 요청/응답을 검증한다.
-
 ## 개발 환경 (uv 사용)
 
 | 명령 | 설명 |

@@ -12,26 +12,8 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 
 - LLM 호출은 **항상 비스트리밍**이다. 전체 응답을 받은 뒤 출력 가드레일 검사를
   먼저 수행한 다음, 사용자 응답만 선택적으로 SSE로 재방출한다.
-- 출력이 BLOCK되면 비스트리밍은 HTTP 400, 스트리밍은
-  `finish_reason=content_filter` 를 단 chunk 한 건만 전송하여 원본 응답이
-  클라이언트로 유출되지 않도록 한다.
-- TTFB 주의: 출력 선검증 때문에 `stream=true` 여도 LLM 전체 생성이 끝나야
-  첫 chunk 가 나간다. 사용자 스트리밍은 UX용 재방출이며 지연 단축 효과는
-  없다.
-
-### OpenAI 호환성
-
-- 요청 바디는 OpenAI Chat Completions 파라미터를 선언적으로 수용한다.
-  `temperature`, `top_p`, `max_tokens`, `n`, `stop`, `presence_penalty`,
-  `frequency_penalty`, `seed`, `response_format`, `tools`, `tool_choice`,
-  `user` 가 Solar 호출로 그대로 pass-through 된다.
-- Solar 전용 필드(`reasoning_effort` 등)는 OpenAI SDK 가 unknown kwarg 로
-  거절하는 것을 막기 위해 `extra_body` 로 감싸 전달된다.
-- 응답은 Solar 원본 completion 의 `created`/`model`/`finish_reason`/
-  `usage`/`tool_calls` 를 그대로 노출한다. 가드레일 세션 추적을 위해 `id`
-  만 `chatcmpl-<session_id>` 로 재할당한다.
-- `messages` 는 `content: str | list[dict] | None` 유니온을 허용하여
-  multimodal content 와 tool/function 메시지를 지원한다.
+- 출력이 BLOCK되면 비스트리밍은 HTTP 400, 스트리밍은 에러 프레임 1건만 전송하여
+  원본 응답이 클라이언트로 유출되지 않도록 한다.
 
 ### 정책 조회 & 레이어 게이팅
 
@@ -69,52 +51,13 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -d '{
     "model": "solar-pro2",
     "messages": [{"role": "user", "content": "안녕"}],
-    "temperature": 0.2,
     "stream": false
   }'
 ```
 
-`stream: true` 로 요청하면 `text/event-stream` 응답이 반환된다. 각 프레임은
-OpenAI `chat.completion.chunk` JSON 이며 `data: {...}\n\n` 형태로 순차
-전송되고 마지막에 `data: [DONE]` 마커가 붙는다.
-
-```
-data: {"id":"chatcmpl-<uuid>","object":"chat.completion.chunk","created":...,
-       "model":"solar-pro2","choices":[{"index":0,"delta":{"role":"assistant"},
-       "finish_reason":null}]}
-
-data: {"id":"chatcmpl-<uuid>","object":"chat.completion.chunk","created":...,
-       "model":"solar-pro2","choices":[{"index":0,"delta":{"content":"안녕"},
-       "finish_reason":null}]}
-
-...
-
-data: {"id":"chatcmpl-<uuid>","object":"chat.completion.chunk","created":...,
-       "model":"solar-pro2","choices":[{"index":0,"delta":{},
-       "finish_reason":"stop"}]}
-
-data: [DONE]
-```
-
-출력 가드레일 BLOCK 시에는 content delta 대신 `finish_reason=content_filter`
-를 단 chunk 1건과 비표준 `error` 블록(`type: guardrail_block`)이 방출되며
-원본 응답은 포함되지 않는다.
-
-OpenAI 공식 Python SDK 로도 `base_url` 만 게이트웨이로 바꾸면 동일하게
-동작한다:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="dummy")
-stream = client.chat.completions.create(
-    model="solar-pro2",
-    messages=[{"role": "user", "content": "안녕"}],
-    stream=True,
-)
-for chunk in stream:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
-```
+`stream: true`로 요청하면 `text/event-stream` 응답이 반환되며,
+`data: <chunk>\n\n` 형태의 프레임이 순차로 전송되고 마지막에 `data: [DONE]`이
+온다.
 
 ## 플레이그라운드
 
@@ -123,9 +66,8 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 정적 HTML 페이지를 제공한다.
 
 - `/openapi.json`에서 스펙을 동적으로 로드하여 요청/응답 스키마 표시
-- messages 행 추가·제거, `stream` 토글, SSE `chat.completion.chunk` JSON 을
-  파싱해 `delta.content` 를 실시간 누적
-- BLOCK 시 상태 코드와 본문, 가드레일 `error` 블록을 꼬리에 함께 노출
+- messages 행 추가·제거, `stream` 토글, SSE 청크 실시간 누적
+- BLOCK 시 상태 코드와 본문을 그대로 노출
 
 ## 개발 환경 (uv)
 
@@ -168,15 +110,6 @@ app/
     └── index.html       # 플레이그라운드 페이지
 tests/unit/              # pytest 단위 테스트
 ```
-
-## 개발 규칙
-
-- **TDD 필수**: RED → GREEN → REFACTOR → COMMIT
-- **커밋 단위**: 하나의 논리적 변경, 구조 변경과 동작 변경을 분리
-- **커밋 메시지**: 한글로 작성, `feat:` / `fix:` / `refactor:` / `test:` / `docs:` / `chore:`
-- **Docstring**: Google 스타일, 라인 길이 80자, 모든 시그니처에 타입 힌트
-- **주석**: 가능한 한 한글 (docstring 섹션 키워드는 영문 유지)
-
 
 ## 참고 문서
 - [Solar Chat Docs](https://console.upstage.ai/docs/capabilities/generate/chat)
