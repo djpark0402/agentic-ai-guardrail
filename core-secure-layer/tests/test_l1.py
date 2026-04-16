@@ -155,7 +155,7 @@ class TestEdgeCases:
         assert "hex" in result.reason.lower()
 
     async def test_multiple_percent_no_encoding(self, layer):
-        # "100%ABC" — %AB 는 유효한 percent-encoding
+        # "100%AB" — %AB 는 유효한 percent-encoding
         # unquote 결과가 달라지므로 차단
         result = await layer.check(_req("100%AB"))
         assert result.allowed is False
