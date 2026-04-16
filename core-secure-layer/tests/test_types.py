@@ -178,16 +178,16 @@ class TestGuardrailResponse:
         assert r2.results == []
 
 
-class TestBaseLayerRun:
-    """BaseLayer.run() 타이밍 래퍼 테스트."""
+class TestBaseLayerCheck:
+    """BaseLayer.check() 타이밍 자동 측정 테스트."""
 
-    async def test_run_measures_time(self) -> None:
+    async def test_check_measures_time(self) -> None:
         from core_secure_layer.layers.base import BaseLayer
 
         class StubLayer(BaseLayer):
             name = "STUB"
 
-            async def check(
+            async def _check(
                 self,
                 request: GuardrailRequest,
             ) -> LayerResult:
@@ -195,12 +195,12 @@ class TestBaseLayerRun:
 
         layer = StubLayer()
         req = GuardrailRequest(user_input="test")
-        result = await layer.run(req)
+        result = await layer.check(req)
         assert result.allowed is True
         assert result.execution_time_ms is not None
         assert result.execution_time_ms >= 0
 
-    async def test_run_preserves_result_fields(
+    async def test_check_preserves_result_fields(
         self,
     ) -> None:
         from core_secure_layer.layers.base import BaseLayer
@@ -208,7 +208,7 @@ class TestBaseLayerRun:
         class DetailedLayer(BaseLayer):
             name = "DETAIL"
 
-            async def check(
+            async def _check(
                 self,
                 request: GuardrailRequest,
             ) -> LayerResult:
@@ -223,7 +223,7 @@ class TestBaseLayerRun:
 
         layer = DetailedLayer()
         req = GuardrailRequest(user_input="test")
-        result = await layer.run(req)
+        result = await layer.check(req)
         assert result.allowed is False
         assert result.reason == "blocked"
         assert result.severity == Severity.HIGH
