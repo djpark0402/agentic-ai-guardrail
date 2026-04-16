@@ -99,9 +99,9 @@ class L4Layer(BaseLayer):
 
     def __init__(
         self,
-        nli_model_name: str = "nli-deberta-v3",
-        embed_model_name: str = "all-MiniLM-L6-v2",
-        reranker_model_name: str = "ms-marco-MiniLM-L-6",
+        nli_model_name: str = "nli_custom_model",
+        embed_model_name: str = "Qwen3-Embedding-0.6B",
+        reranker_model_name: str = "bge-reranker-v2-m3",
         llm: Any = None,
         nli_threshold: float = 0.7,
         top_k: int = 3,
@@ -122,8 +122,10 @@ class L4Layer(BaseLayer):
 
         # NLI 모델 로드 시도
         self._nli_model = self._load_cross_encoder("nli", nli_model_name)
-        # 임베딩 모델 로드 시도
-        self._embed_model = self._load_cross_encoder("embed", embed_model_name)
+        # 임베딩 모델 로드 시도 (SentenceTransformer)
+        self._embed_model = self._load_sentence_transformer(
+            "embed", embed_model_name
+        )
         # Reranker 모델 로드 시도
         self._reranker_model = self._load_cross_encoder(
             "reranker", reranker_model_name
@@ -156,6 +158,39 @@ class L4Layer(BaseLayer):
             logger.warning("모델 로드 실패: %s/%s", category, model_name)
             return None
 
+    def _load_sentence_transformer(
+        self,
+        category: str,
+        model_name: str,
+    ) -> Any:
+        """sentence-transformers 모델을 로드한다.
+
+        Args:
+            category: 모델 카테고리.
+            model_name: 모델 폴더명.
+
+        Returns:
+            로드된 모델 또는 None.
+        """
+        try:
+            from sentence_transformers import (
+                SentenceTransformer,
+            )
+        except ImportError:
+            return None
+        model_path = _MODEL_BASE_DIR / category / model_name
+        if not model_path.exists():
+            return None
+        try:
+            return SentenceTransformer(str(model_path))
+        except Exception:
+            logger.warning(
+                "임베딩 모델 로드 실패: %s/%s",
+                category,
+                model_name,
+            )
+            return None
+
     def _load_collection(self) -> Any:
         """ChromaDB 컬렉션을 로드한다.
 
@@ -171,7 +206,7 @@ class L4Layer(BaseLayer):
             client = chromadb.PersistentClient(
                 path=str(db_path),
             )
-            return client.get_collection("policies")
+            return client.get_collection("policy_chunks")
         except Exception:
             logger.warning("ChromaDB 컬렉션 로드 실패")
             return None
@@ -185,13 +220,23 @@ class L4Layer(BaseLayer):
         Returns:
             contradiction 점수 (0.0~1.0).
         """
+        import numpy as np
+
         scores = self._nli_model.predict(
             [(text, "This input violates security policy")]
         )
-        # cross-encoder 출력에서 contradiction 점수 추출
-        if hasattr(scores, "__getitem__"):
-            return float(scores[2])
-        return float(scores)
+        # cross-encoder 출력: 2차원 [[ent, neu, con]]
+        arr = np.array(scores)
+        if arr.ndim == 2:
+            # softmax 적용 후 contradiction(인덱스 2) 추출
+            exp = np.exp(arr[0] - np.max(arr[0]))
+            probs = exp / exp.sum()
+            return float(probs[2])
+        if arr.ndim == 1 and len(arr) >= 3:
+            exp = np.exp(arr - np.max(arr))
+            probs = exp / exp.sum()
+            return float(probs[2])
+        return float(arr.flat[0])
 
     def _search_policies(self, text: str) -> list[dict[str, str]]:
         """벡터 검색으로 관련 정책 청크를 검색한다.
