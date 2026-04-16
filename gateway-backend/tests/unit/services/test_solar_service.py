@@ -1,8 +1,9 @@
-"""SolarService 테스트 (openai 클라이언트 mock)."""
+"""SolarService 테스트 (LangChain ChatOpenAI mock)."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.services.solar_service import SolarService
 
@@ -19,81 +20,79 @@ def mock_settings():
 
 @pytest.fixture
 def service(mock_settings, mocker):
-    """AsyncOpenAI 클라이언트가 mock된 SolarService."""
-    mock_client = MagicMock()
+    """ChatOpenAI 가 mock 된 SolarService."""
+    mock_llm = MagicMock()
+    mock_llm.bind = MagicMock(return_value=mock_llm)
+    mock_llm.ainvoke = AsyncMock(
+        return_value=AIMessage(
+            content="응답",
+            response_metadata={
+                "model_name": "solar-pro",
+                "finish_reason": "stop",
+            },
+            id="chatcmpl-test",
+        )
+    )
     mocker.patch(
-        "app.services.solar_service.AsyncOpenAI",
-        return_value=mock_client,
+        "app.services.solar_service.ChatOpenAI",
+        return_value=mock_llm,
     )
-    return SolarService(settings=mock_settings), mock_client
+    return SolarService(settings=mock_settings), mock_llm
 
 
-async def test_chat_calls_completions_create(service):
-    """chat()이 기본 파라미터로 completions.create를 호출한다."""
-    svc, mock_client = service
+async def test_chat_calls_ainvoke(service):
+    """chat()이 LangChain ainvoke 를 호출한다."""
+    svc, mock_llm = service
 
-    mock_client.chat.completions.create = AsyncMock(return_value=MagicMock())
+    await svc.chat(messages=[{"role": "user", "content": "안녕"}])
 
-    messages = [{"role": "user", "content": "안녕"}]
-    await svc.chat(messages=messages)
-
-    mock_client.chat.completions.create.assert_called_once_with(
-        model="solar-pro",
-        messages=messages,
-        stream=False,
-    )
+    mock_llm.ainvoke.assert_called_once()
 
 
-async def test_chat_returns_completion_object(service):
-    """chat()이 ChatCompletion 객체 전체를 반환한다.
-
-    라우터가 id/created/model/usage/finish_reason/tool_calls 를
-    복사해야 하므로 content 문자열이 아닌 응답 객체를 그대로 반환한다.
-    """
-    svc, mock_client = service
-
-    mock_response = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+async def test_chat_returns_completion_compatible_object(service):
+    """chat()이 ChatCompletion 호환 객체를 반환한다."""
+    svc, _ = service
 
     result = await svc.chat(messages=[{"role": "user", "content": "질문"}])
-    assert result is mock_response
+
+    assert result.choices[0].message.content == "응답"
+    assert result.choices[0].message.role == "assistant"
+    assert result.choices[0].finish_reason == "stop"
+    assert result.model == "solar-pro"
+    assert hasattr(result, "id")
+    assert hasattr(result, "created")
 
 
-async def test_chat_passes_through_openai_parameters(service):
-    """temperature/top_p/max_tokens/tools 등이 Solar 호출에 전달된다."""
-    svc, mock_client = service
-    mock_client.chat.completions.create = AsyncMock(return_value=MagicMock())
+async def test_chat_passes_through_parameters(service):
+    """temperature/tools 등이 bind()를 통해 전달된다."""
+    svc, mock_llm = service
 
-    messages = [{"role": "user", "content": "질문"}]
     tools = [{"type": "function", "function": {"name": "f"}}]
 
     await svc.chat(
-        messages=messages,
+        messages=[{"role": "user", "content": "질문"}],
         temperature=0.2,
         top_p=0.9,
         max_tokens=128,
         tools=tools,
         tool_choice="auto",
-        response_format={"type": "json_object"},
-        stop=["\n\n"],
-        seed=42,
     )
 
-    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["temperature"] == 0.2
-    assert call_kwargs["top_p"] == 0.9
-    assert call_kwargs["max_tokens"] == 128
-    assert call_kwargs["tools"] == tools
-    assert call_kwargs["tool_choice"] == "auto"
-    assert call_kwargs["response_format"] == {"type": "json_object"}
-    assert call_kwargs["stop"] == ["\n\n"]
-    assert call_kwargs["seed"] == 42
+    bind_calls = mock_llm.bind.call_args_list
+    bound_kwargs = {}
+    for call in bind_calls:
+        bound_kwargs.update(call.kwargs)
+
+    assert bound_kwargs["temperature"] == 0.2
+    assert bound_kwargs["top_p"] == 0.9
+    assert bound_kwargs["max_tokens"] == 128
+    assert bound_kwargs["tools"] == tools
+    assert bound_kwargs["tool_choice"] == "auto"
 
 
 async def test_chat_drops_none_parameters(service):
-    """None 값은 Solar 호출에서 제거되어 unknown kwarg 오류를 방지한다."""
-    svc, mock_client = service
-    mock_client.chat.completions.create = AsyncMock(return_value=MagicMock())
+    """None 값은 bind()에 전달되지 않는다."""
+    svc, mock_llm = service
 
     await svc.chat(
         messages=[{"role": "user", "content": "q"}],
@@ -102,60 +101,151 @@ async def test_chat_drops_none_parameters(service):
         tools=None,
     )
 
-    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-    assert "temperature" not in call_kwargs
-    assert "max_tokens" not in call_kwargs
-    assert "tools" not in call_kwargs
+    for call in mock_llm.bind.call_args_list:
+        assert "temperature" not in call.kwargs
+        assert "max_tokens" not in call.kwargs
+        assert "tools" not in call.kwargs
 
 
-async def test_chat_forces_stream_false_even_if_overridden(service):
-    """호출자가 stream=True 를 넘기더라도 항상 비스트리밍으로 호출된다."""
-    svc, mock_client = service
-    mock_client.chat.completions.create = AsyncMock(return_value=MagicMock())
+async def test_chat_ignores_stream_parameter(service):
+    """stream=True 를 넘기더라도 무시된다."""
+    svc, mock_llm = service
 
     await svc.chat(
         messages=[{"role": "user", "content": "q"}],
         stream=True,
     )
 
-    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["stream"] is False
+    for call in mock_llm.bind.call_args_list:
+        assert "stream" not in call.kwargs
 
 
-async def test_chat_request_model_overrides_default(service):
-    """요청에 model 이 지정되면 env 기본값 대신 사용한다."""
-    svc, mock_client = service
-    mock_client.chat.completions.create = AsyncMock(return_value=MagicMock())
+async def test_chat_model_override(service):
+    """요청에 model 이 지정되면 bind(model=...)로 전달된다."""
+    svc, mock_llm = service
 
     await svc.chat(
         messages=[{"role": "user", "content": "q"}],
         model="solar-pro2",
     )
 
-    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "solar-pro2"
+    bind_calls = mock_llm.bind.call_args_list
+    bound_kwargs = {}
+    for call in bind_calls:
+        bound_kwargs.update(call.kwargs)
+
+    assert bound_kwargs["model"] == "solar-pro2"
 
 
-async def test_chat_wraps_solar_specific_fields_in_extra_body(service):
-    """Solar 전용 필드(reasoning_effort)는 extra_body 로 전달된다."""
-    svc, mock_client = service
-    mock_client.chat.completions.create = AsyncMock(return_value=MagicMock())
+async def test_chat_wraps_solar_specific_fields(service):
+    """Solar 전용 필드는 model_kwargs 로 전달된다."""
+    svc, mock_llm = service
 
     await svc.chat(
         messages=[{"role": "user", "content": "q"}],
         reasoning_effort="high",
     )
 
-    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs.get("extra_body", {}).get("reasoning_effort") == "high"
-    assert "reasoning_effort" not in call_kwargs
+    bind_calls = mock_llm.bind.call_args_list
+    bound_kwargs = {}
+    for call in bind_calls:
+        bound_kwargs.update(call.kwargs)
+
+    assert (
+        bound_kwargs.get("model_kwargs", {}).get("reasoning_effort") == "high"
+    )
 
 
 async def test_solar_service_exposes_only_chat(service):
-    """SolarService는 더 이상 stream_chat을 노출하지 않는다.
-
-    LLM 호출은 항상 비스트리밍이며, 사용자에게의 스트리밍은
-    라우터 계층에서 재방출한다.
-    """
+    """SolarService는 stream_chat을 노출하지 않는다."""
     svc, _ = service
     assert not hasattr(svc, "stream_chat")
+
+
+async def test_chat_converts_messages_to_langchain(service, mocker):
+    """OpenAI 포맷 메시지가 LangChain 메시지로 변환된다."""
+    svc, mock_llm = service
+
+    messages = [
+        {"role": "system", "content": "시스템 메시지"},
+        {"role": "user", "content": "사용자 메시지"},
+        {
+            "role": "assistant",
+            "content": "어시스턴트 메시지",
+        },
+    ]
+
+    await svc.chat(messages=messages)
+
+    call_args = mock_llm.ainvoke.call_args
+    lc_messages = call_args.args[0]
+
+    assert len(lc_messages) == 3
+    assert lc_messages[0].__class__.__name__ == "SystemMessage"
+    assert lc_messages[1].__class__.__name__ == "HumanMessage"
+    assert lc_messages[2].__class__.__name__ == "AIMessage"
+
+
+async def test_chat_handles_tool_calls_response(mock_settings, mocker):
+    """tool_calls 가 포함된 응답을 OpenAI 형식으로 변환한다."""
+    mock_llm = MagicMock()
+    mock_llm.bind = MagicMock(return_value=mock_llm)
+    mock_llm.ainvoke = AsyncMock(
+        return_value=AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "get_weather",
+                    "args": {"location": "서울"},
+                    "id": "call_123",
+                }
+            ],
+            response_metadata={"finish_reason": "tool_calls"},
+            id="chatcmpl-tc",
+        )
+    )
+    mocker.patch(
+        "app.services.solar_service.ChatOpenAI",
+        return_value=mock_llm,
+    )
+
+    svc = SolarService(settings=mock_settings)
+    result = await svc.chat(messages=[{"role": "user", "content": "서울 날씨"}])
+
+    tc = result.choices[0].message.tool_calls
+    assert tc is not None
+    assert len(tc) == 1
+    assert tc[0].model_dump()["function"]["name"] == "get_weather"
+    assert tc[0].id == "call_123"
+    assert tc[0].type == "function"
+
+
+async def test_chat_handles_usage_metadata(mock_settings, mocker):
+    """usage_metadata 가 ChatCompletion 호환 usage 로 변환된다."""
+    mock_llm = MagicMock()
+    mock_llm.bind = MagicMock(return_value=mock_llm)
+    mock_llm.ainvoke = AsyncMock(
+        return_value=AIMessage(
+            content="응답",
+            response_metadata={"finish_reason": "stop"},
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+            },
+            id="chatcmpl-usage",
+        )
+    )
+    mocker.patch(
+        "app.services.solar_service.ChatOpenAI",
+        return_value=mock_llm,
+    )
+
+    svc = SolarService(settings=mock_settings)
+    result = await svc.chat(messages=[{"role": "user", "content": "q"}])
+
+    assert result.usage is not None
+    usage = result.usage.model_dump()
+    assert usage["prompt_tokens"] == 10
+    assert usage["completion_tokens"] == 20
+    assert usage["total_tokens"] == 30

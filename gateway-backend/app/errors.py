@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import openai
+from langchain_core.exceptions import LangChainException
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -161,5 +162,30 @@ def map_admin_backend_error(
         detail=f"admin-backend 오류: {message}",
         provider="admin_backend",
         upstream_status=None,
+        retryable=True,
+    )
+
+
+# ── LangChain 예외 매핑 ──────────────────────────────────────
+
+
+def map_langchain_error(
+    exc: LangChainException,
+) -> tuple[int, UpstreamErrorDetail]:
+    """LangChain 예외를 HTTP 상태와 구조화된 상세로 매핑한다.
+
+    openai.APIError 가 아닌 LangChain 고유 예외에 대한 fallback 핸들러.
+
+    Args:
+        exc: LangChain 예외 인스턴스.
+
+    Returns:
+        (HTTP 상태 코드, UpstreamErrorDetail) 튜플.
+    """
+    return 502, UpstreamErrorDetail(
+        detail=f"LLM 호출 오류: {exc!s}",
+        provider="solar",
+        upstream_status=None,
+        upstream_code=None,
         retryable=True,
     )

@@ -1,7 +1,8 @@
 # gateway-backend
 
-Agentic AI Guardrail의 API Gateway. Upstage Solar(Pro) 호출을 프록시하면서
-`core-secure-layer`의 보안 검증을 입·출력 양방향에 적용한다.
+Agentic AI Guardrail의 API Gateway. **LangChain** 기반으로 Upstage Solar(Pro) 호출을
+프록시하면서 `core-secure-layer`의 보안 검증을 입·출력 양방향에 적용한다.
+외부 API는 OpenAI 호환 형식(`/v1/chat/completions`)을 유지한다.
 
 ## 파이프라인
 
@@ -104,7 +105,7 @@ app/
 ├── routers/
 │   └── chat.py          # /v1/chat/completions 가드레일 파이프라인
 ├── services/
-│   ├── solar_service.py       # Upstage Solar 클라이언트 (non-stream only)
+│   ├── solar_service.py       # LangChain ChatOpenAI 기반 Solar 클라이언트
 │   ├── security_layer_service.py
 │   └── policy_service.py
 └── static/

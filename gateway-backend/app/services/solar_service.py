@@ -1,16 +1,23 @@
-"""Solar API 클라이언트 서비스 (실제 구현)."""
+"""Solar API 클라이언트 서비스 (LangChain 기반)."""
 
+import json
+import time
+from types import SimpleNamespace
 from typing import Any
 
-from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletion
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_openai import ChatOpenAI
 
 from app.config import Settings
 
-# OpenAI SDK 가 인식하는 표준 파라미터 화이트리스트.
-# 이 집합에 없는 파라미터는 Solar 전용 확장으로 간주하고 extra_body 에
-# 감싸서 전달한다 (OpenAI SDK 가 unknown kwarg 를 거절하는 것을 방지).
-_OPENAI_STANDARD_PARAMS: frozenset[str] = frozenset(
+# LangChain ChatOpenAI 가 bind() 로 직접 받는 표준 파라미터.
+_BIND_PARAMS: frozenset[str] = frozenset(
     {
         "temperature",
         "top_p",
@@ -31,16 +38,114 @@ _OPENAI_STANDARD_PARAMS: frozenset[str] = frozenset(
 )
 
 
-class SolarService:
-    """Upstage Solar API를 호출하는 서비스.
+def _to_lc_tool_calls(
+    tool_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """OpenAI 형식 tool_calls 를 LangChain 형식으로 변환한다.
 
-    OpenAI 호환 AsyncOpenAI 클라이언트를 사용하여 Upstage AI의 Solar 모델에
+    Args:
+        tool_calls: OpenAI 형식 tool_calls 목록.
+
+    Returns:
+        LangChain 형식 tool_calls 목록.
+    """
+    result: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        func = tc.get("function", {})
+        args_raw = func.get("arguments", "{}")
+        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+        result.append(
+            {
+                "name": func.get("name", ""),
+                "args": args,
+                "id": tc.get("id", ""),
+            }
+        )
+    return result
+
+
+def _to_openai_tool_calls(
+    tool_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """LangChain 형식 tool_calls 를 OpenAI 형식으로 변환한다.
+
+    Args:
+        tool_calls: LangChain 형식 tool_calls 목록.
+
+    Returns:
+        OpenAI 형식 tool_calls 목록.
+    """
+    result: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        args = tc.get("args", {})
+        arguments = (
+            json.dumps(args, ensure_ascii=False)
+            if isinstance(args, dict)
+            else str(args)
+        )
+        result.append(
+            {
+                "id": tc.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": tc.get("name", ""),
+                    "arguments": arguments,
+                },
+            }
+        )
+    return result
+
+
+def _to_langchain_messages(
+    messages: list[dict[str, Any]],
+) -> list[BaseMessage]:
+    """OpenAI 포맷 메시지 딕셔너리를 LangChain 메시지로 변환한다.
+
+    Args:
+        messages: OpenAI 포맷의 메시지 목록.
+
+    Returns:
+        LangChain BaseMessage 목록.
+    """
+    result: list[BaseMessage] = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        if role == "system":
+            result.append(SystemMessage(content=content))
+        elif role == "user":
+            result.append(HumanMessage(content=content))
+        elif role == "assistant":
+            tc = msg.get("tool_calls")
+            kwargs: dict[str, Any] = {
+                "content": content or "",
+            }
+            if tc:
+                kwargs["tool_calls"] = _to_lc_tool_calls(tc)
+            result.append(AIMessage(**kwargs))
+        elif role == "tool":
+            result.append(
+                ToolMessage(
+                    content=content or "",
+                    tool_call_id=msg.get("tool_call_id", ""),
+                )
+            )
+        else:
+            result.append(HumanMessage(content=str(content)))
+    return result
+
+
+class SolarService:
+    """Upstage Solar API를 호출하는 서비스 (LangChain 기반).
+
+    LangChain ChatOpenAI 를 사용하여 Upstage AI의 Solar 모델에
     요청을 전송한다. LLM 호출은 **항상 비스트리밍**이며, 사용자 응답의
     스트리밍 재방출은 라우터 계층의 책임이다.
 
     Attributes:
-        _client: AsyncOpenAI 클라이언트 인스턴스.
-        _model: 사용할 LLM 모델 이름(기본값, 요청에 model 이 있으면 덮어씀).
+        _llm: ChatOpenAI 인스턴스.
+        _model: 사용할 LLM 모델 이름.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -49,57 +154,126 @@ class SolarService:
         Args:
             settings: 애플리케이션 설정 인스턴스.
         """
-        self._client = AsyncOpenAI(
+        self._model = settings.llm_model
+        self._llm = ChatOpenAI(
             api_key=settings.upstage_api_key.get_secret_value(),
             base_url=settings.llm_base_url,
+            model=settings.llm_model,
         )
-        self._model = settings.llm_model
 
     async def chat(
         self,
         messages: list[dict[str, Any]],
         **params: Any,
-    ) -> ChatCompletion:
+    ) -> object:
         """Solar API에 비스트리밍 요청을 전송하고 응답 객체를 반환한다.
+
+        반환 객체는 ChatCompletion 호환 구조로, 라우터가
+        ``completion.choices[0].message.content`` 등으로 접근할 수 있다.
 
         Args:
             messages: OpenAI 포맷의 메시지 목록.
-            **params: OpenAI Chat Completions 호환 파라미터. None 값은 제거되고,
-                `stream` 은 True 로 덮어쓸 수 없으며, `model` 은 요청값이
-                env 기본값보다 우선한다. `reasoning_effort` 등 Solar 전용
-                파라미터는 `extra_body` 로 감싸서 전달된다.
+            **params: OpenAI Chat Completions 호환 파라미터.
 
         Returns:
-            Solar API 응답 ChatCompletion 객체 (id/usage/choices 등 메타데이터
-            포함).
+            ChatCompletion 호환 응답 객체.
         """
-        # None 값 제거 — OpenAI SDK 가 unknown kwarg 로 거절하는 것을 방지.
+        lc_messages = _to_langchain_messages(messages)
+
+        # None 값 제거, stream 제거.
         filtered: dict[str, Any] = {
             k: v for k, v in params.items() if v is not None
         }
-
-        # stream 은 항상 False 강제 (가드레일 선검증 원칙).
         filtered.pop("stream", None)
 
         # 요청 model 이 있으면 우선, 없으면 env 기본값.
-        model = filtered.pop("model", self._model)
+        model = filtered.pop("model", None)
 
-        # OpenAI 표준 파라미터와 Solar 전용 파라미터 분리.
-        extra_body: dict[str, Any] = dict(filtered.pop("extra_body", {}) or {})
-        standard: dict[str, Any] = {}
+        # 표준 파라미터와 Solar 전용 파라미터 분리.
+        bind_kwargs: dict[str, Any] = {}
+        model_kwargs: dict[str, Any] = {}
         for key, value in filtered.items():
-            if key in _OPENAI_STANDARD_PARAMS:
-                standard[key] = value
+            if key in _BIND_PARAMS:
+                bind_kwargs[key] = value
             else:
-                extra_body[key] = value
+                model_kwargs[key] = value
 
-        call_kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            **standard,
-        }
-        if extra_body:
-            call_kwargs["extra_body"] = extra_body
+        if model_kwargs:
+            bind_kwargs["model_kwargs"] = model_kwargs
 
-        return await self._client.chat.completions.create(**call_kwargs)
+        # model 오버라이드 시 bind 로 전달.
+        llm = self._llm
+        if model:
+            llm = llm.bind(model=model)
+
+        # 파라미터가 있으면 bind.
+        if bind_kwargs:
+            llm = llm.bind(**bind_kwargs)
+
+        response: AIMessage = await llm.ainvoke(lc_messages)
+
+        return self._to_completion(response, model)
+
+    def _to_completion(
+        self,
+        response: AIMessage,
+        model_override: str | None,
+    ) -> object:
+        """AIMessage 를 ChatCompletion 호환 객체로 변환한다.
+
+        Args:
+            response: LangChain AIMessage 응답.
+            model_override: 요청에서 지정된 모델명.
+
+        Returns:
+            SimpleNamespace 기반 ChatCompletion 호환 객체.
+        """
+        metadata = response.response_metadata or {}
+        model_name = model_override or metadata.get("model_name") or self._model
+        finish_reason = metadata.get("finish_reason", "stop")
+        created = int(time.time())
+
+        # tool_calls 변환.
+        tool_calls = None
+        if response.tool_calls:
+            openai_tcs = _to_openai_tool_calls(response.tool_calls)
+            tool_calls = [
+                SimpleNamespace(
+                    **tc,
+                    model_dump=lambda t=tc: t,
+                )
+                for tc in openai_tcs
+            ]
+
+        # usage 변환.
+        usage = None
+        usage_meta = response.usage_metadata
+        if usage_meta:
+            usage_dict = {
+                "prompt_tokens": usage_meta.get("input_tokens", 0),
+                "completion_tokens": usage_meta.get("output_tokens", 0),
+                "total_tokens": usage_meta.get("total_tokens", 0),
+            }
+            usage = SimpleNamespace(
+                **usage_dict,
+                model_dump=lambda: usage_dict,
+            )
+
+        return SimpleNamespace(
+            id=response.id or f"chatcmpl-{int(time.time())}",
+            object="chat.completion",
+            created=created,
+            model=model_name,
+            choices=[
+                SimpleNamespace(
+                    index=0,
+                    message=SimpleNamespace(
+                        role="assistant",
+                        content=response.content or "",
+                        tool_calls=tool_calls,
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+            usage=usage,
+        )

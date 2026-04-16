@@ -11,10 +11,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from langchain_core.exceptions import LangChainException
 
 from app.dependencies import get_http_client
 from app.errors import (
     map_admin_backend_error,
+    map_langchain_error,
     map_solar_error,
 )
 from app.routers import chat
@@ -135,6 +137,42 @@ async def admin_backend_error_handler(
         구조화된 에러 JSON 응답.
     """
     status, detail = map_admin_backend_error(exc)
+    sid = getattr(
+        getattr(request, "state", None),
+        "session_id",
+        None,
+    )
+    logger.error(
+        "upstream_error: provider=%s "
+        "exception_type=%s upstream_status=%s "
+        "session_id=%s",
+        detail.provider,
+        type(exc).__name__,
+        detail.upstream_status,
+        sid,
+    )
+    return JSONResponse(
+        status_code=status,
+        content=detail.model_dump(),
+    )
+
+
+@app.exception_handler(LangChainException)
+async def langchain_error_handler(
+    request: Request, exc: LangChainException
+) -> JSONResponse:
+    """LangChain 예외를 구조화된 JSON 으로 반환한다.
+
+    openai.APIError 가 아닌 LangChain 고유 예외에 대한 fallback 핸들러.
+
+    Args:
+        request: FastAPI 요청 객체.
+        exc: LangChain 오류 인스턴스.
+
+    Returns:
+        구조화된 에러 JSON 응답.
+    """
+    status, detail = map_langchain_error(exc)
     sid = getattr(
         getattr(request, "state", None),
         "session_id",
