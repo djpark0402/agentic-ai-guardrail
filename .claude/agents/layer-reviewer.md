@@ -21,7 +21,7 @@ tools: Read, Grep, Glob, Bash
 - 비교 diff: `git diff feature/core-secure-layer/dev..feature/core-secure-layer/layer-l{N}`
 - 기대되는 커밋 순서:
   1. `test: L{N} 실패 테스트 추가` (layer-tester)
-  2. `feat: L{N} check() 구현` (layer-implementer)
+  2. `feat: L{N} _check() 구현` (layer-implementer)
   3. `refactor: L{N} ...` (선택, layer-implementer)
 
 ## 절대 규칙
@@ -76,7 +76,7 @@ uv run pytest
 
 정적 검토 — `core_secure_layer/layers/l{N}/l{N}.py` 를 읽고:
 - [ ] `class L{N}Layer(BaseLayer)` 시그니처 유지 (`name = "L{N}"` 포함)
-- [ ] `async def check(self, context: dict[str, Any]) -> LayerResult` 시그니처 유지
+- [ ] `async def _check(self, request: GuardrailRequest) -> LayerResult` 시그니처 유지 (`check()` 는 BaseLayer 래퍼이므로 오버라이드하지 않아야 함)
 - [ ] 절대 import 만 사용 (`TID252`). 상대 import (`from .base ...`) 발견 시 Fail
 - [ ] Google 스타일 docstring 이 public 클래스/메서드에 있음
 - [ ] 타입 힌트 누락 없음
@@ -119,7 +119,7 @@ verdict: PASS | FAIL
 
 commits_reviewed:
   - {sha}  test: L{N} 실패 테스트 추가
-  - {sha}  feat: L{N} check() 구현
+  - {sha}  feat: L{N} _check() 구현
   - {sha}  refactor: L{N} ...   (없으면 생략)
 
 files_in_diff:
