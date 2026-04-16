@@ -1,9 +1,9 @@
 """Request/Response 타입 단위 테스트."""
 
-import asyncio
 from dataclasses import FrozenInstanceError
 
 import pytest
+
 from core_secure_layer.layers.types import (
     CheckPhase,
     GuardrailRequest,
@@ -34,7 +34,7 @@ class TestSeverityEnum:
         ]
 
     def test_str_serialization(self) -> None:
-        assert str(Severity.CRITICAL) == "Severity.CRITICAL"
+        assert str(Severity.CRITICAL) == "critical"
         assert Severity.CRITICAL.value == "critical"
 
 
@@ -181,7 +181,7 @@ class TestGuardrailResponse:
 class TestBaseLayerRun:
     """BaseLayer.run() 타이밍 래퍼 테스트."""
 
-    def test_run_measures_time(self) -> None:
+    async def test_run_measures_time(self) -> None:
         from core_secure_layer.layers.base import BaseLayer
 
         class StubLayer(BaseLayer):
@@ -195,14 +195,14 @@ class TestBaseLayerRun:
 
         layer = StubLayer()
         req = GuardrailRequest(user_input="test")
-        result = asyncio.get_event_loop().run_until_complete(
-            layer.run(req),
-        )
+        result = await layer.run(req)
         assert result.allowed is True
         assert result.execution_time_ms is not None
         assert result.execution_time_ms >= 0
 
-    def test_run_preserves_result_fields(self) -> None:
+    async def test_run_preserves_result_fields(
+        self,
+    ) -> None:
         from core_secure_layer.layers.base import BaseLayer
 
         class DetailedLayer(BaseLayer):
@@ -223,9 +223,7 @@ class TestBaseLayerRun:
 
         layer = DetailedLayer()
         req = GuardrailRequest(user_input="test")
-        result = asyncio.get_event_loop().run_until_complete(
-            layer.run(req),
-        )
+        result = await layer.run(req)
         assert result.allowed is False
         assert result.reason == "blocked"
         assert result.severity == Severity.HIGH
