@@ -599,11 +599,11 @@
       <header class="hero">
         <div class="hero-grid">
           <div>
-            <div class="eyebrow">Spring Guardrail Lab</div>
-            <h1>Gateway Backend<span class="dot">.</span> Playground</h1>
+            <div class="eyebrow">Agentic AI Guardrail</div>
+            <h1>Gateway<span class="dot">.</span> Playground</h1>
             <p class="subtitle">
-              Upstage Solar API 앞단의 가드레일 파이프라인을, 벚꽃처럼 가볍고
-              선명한 화면에서 직접 테스트해보세요.
+              Multi-provider LLM 가드레일 파이프라인을 직접 테스트해보세요.
+              Solar, OpenAI, Ollama를 하나의 엔드포인트에서 사용할 수 있습니다.
             </p>
             <div class="pipeline">
               <span>policy</span>
@@ -618,15 +618,15 @@
             </div>
           </div>
           <aside class="hero-note">
-            <h2>한 화면에서 빠르게 확인</h2>
+            <h2>Provider 라우팅 가이드</h2>
             <p>
-              테스트 요청과 실제 응답을 먼저 확인하고, 필요할 때 아래에서
-              OpenAPI 스키마를 펼쳐 비교할 수 있습니다.
+              모델명으로 provider가 자동 감지됩니다.
+              아래 버튼으로 빠르게 전환하세요.
             </p>
             <div class="blossom-list">
-              <span>기본 모델 자동 로드</span>
-              <span>SSE 응답 실시간 누적</span>
-              <span>BLOCK 시 원문 대신 구조화된 오류 노출</span>
+              <span><strong>Solar</strong> — solar-pro 등 (기본값)</span>
+              <span><strong>OpenAI</strong> — gpt-4o, o1-preview 등</span>
+              <span><strong>Ollama</strong> — ollama/llama3 등 (접두사 필요)</span>
             </div>
           </aside>
         </div>
@@ -650,6 +650,11 @@
             <div class="form-shell">
               <label>model</label>
               <input id="f-model" type="text" placeholder="모델명 로드 중…" />
+              <div class="toolbar" style="margin-top:10px;margin-bottom:0">
+                <button class="ghost provider-btn" type="button" data-model="solar-pro">Solar</button>
+                <button class="ghost provider-btn" type="button" data-model="gpt-4o">OpenAI</button>
+                <button class="ghost provider-btn" type="button" data-model="ollama/gemma3:12b">Ollama</button>
+              </div>
 
               <div class="spacer"></div>
 
@@ -890,6 +895,12 @@
           modelInput.placeholder = "모델명을 입력하세요";
         }
       }
+
+      document.querySelectorAll(".provider-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          modelInput.value = btn.dataset.model;
+        });
+      });
 
       loadDefaultModel();
       loadSpec();

@@ -42,7 +42,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         get_http_client.cache_clear()
 
 
-app = FastAPI(title="Gateway Backend", lifespan=lifespan)
+app = FastAPI(
+    title="Agentic AI Guardrail Gateway",
+    description=(
+        "LangChain 기반 Multi-provider LLM Gateway.\n\n"
+        "모델명으로 provider를 자동 감지하여 라우팅합니다:\n"
+        "- **Solar**: `solar-pro` 등 (기본값)\n"
+        "- **OpenAI**: `gpt-4o`, `o1-preview` 등 (자동 감지)\n"
+        "- **Ollama**: `ollama/llama3` 등 (접두사 명시)\n\n"
+        "모든 요청은 5단계 가드레일 파이프라인을 거칩니다:\n"
+        "정책 조회 → 입력 검사 → LLM 호출 → 출력 검사 → 응답"
+    ),
+    version="0.2.0",
+    lifespan=lifespan,
+)
 
 # CORS — 사내망 전개 가정 하에 전 오리진 허용.
 # 공개 배포 시에는 allow_origins를 화이트리스트로 좁히고 인증·레이트리밋 도입.
