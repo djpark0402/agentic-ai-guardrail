@@ -13,6 +13,7 @@ def _make_settings(*, openai_key=None):
     settings.upstage_api_key.get_secret_value.return_value = "solar-key"
     settings.llm_base_url = "https://api.upstage.ai/v1"
     settings.llm_model = "solar-pro"
+    settings.ollama_base_url = "http://localhost:11434/v1"
 
     if openai_key:
         settings.openai_api_key.get_secret_value.return_value = openai_key
@@ -26,37 +27,66 @@ def _make_settings(*, openai_key=None):
     return settings
 
 
-class TestDetectProvider:
-    """모델명 → provider 감지 테스트."""
+class TestParseModel:
+    """모델명 파싱 테스트."""
 
     def test_gpt_model_detected_as_openai(self):
-        assert ProviderRouter.detect_provider("gpt-4o") == "openai"
-
-    def test_gpt_35_detected_as_openai(self):
-        assert ProviderRouter.detect_provider("gpt-3.5-turbo") == "openai"
-
-    def test_o1_model_detected_as_openai(self):
-        assert ProviderRouter.detect_provider("o1-preview") == "openai"
-
-    def test_o3_model_detected_as_openai(self):
-        assert ProviderRouter.detect_provider("o3-mini") == "openai"
-
-    def test_ft_gpt_detected_as_openai(self):
-        assert (
-            ProviderRouter.detect_provider("ft:gpt-4o:org:custom") == "openai"
+        assert ProviderRouter.parse_model("gpt-4o") == (
+            "openai",
+            "gpt-4o",
         )
 
+    def test_gpt_35_detected_as_openai(self):
+        p, m = ProviderRouter.parse_model("gpt-3.5-turbo")
+        assert p == "openai"
+        assert m == "gpt-3.5-turbo"
+
+    def test_o1_model_detected_as_openai(self):
+        p, _ = ProviderRouter.parse_model("o1-preview")
+        assert p == "openai"
+
+    def test_o3_model_detected_as_openai(self):
+        p, _ = ProviderRouter.parse_model("o3-mini")
+        assert p == "openai"
+
+    def test_ft_gpt_detected_as_openai(self):
+        p, m = ProviderRouter.parse_model("ft:gpt-4o:org:custom")
+        assert p == "openai"
+        assert m == "ft:gpt-4o:org:custom"
+
     def test_chatgpt_detected_as_openai(self):
-        assert ProviderRouter.detect_provider("chatgpt-4o-latest") == "openai"
+        p, _ = ProviderRouter.parse_model("chatgpt-4o-latest")
+        assert p == "openai"
 
     def test_solar_model_detected_as_solar(self):
-        assert ProviderRouter.detect_provider("solar-pro") == "solar"
+        assert ProviderRouter.parse_model("solar-pro") == (
+            "solar",
+            "solar-pro",
+        )
 
     def test_unknown_model_defaults_to_solar(self):
-        assert ProviderRouter.detect_provider("some-custom-model") == "solar"
+        p, _ = ProviderRouter.parse_model("some-custom-model")
+        assert p == "solar"
 
     def test_case_insensitive(self):
-        assert ProviderRouter.detect_provider("GPT-4o") == "openai"
+        p, _ = ProviderRouter.parse_model("GPT-4o")
+        assert p == "openai"
+
+    def test_ollama_prefix_detected(self):
+        p, m = ProviderRouter.parse_model("ollama/llama3")
+        assert p == "ollama"
+        assert m == "llama3"
+
+    def test_ollama_prefix_case_insensitive(self):
+        p, m = ProviderRouter.parse_model("Ollama/mistral")
+        assert p == "ollama"
+        assert m == "mistral"
+
+    def test_non_explicit_prefix_not_split(self):
+        """알 수 없는 접두사는 분리하지 않고 Solar로 라우팅."""
+        p, m = ProviderRouter.parse_model("unknown/model")
+        assert p == "solar"
+        assert m == "unknown/model"
 
 
 class TestGetService:
@@ -75,6 +105,13 @@ class TestGetService:
         router = ProviderRouter(settings=settings)
         svc = router.get_service("openai")
         assert svc.provider_name == "openai"
+
+    def test_get_ollama_service(self, mocker):
+        mocker.patch("app.services.llm_service.ChatOpenAI")
+        settings = _make_settings()
+        router = ProviderRouter(settings=settings)
+        svc = router.get_service("ollama")
+        assert svc.provider_name == "ollama"
 
     def test_get_openai_without_key_raises(self):
         settings = _make_settings()
@@ -115,21 +152,28 @@ class TestResolve:
         svc = router.resolve("solar-pro")
         assert svc.provider_name == "solar"
 
+    def test_resolve_ollama_model(self, mocker):
+        mocker.patch("app.services.llm_service.ChatOpenAI")
+        settings = _make_settings()
+        router = ProviderRouter(settings=settings)
+        svc = router.resolve("ollama/llama3")
+        assert svc.provider_name == "ollama"
+
 
 class TestAvailableProviders:
     """available_providers() 테스트."""
 
-    def test_only_solar_when_no_openai_key(self):
+    def test_solar_and_ollama_always_present(self):
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
         providers = router.available_providers()
-        assert len(providers) == 1
-        assert providers[0]["provider"] == "solar"
+        names = {p["provider"] for p in providers}
+        assert "solar" in names
+        assert "ollama" in names
 
-    def test_both_when_openai_configured(self):
+    def test_openai_included_when_configured(self):
         settings = _make_settings(openai_key="sk-test")
         router = ProviderRouter(settings=settings)
         providers = router.available_providers()
-        assert len(providers) == 2
         names = {p["provider"] for p in providers}
-        assert names == {"solar", "openai"}
+        assert names == {"solar", "openai", "ollama"}

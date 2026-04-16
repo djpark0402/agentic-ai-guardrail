@@ -12,7 +12,7 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 ```
 
 - **Multi-provider 지원:** 모델명으로 provider를 자동 감지한다.
-  `gpt-*`, `o1-*`, `o3-*` → OpenAI / 그 외 → Solar (기본값).
+  `gpt-*`, `o1-*`, `o3-*` → OpenAI / `ollama/모델명` → Ollama / 그 외 → Solar (기본값).
 - LLM 호출은 **항상 비스트리밍**이다. 전체 응답을 받은 뒤 출력 가드레일 검사를
   먼저 수행한 다음, 사용자 응답만 선택적으로 SSE로 재방출한다.
 - 출력이 BLOCK되면 비스트리밍은 HTTP 400, 스트리밍은 에러 프레임 1건만 전송하여
@@ -96,6 +96,9 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 - `OPENAI_API_KEY` — OpenAI API 키 (미설정 시 OpenAI 모델 요청은 에러)
 - `OPENAI_BASE_URL` — OpenAI 엔드포인트 (기본 `https://api.openai.com/v1`)
 - `OPENAI_MODEL` — OpenAI 기본 모델명 (기본 `gpt-4o`)
+
+**Ollama (선택)**
+- `OLLAMA_BASE_URL` — Ollama 엔드포인트 (기본 `http://localhost:11434/v1`). API 키 불필요. `ollama/모델명` 형식으로 요청.
 
 **공통**
 - `ADMIN_BACKEND_URL` — 정책 조회용 admin-backend 주소

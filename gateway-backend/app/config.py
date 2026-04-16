@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o"
 
+    # Ollama (optional — 로컬 LLM, API 키 불필요)
+    ollama_base_url: str = "http://localhost:11434/v1"
+
     # 공통
     admin_backend_url: str = "http://localhost:8001"
     skip_policy_fetch: bool = False

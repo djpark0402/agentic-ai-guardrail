@@ -18,6 +18,10 @@ _OPENAI_PREFIXES: tuple[str, ...] = (
     "chatgpt-",
 )
 
+# 명시적 provider 접두사 (예: "ollama/llama3").
+# 자동 감지가 어려운 provider 는 "provider/model" 형식으로 라우팅한다.
+_EXPLICIT_PROVIDERS: frozenset[str] = frozenset({"ollama"})
+
 
 class ProviderRouter:
     """모델명으로 LLM provider를 감지하고 서비스를 반환한다.
@@ -37,20 +41,33 @@ class ProviderRouter:
         self._services: dict[str, LLMService] = {}
 
     @staticmethod
-    def detect_provider(model: str) -> str:
-        """모델명에서 provider를 감지한다.
+    def parse_model(model: str) -> tuple[str, str]:
+        """모델명에서 provider와 실제 모델명을 분리한다.
+
+        "ollama/llama3" → ("ollama", "llama3")
+        "gpt-4o" → ("openai", "gpt-4o")  (자동 감지)
+        "solar-pro" → ("solar", "solar-pro")  (기본값)
 
         Args:
             model: 요청의 모델명.
 
         Returns:
-            provider 식별자 ("openai" 또는 "solar").
+            (provider, 실제 모델명) 튜플.
         """
+        # 명시적 접두사 확인 (예: "ollama/llama3").
+        if "/" in model:
+            prefix, _, model_name = model.partition("/")
+            if prefix.lower() in _EXPLICIT_PROVIDERS:
+                return prefix.lower(), model_name
+
+        # OpenAI 패턴 자동 감지.
         model_lower = model.lower()
-        for prefix in _OPENAI_PREFIXES:
-            if model_lower.startswith(prefix):
-                return "openai"
-        return "solar"
+        for pattern in _OPENAI_PREFIXES:
+            if model_lower.startswith(pattern):
+                return "openai", model
+
+        # 기본값: Solar.
+        return "solar", model
 
     def get_service(self, provider: str) -> LLMService:
         """provider에 해당하는 LLMService를 반환한다.
@@ -107,6 +124,14 @@ class ProviderRouter:
                 provider_name="openai",
             )
 
+        if provider == "ollama":
+            return LLMService(
+                api_key="ollama",
+                base_url=s.ollama_base_url,
+                model="llama3",
+                provider_name="ollama",
+            )
+
         msg = f"지원하지 않는 provider: {provider}"
         raise ValueError(msg)
 
@@ -122,7 +147,7 @@ class ProviderRouter:
         Raises:
             ValueError: provider가 미설정이거나 알 수 없을 때.
         """
-        provider = self.detect_provider(model)
+        provider, _model_name = self.parse_model(model)
         return self.get_service(provider)
 
     def available_providers(self) -> list[dict[str, Any]]:
@@ -145,4 +170,11 @@ class ProviderRouter:
                     "default_model": s.openai_model,
                 }
             )
+        providers.append(
+            {
+                "provider": "ollama",
+                "default_model": "llama3",
+                "note": "ollama/모델명 형식으로 요청",
+            }
+        )
         return providers
