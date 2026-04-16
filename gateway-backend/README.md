@@ -49,18 +49,25 @@ admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전�
 ### 요청 예시
 
 ```bash
+# Solar (기본값 — 접두사 불필요)
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{
-    "model": "solar-pro2",
-    "messages": [{"role": "user", "content": "안녕"}],
-    "stream": false
-  }'
+  -d '{"model": "solar-pro", "messages": [{"role": "user", "content": "안녕"}]}'
+
+# OpenAI (모델명 자동 감지)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "안녕"}]}'
+
+# Ollama (ollama/ 접두사 명시)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "ollama/gemma3:12b", "messages": [{"role": "user", "content": "안녕"}]}'
 ```
 
 `stream: true`로 요청하면 `text/event-stream` 응답이 반환되며,
 `data: <chunk>\n\n` 형태의 프레임이 순차로 전송되고 마지막에 `data: [DONE]`이
-온다.
+온다. 모든 provider에서 동일하게 동작한다.
 
 ## 플레이그라운드
 
