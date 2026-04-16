@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 import openai
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,10 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.dependencies import get_http_client
+from app.errors import (
+    map_admin_backend_error,
+    map_solar_error,
+)
 from app.routers import chat
 
 
@@ -80,19 +85,40 @@ async def default_model() -> dict[str, str]:
 
 
 @app.exception_handler(openai.APIError)
-async def openai_error_handler(
+async def solar_error_handler(
     _request: Request, exc: openai.APIError
 ) -> JSONResponse:
-    """OpenAI/Solar API 오류를 처리하는 글로벌 예외 핸들러.
+    """Solar(openai) 예외를 구조화된 JSON 으로 반환한다.
 
     Args:
         _request: FastAPI 요청 객체.
         exc: OpenAI API 오류 인스턴스.
 
     Returns:
-        오류 메시지를 담은 JSON 응답.
+        구조화된 에러 JSON 응답.
     """
+    status, detail = map_solar_error(exc)
     return JSONResponse(
-        status_code=502,
-        content={"detail": f"Solar API 오류: {exc.message}"},
+        status_code=status,
+        content=detail.model_dump(),
+    )
+
+
+@app.exception_handler(httpx.HTTPError)
+async def admin_backend_error_handler(
+    _request: Request, exc: httpx.HTTPError
+) -> JSONResponse:
+    """admin-backend(httpx) 예외를 구조화된 JSON 으로 반환.
+
+    Args:
+        _request: FastAPI 요청 객체.
+        exc: httpx 오류 인스턴스.
+
+    Returns:
+        구조화된 에러 JSON 응답.
+    """
+    status, detail = map_admin_backend_error(exc)
+    return JSONResponse(
+        status_code=status,
+        content=detail.model_dump(),
     )

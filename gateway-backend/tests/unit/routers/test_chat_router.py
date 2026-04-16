@@ -383,3 +383,60 @@ def test_output_check_called_after_solar(client, mock_security_service):
         },
     )
     mock_security_service.check_output.assert_called_once()
+
+
+# ── 에러 전파 통합 테스트 ────────────────────────────────────
+
+
+def test_solar_auth_error_returns_structured_401(client, mock_solar_service):
+    """Solar AuthenticationError 가 구조화된 401 응답으로 반환."""
+    import httpx as _httpx
+    import openai as _openai
+
+    request = _httpx.Request("POST", "https://api.test/v1")
+    response = _httpx.Response(401, request=request)
+    mock_solar_service.chat = AsyncMock(
+        side_effect=_openai.AuthenticationError(
+            message="API key suspended",
+            response=response,
+            body={"error": {"code": "api_key_suspended"}},
+        )
+    )
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "solar-pro",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+
+    assert resp.status_code == 401
+    data = resp.json()
+    assert data["provider"] == "solar"
+    assert data["retryable"] is False
+    assert data["upstream_code"] == "api_key_suspended"
+
+
+def test_policy_fetch_error_returns_structured_503(client, mock_policy_service):
+    """admin-backend 연결 실패가 구조화된 503 응답으로 반환."""
+    import httpx as _httpx
+
+    request = _httpx.Request("GET", "https://admin/api")
+    mock_policy_service.fetch_policy = AsyncMock(
+        side_effect=_httpx.ConnectError(
+            message="Connection refused",
+            request=request,
+        )
+    )
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "solar-pro",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+
+    assert resp.status_code == 503
+    data = resp.json()
+    assert data["provider"] == "admin_backend"
+    assert data["retryable"] is True
