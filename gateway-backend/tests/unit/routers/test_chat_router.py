@@ -497,10 +497,18 @@ def test_all_disabled_policy_has_no_enabled_layers():
     assert policy.l6 is False
 
 
-def test_skip_policy_fetch_skips_admin_call(
+def test_all_enabled_policy_has_all_layers():
+    """GuardrailPolicy.all_enabled()는 L1~L6 전체가 활성이다."""
+    policy = GuardrailPolicy.all_enabled()
+    assert policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
+    assert policy.l1 is True
+    assert policy.l6 is True
+
+
+def test_skip_policy_fetch_forces_all_layers_enabled(
     mock_security_service, mock_provider_router
 ):
-    """SKIP_POLICY_FETCH=true이면 fetch_policy를 호출하지 않는다."""
+    """SKIP_POLICY_FETCH=true 이면 fetch_policy 를 호출하지 않고 L1~L6 전부를 강제 활성화한다."""  # noqa: E501
     mock_ps = MagicMock()
     mock_ps.fetch_policy = AsyncMock()
 
@@ -532,5 +540,15 @@ def test_skip_policy_fetch_skips_admin_call(
         )
         assert resp.status_code == 200
         mock_ps.fetch_policy.assert_not_called()
+
+        # SKIP 시 check_input/check_output 이 L1~L6 전체 정책을 받아야 한다
+        input_policy = mock_security_service.check_input.call_args.kwargs[
+            "policy"
+        ]
+        output_policy = mock_security_service.check_output.call_args.kwargs[
+            "policy"
+        ]
+        assert input_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
+        assert output_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
     finally:
         app.dependency_overrides.clear()

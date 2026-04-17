@@ -262,7 +262,8 @@ async def chat_completions(
     # 1단계: admin-backend에서 보안 정책 조회
     t0 = time.perf_counter()
     if settings.skip_policy_fetch:
-        policy = GuardrailPolicy.all_disabled()
+        # 정책 조회는 생략하되 L1~L6 전체 레이어를 강제로 실행한다.
+        policy = GuardrailPolicy.all_enabled()
     else:
         policy = await policy_service.fetch_policy(
             session_id=session_id,
