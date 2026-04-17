@@ -6,23 +6,25 @@
     <title>Gateway Backend · Playground</title>
     <style>
       :root {
-        --bg: #fff8fb;
-        --bg-soft: #fff1f5;
-        --surface: rgba(255, 255, 255, 0.88);
+        --bg: #fffaf8;
+        --bg-soft: #fff5f1;
+        --sky: #eff7ff;
+        --sun: #fff7df;
+        --surface: rgba(255, 255, 255, 0.9);
         --surface-strong: #ffffff;
-        --surface-alt: #fff4f7;
-        --border: #f0ccd8;
-        --border-strong: #e6b4c7;
-        --text: #5b3448;
-        --muted: #8a6676;
-        --accent: #f39ab6;
-        --accent-strong: #d85b8d;
-        --accent-soft: #ffe1ea;
+        --surface-alt: #fff8f6;
+        --border: #efd7df;
+        --border-strong: #ddbfcf;
+        --text: #5b4151;
+        --muted: #7f6876;
+        --accent: #f2a9be;
+        --accent-strong: #cf7093;
+        --accent-soft: #ffe8ef;
         --highlight: #fff7d9;
         --danger: #c95673;
         --ok: #2d8a69;
-        --shadow: 0 24px 60px rgba(211, 109, 150, 0.12);
-        --shadow-soft: 0 12px 30px rgba(211, 109, 150, 0.08);
+        --shadow: 0 24px 60px rgba(190, 132, 155, 0.12);
+        --shadow-soft: 0 12px 30px rgba(190, 132, 155, 0.08);
         --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
         --sans: "Pretendard", "Iowan Old Style", "Apple SD Gothic Neo",
           -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -42,9 +44,10 @@
       body {
         position: relative;
         background:
-          radial-gradient(circle at top left, rgba(255, 219, 232, 0.95), transparent 28%),
-          radial-gradient(circle at top right, rgba(255, 239, 213, 0.88), transparent 22%),
-          linear-gradient(180deg, #fffafc 0%, #fff5f7 45%, #fffdf7 100%);
+          radial-gradient(circle at top left, rgba(225, 240, 255, 0.92), transparent 32%),
+          radial-gradient(circle at 78% 18%, rgba(255, 232, 239, 0.82), transparent 26%),
+          radial-gradient(circle at bottom right, rgba(255, 247, 218, 0.7), transparent 28%),
+          linear-gradient(180deg, #fdfcff 0%, #fff7f5 52%, #fffdf7 100%);
         color: var(--text);
         font-family: var(--sans);
         line-height: 1.6;
@@ -55,24 +58,34 @@
       body::after {
         content: "";
         position: fixed;
-        inset: auto auto 12% -90px;
-        width: 260px;
-        height: 260px;
+        width: 420px;
+        height: 320px;
         pointer-events: none;
         background:
-          radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.86) 0 16%, transparent 17%),
-          radial-gradient(circle at 50% 50%, rgba(244, 172, 196, 0.3) 0 52%, transparent 53%);
-        filter: blur(2px);
-        opacity: 0.85;
-        transform: rotate(-12deg);
+          radial-gradient(ellipse 30px 18px at 18% 26%, rgba(255, 205, 221, 0.54) 0 68%, transparent 70%),
+          radial-gradient(ellipse 24px 14px at 31% 16%, rgba(255, 232, 240, 0.88) 0 68%, transparent 70%),
+          radial-gradient(ellipse 28px 16px at 38% 34%, rgba(244, 182, 203, 0.52) 0 68%, transparent 70%),
+          radial-gradient(ellipse 26px 15px at 54% 22%, rgba(255, 223, 234, 0.8) 0 68%, transparent 70%),
+          radial-gradient(ellipse 22px 13px at 63% 39%, rgba(244, 182, 203, 0.46) 0 68%, transparent 70%),
+          radial-gradient(ellipse 26px 15px at 76% 21%, rgba(255, 231, 238, 0.76) 0 68%, transparent 70%),
+          radial-gradient(ellipse 30px 18px at 82% 46%, rgba(244, 182, 203, 0.4) 0 68%, transparent 70%),
+          radial-gradient(ellipse 18px 10px at 44% 56%, rgba(255, 248, 251, 0.84) 0 68%, transparent 70%);
+        filter: blur(1px);
+        opacity: 0.88;
+        animation: blossomFloatLeft 18s ease-in-out infinite alternate;
+      }
+
+      body::before {
+        inset: auto auto 10% -130px;
+        transform: rotate(-9deg);
       }
 
       body::after {
-        inset: 72px -100px auto auto;
-        width: 300px;
-        height: 300px;
-        opacity: 0.5;
-        transform: rotate(16deg);
+        inset: 70px -140px auto auto;
+        opacity: 0.68;
+        transform: rotate(13deg) scale(0.92);
+        animation-name: blossomFloatRight;
+        animation-duration: 22s;
       }
 
       a {
@@ -88,7 +101,7 @@
         font-family: var(--mono);
         font-size: 0.92em;
         background: rgba(255, 255, 255, 0.76);
-        border: 1px solid rgba(230, 180, 199, 0.8);
+        border: 1px solid rgba(221, 191, 207, 0.8);
         border-radius: 999px;
         padding: 0.12rem 0.48rem;
       }
@@ -104,9 +117,10 @@
         position: relative;
         overflow: hidden;
         background:
-          linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 243, 247, 0.9)),
-          radial-gradient(circle at top right, rgba(255, 232, 240, 0.95), transparent 40%);
-        border: 1px solid rgba(230, 180, 199, 0.8);
+          linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(255, 247, 244, 0.9)),
+          radial-gradient(circle at top right, rgba(232, 243, 255, 0.82), transparent 36%),
+          radial-gradient(circle at 86% 18%, rgba(255, 233, 239, 0.8), transparent 28%);
+        border: 1px solid rgba(221, 191, 207, 0.82);
         border-radius: 32px;
         box-shadow: var(--shadow);
         padding: 34px;
@@ -118,10 +132,11 @@
         position: absolute;
         inset: 0;
         background:
-          radial-gradient(circle at 82% 18%, rgba(244, 170, 196, 0.28) 0 10%, transparent 11%),
-          radial-gradient(circle at 88% 28%, rgba(255, 255, 255, 0.95) 0 4%, transparent 5%),
-          radial-gradient(circle at 76% 30%, rgba(244, 170, 196, 0.16) 0 7%, transparent 8%),
-          radial-gradient(circle at 18% 100%, rgba(255, 247, 217, 0.95) 0 22%, transparent 23%);
+          radial-gradient(ellipse 34px 18px at 79% 20%, rgba(245, 189, 209, 0.28) 0 68%, transparent 70%),
+          radial-gradient(ellipse 28px 15px at 84% 14%, rgba(255, 241, 246, 0.85) 0 68%, transparent 70%),
+          radial-gradient(ellipse 24px 14px at 88% 28%, rgba(245, 189, 209, 0.2) 0 68%, transparent 70%),
+          radial-gradient(circle at 16% 100%, rgba(255, 247, 217, 0.9) 0 18%, transparent 19%),
+          linear-gradient(120deg, transparent 58%, rgba(255, 244, 248, 0.52) 76%, transparent 90%);
         pointer-events: none;
       }
 
@@ -139,7 +154,7 @@
         padding: 8px 14px;
         border-radius: 999px;
         background: rgba(255, 245, 248, 0.9);
-        border: 1px solid rgba(230, 180, 199, 0.72);
+        border: 1px solid rgba(221, 191, 207, 0.72);
         color: var(--accent-strong);
         font-size: 0.8rem;
         font-weight: 700;
@@ -168,8 +183,8 @@
 
       .hero-note {
         position: relative;
-        background: rgba(255, 251, 244, 0.85);
-        border: 1px solid rgba(240, 221, 182, 0.92);
+        background: linear-gradient(180deg, rgba(255, 251, 246, 0.9), rgba(255, 247, 251, 0.84));
+        border: 1px solid rgba(241, 221, 184, 0.88);
         border-radius: 24px;
         padding: 22px 24px;
         box-shadow: var(--shadow-soft);
@@ -215,10 +230,10 @@
         padding: 9px 14px;
         font-family: var(--mono);
         font-size: 0.84rem;
-        background: rgba(255, 255, 255, 0.8);
-        border: 1px solid rgba(230, 180, 199, 0.8);
+        background: rgba(255, 255, 255, 0.86);
+        border: 1px solid rgba(221, 191, 207, 0.8);
         border-radius: 999px;
-        box-shadow: 0 8px 20px rgba(211, 109, 150, 0.06);
+        box-shadow: 0 8px 20px rgba(190, 132, 155, 0.06);
       }
 
       .pipeline .arrow {
@@ -245,7 +260,7 @@
       section.card {
         background: var(--surface);
         backdrop-filter: blur(8px);
-        border: 1px solid rgba(230, 180, 199, 0.74);
+        border: 1px solid rgba(221, 191, 207, 0.74);
         border-radius: 28px;
         box-shadow: var(--shadow-soft);
         padding: 28px;
@@ -306,7 +321,7 @@
         gap: 12px;
         font-family: var(--mono);
         font-size: 0.95rem;
-        background: linear-gradient(180deg, #fff8fb, #fff2f6);
+        background: linear-gradient(180deg, #fffafc, #fff5f2);
         border: 1px solid var(--border);
         border-radius: 18px;
         padding: 14px 16px;
@@ -346,7 +361,7 @@
       select {
         width: 100%;
         background: rgba(255, 255, 255, 0.9);
-        border: 1px solid rgba(230, 180, 199, 0.84);
+        border: 1px solid rgba(221, 191, 207, 0.84);
         border-radius: 18px;
         color: var(--text);
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
@@ -362,7 +377,7 @@
         word-break: break-word;
         min-height: 220px;
         background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 247, 250, 0.92));
+          linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(255, 248, 245, 0.92));
       }
 
       input[type="text"],
@@ -398,8 +413,8 @@
         padding: 18px;
         border-radius: 22px;
         background:
-          linear-gradient(180deg, rgba(255, 248, 251, 0.9), rgba(255, 243, 247, 0.76));
-        border: 1px solid rgba(240, 204, 216, 0.84);
+          linear-gradient(180deg, rgba(255, 249, 246, 0.92), rgba(255, 244, 248, 0.78));
+        border: 1px solid rgba(239, 215, 223, 0.84);
       }
 
       .spacer {
@@ -445,13 +460,13 @@
       #send {
         background: linear-gradient(135deg, var(--accent), var(--accent-strong));
         color: #fffafc;
-        box-shadow: 0 14px 24px rgba(216, 91, 141, 0.24);
+        box-shadow: 0 14px 24px rgba(207, 112, 147, 0.24);
       }
 
       button.ghost {
         background: rgba(255, 255, 255, 0.82);
         color: var(--muted);
-        border: 1px solid rgba(230, 180, 199, 0.9);
+        border: 1px solid rgba(221, 191, 207, 0.9);
         box-shadow: none;
       }
 
@@ -474,7 +489,7 @@
         padding: 10px 14px;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.78);
-        border: 1px solid rgba(230, 180, 199, 0.84);
+        border: 1px solid rgba(221, 191, 207, 0.84);
         color: var(--muted);
         font-size: 0.92rem;
       }
@@ -495,7 +510,7 @@
         padding: 8px 12px;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.82);
-        border: 1px solid rgba(230, 180, 199, 0.84);
+        border: 1px solid rgba(221, 191, 207, 0.84);
         color: var(--muted);
       }
 
@@ -505,8 +520,8 @@
         padding: 18px;
         border-radius: 22px;
         background:
-          linear-gradient(180deg, rgba(255, 251, 244, 0.92), rgba(255, 246, 249, 0.82));
-        border: 1px solid rgba(240, 204, 216, 0.84);
+          linear-gradient(180deg, rgba(255, 252, 246, 0.92), rgba(255, 246, 249, 0.84));
+        border: 1px solid rgba(239, 215, 223, 0.84);
       }
 
       .response-shell pre {
@@ -542,11 +557,38 @@
         margin-top: 20px;
       }
 
+      @keyframes blossomFloatLeft {
+        from {
+          transform: rotate(-9deg) translate3d(0, 0, 0);
+        }
+
+        to {
+          transform: rotate(-5deg) translate3d(18px, -14px, 0);
+        }
+      }
+
+      @keyframes blossomFloatRight {
+        from {
+          transform: rotate(13deg) scale(0.92) translate3d(0, 0, 0);
+        }
+
+        to {
+          transform: rotate(17deg) scale(0.96) translate3d(-16px, 16px, 0);
+        }
+      }
+
       @media (max-width: 980px) {
         .hero-grid,
         .test-grid,
         .field-grid {
           grid-template-columns: 1fr;
+        }
+
+        body::before,
+        body::after {
+          width: 300px;
+          height: 240px;
+          opacity: 0.56;
         }
       }
 
@@ -580,6 +622,22 @@
 
         .pipeline .arrow {
           display: none;
+        }
+
+        body::before,
+        body::after {
+          width: 220px;
+          height: 180px;
+          filter: none;
+          opacity: 0.42;
+        }
+
+        body::before {
+          inset: auto auto 8% -88px;
+        }
+
+        body::after {
+          inset: 54px -92px auto auto;
         }
       }
 
