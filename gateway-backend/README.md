@@ -15,8 +15,48 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
   `gpt-*`, `o1-*`, `o3-*` → OpenAI / `ollama/모델명` → Ollama / 그 외 → Solar (기본값).
 - LLM 호출은 **항상 비스트리밍**이다. 전체 응답을 받은 뒤 출력 가드레일 검사를
   먼저 수행한 다음, 사용자 응답만 선택적으로 SSE로 재방출한다.
-- 출력이 BLOCK되면 비스트리밍은 HTTP 400, 스트리밍은 에러 프레임 1건만 전송하여
-  원본 응답이 클라이언트로 유출되지 않도록 한다.
+- 입력/출력 가드레일이 BLOCK 하면 `stream` 플래그와 무관하게 **HTTP 200 +
+  OpenAI `content_filter` 규격**으로 응답한다. 원본 LLM 응답은 절대 유출되지
+  않고, `choices[0].finish_reason="content_filter"` + 비표준 `error` 블록에
+  사유와 레이어 메타데이터가 담긴다.
+
+#### 차단 응답 스키마
+
+비스트리밍 (HTTP 200, `application/json`):
+
+```json
+{
+  "id": "chatcmpl-<session-id>",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "solar-pro",
+  "choices": [{
+    "index": 0,
+    "message": {"role": "assistant", "content": ""},
+    "finish_reason": "content_filter"
+  }],
+  "usage": null,
+  "error": {
+    "type": "guardrail_block",
+    "stage": "input",
+    "message": "입력 보안 검사 실패: prompt injection detected",
+    "layer": "L1",
+    "reason": "prompt injection detected",
+    "severity": "CRITICAL",
+    "confidence": 1.0,
+    "tags": ["prompt_injection"]
+  }
+}
+```
+
+스트리밍 (HTTP 200, `text/event-stream`) — 단일 `chat.completion.chunk`
+프레임을 내보내고 `data: [DONE]` 로 종료한다. `error` 블록 스키마는
+비스트리밍과 동일.
+
+> **브레이킹 변경:** 이전 버전은 입력/출력 BLOCK 을 HTTP 400 + `{"detail"}`
+> 으로 반환했다. HTTP 상태 코드 기반 에러 감지를 하던 클라이언트는
+> `choices[0].finish_reason == "content_filter"` 또는
+> `error.type == "guardrail_block"` 검사로 이행해야 한다.
 
 ### 정책 조회 & 레이어 게이팅
 
