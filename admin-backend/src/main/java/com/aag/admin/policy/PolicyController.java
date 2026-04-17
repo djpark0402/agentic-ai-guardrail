@@ -16,7 +16,6 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 @Tag(name = "Policy", description = "L1~L6 가드레일 정책 관리 API")
 @RestController
@@ -49,26 +48,6 @@ public class PolicyController {
         return repository.findAllByOrderByCreatedAtAsc().stream()
                 .map(this::toResponse)
                 .toList();
-    }
-
-    @Operation(
-            summary = "[Gateway 전용] 현재 활성 정책 조회",
-            description = """
-                    게이트웨이에서 호출하는 엔드포인트입니다.
-                    is_use=true 인 정책 1건을 반환합니다. 호출 시 GATEWAY 호출자로 감사 로그가 남습니다.
-                    활성 정책이 없으면 404를 반환합니다.
-                    """
-    )
-    @GetMapping("/active")
-    public Map<String, Object> active() {
-        Optional<Policy> policyOpt = repository.findByIsUseTrue();
-        if (policyOpt.isEmpty()) {
-            auditLogService.record(ActorType.GATEWAY, Action.POLICY_REQUEST, false, "no active policy");
-            throw new NotFoundException("no active policy");
-        }
-        Policy policy = policyOpt.get();
-        auditLogService.record(ActorType.GATEWAY, Action.POLICY_REQUEST, true, policyDetail(policy));
-        return toResponse(policy);
     }
 
     @Operation(summary = "정책 단건 조회")
