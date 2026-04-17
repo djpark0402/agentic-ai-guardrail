@@ -76,3 +76,28 @@ def test_layer_result_to_guardrail_result_block():
     assert result.status == CheckStatus.BLOCK
     assert result.reason == "prompt injection detected"
     assert result.layer == "L3"
+
+
+def test_layer_result_preserves_severity_confidence_tags():
+    """LayerResult 의 severity/confidence/tags 가 보존된다."""
+    lr = LayerResult(
+        name="L3",
+        allowed=False,
+        reason="prompt injection detected",
+        severity=Severity.HIGH,
+        confidence=0.92,
+        tags=["prompt_injection", "high_risk"],
+    )
+    result = layer_result_to_guardrail_result(lr)
+    assert result.severity == "HIGH"
+    assert result.confidence == 0.92
+    assert result.tags == ["prompt_injection", "high_risk"]
+
+
+def test_layer_result_pass_defaults_severity_none():
+    """allowed=True 통과 시 severity 는 'NONE' 문자열로 매핑된다."""
+    lr = LayerResult(name="L1", allowed=True, confidence=0.85)
+    result = layer_result_to_guardrail_result(lr)
+    assert result.severity == "NONE"
+    assert result.confidence == 0.85
+    assert result.tags == []

@@ -51,10 +51,13 @@ def layer_result_to_guardrail_result(
         result: core-secure-layer 의 레이어 검사 결과.
 
     Returns:
-        gateway 형식의 GuardrailResult.
+        severity/confidence/tags 메타데이터가 보존된 GuardrailResult.
     """
     return GuardrailResult(
         status=(CheckStatus.PASS if result.allowed else CheckStatus.BLOCK),
         reason=result.reason,
         layer=result.name,
+        severity=result.severity.name,
+        confidence=result.confidence,
+        tags=list(result.tags),
     )
