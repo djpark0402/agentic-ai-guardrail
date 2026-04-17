@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, NavLink } from 'react-router-dom';
 import { LayerSettingsPage } from '@/pages/LayerSettingsPage';
 import { AuditLogPage } from '@/pages/AuditLogPage';
+import { InternalApiKeysPage } from '@/pages/InternalApiKeysPage';
 
 export function App() {
   return (
@@ -23,12 +24,19 @@ export function App() {
         >
           감사 로그
         </NavLink>
+        <NavLink
+          to="/admin/internal-api-keys"
+          className={({ isActive }) => `app-sidebar__item${isActive ? ' active' : ''}`}
+        >
+          Internal API 키
+        </NavLink>
       </aside>
       <main className="app-main">
         <Routes>
           <Route path="/" element={<Navigate to="/admin/layers" replace />} />
           <Route path="/admin/layers" element={<LayerSettingsPage />} />
           <Route path="/admin/audit-logs" element={<AuditLogPage />} />
+          <Route path="/admin/internal-api-keys" element={<InternalApiKeysPage />} />
         </Routes>
       </main>
     </div>
