@@ -1,14 +1,14 @@
 """guardrail_converter 모듈 테스트."""
 
+from core_secure_layer.layers.types import LayerResult, Severity
+
+from app.models.chat import Message
+from app.models.guardrail import CheckStatus
 from app.services.guardrail_converter import (
     content_to_request,
     layer_result_to_guardrail_result,
     messages_to_request,
 )
-from core_secure_layer.layers.types import LayerResult, Severity
-
-from app.models.chat import Message
-from app.models.guardrail import CheckStatus
 
 
 def test_messages_to_request_extracts_last_user_message():

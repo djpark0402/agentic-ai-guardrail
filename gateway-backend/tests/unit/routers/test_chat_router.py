@@ -115,12 +115,28 @@ def client(
     mock_security_service,
     mock_provider_router,
 ):
-    """모든 서비스가 mock된 TestClient."""
+    """모든 서비스가 mock된 TestClient.
+
+    로컬 `.env` 값(특히 `SKIP_POLICY_FETCH`)의 영향을 배제하기 위해
+    `get_settings` 도 `skip_policy_fetch=False` 로 고정 오버라이드한다.
+    """
+
+    def _default_settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=False,
+        )
+
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: (
         mock_security_service
     )
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
 
