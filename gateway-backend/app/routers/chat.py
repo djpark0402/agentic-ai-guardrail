@@ -254,6 +254,48 @@ async def _stream_guardrail_block(
     yield "data: [DONE]\n\n"
 
 
+def _build_block_response(
+    result: GuardrailResult,
+    *,
+    stage: str,
+    chunk_id: str,
+    created: int,
+    model: str,
+) -> ChatResponse:
+    """가드레일 BLOCK 시 비스트리밍 ChatResponse 를 조립한다.
+
+    OpenAI 모더레이션 관례에 맞춰 HTTP 200 으로 반환한다. 원본 LLM 응답은
+    유출하지 않기 위해 content 를 빈 문자열로 두고, finish_reason 을
+    "content_filter" 로 설정한다. 비표준 `error` 블록에 사유와 레이어
+    메타데이터를 담는다.
+
+    Args:
+        result: BLOCK 판정이 담긴 GuardrailResult.
+        stage: "input" 또는 "output".
+        chunk_id: 응답 ID (세션 ID 연계).
+        created: Unix timestamp.
+        model: 응답 모델 이름.
+
+    Returns:
+        error 블록이 채워진 ChatResponse.
+    """
+    return ChatResponse(
+        id=chunk_id,
+        object="chat.completion",
+        created=created,
+        model=model,
+        choices=[
+            ChatResponseChoice(
+                index=0,
+                message=ChatResponseMessage(role="assistant", content=""),
+                finish_reason="content_filter",
+            )
+        ],
+        usage=None,
+        error=_build_block_error(result, stage),
+    )
+
+
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(
     request: ChatRequest,
@@ -285,7 +327,8 @@ async def chat_completions(
         스트리밍: SSE StreamingResponse.
 
     Raises:
-        HTTPException: 입력 검사 실패 시 400, 비스트리밍 출력 검사 실패 시 400.
+        HTTPException: 입력 검사 실패 시 400. (출력 검사 실패는 HTTP 200 +
+            OpenAI content_filter 응답 스키마로 반환)
     """
     session_id = str(uuid.uuid4())
     t_request = time.perf_counter()
@@ -414,16 +457,20 @@ async def chat_completions(
             headers=_SSE_HEADERS,
         )
 
-    # 5-b단계: 비스트리밍 요청 — 출력 BLOCK은 400, PASS는 ChatResponse
+    # 5-b단계: 비스트리밍 요청 — 출력 BLOCK도 OpenAI content_filter 규격으로
+    # HTTP 200 반환 (스트리밍 경로와 인터페이스 일치).
     if output_result.status == CheckStatus.BLOCK:
         logger.info(
             "[%s] 5단계 응답 전송: stream=False (BLOCK) 총 %.1fms",
             session_id,
             total_ms,
         )
-        raise HTTPException(
-            status_code=400,
-            detail=_block_message("output", output_result.reason),
+        return _build_block_response(
+            output_result,
+            stage="output",
+            chunk_id=chunk_id,
+            created=created,
+            model=model_name,
         )
 
     logger.info(

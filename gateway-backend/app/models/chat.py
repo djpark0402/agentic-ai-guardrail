@@ -115,6 +115,8 @@ class ChatResponse(BaseModel):
         model: 사용된 모델 이름.
         choices: 응답 선택지 목록.
         usage: 토큰 사용량 통계 (Solar 가 제공할 경우).
+        error: 가드레일 차단 시 첨부되는 비표준 error 블록. 정상 응답에서는
+            None 으로 두고, 직렬화 시 존재할 때만 노출된다.
     """
 
     id: str
@@ -123,3 +125,4 @@ class ChatResponse(BaseModel):
     model: str
     choices: list[ChatResponseChoice]
     usage: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None

@@ -197,10 +197,10 @@ def test_chat_completions_input_blocked_returns_400(
         app.dependency_overrides.clear()
 
 
-def test_chat_completions_output_blocked_returns_400(
+def test_chat_completions_output_blocked_returns_content_filter(
     mock_policy_service, mock_provider_router
 ):
-    """출력 검사가 BLOCK이면 HTTP 400을 반환한다."""
+    """출력 검사가 BLOCK이면 HTTP 200 + content_filter 응답을 반환한다."""
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(
         return_value=GuardrailResult(status=CheckStatus.PASS)
@@ -209,6 +209,10 @@ def test_chat_completions_output_blocked_returns_400(
         return_value=GuardrailResult(
             status=CheckStatus.BLOCK,
             reason="유해 콘텐츠 감지",
+            layer="L3",
+            severity="HIGH",
+            confidence=0.92,
+            tags=["harmful_content"],
         )
     )
 
@@ -225,8 +229,19 @@ def test_chat_completions_output_blocked_returns_400(
                 "messages": [{"role": "user", "content": "질문"}],
             },
         )
-        assert response.status_code == 400
-        assert "출력" in response.json()["detail"]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["object"] == "chat.completion"
+        assert data["choices"][0]["finish_reason"] == "content_filter"
+        assert data["choices"][0]["message"]["content"] == ""
+        err = data["error"]
+        assert err["type"] == "guardrail_block"
+        assert err["stage"] == "output"
+        assert "출력" in err["message"]
+        assert err["layer"] == "L3"
+        assert err["severity"] == "HIGH"
+        assert err["confidence"] == 0.92
+        assert err["tags"] == ["harmful_content"]
     finally:
         app.dependency_overrides.clear()
 
