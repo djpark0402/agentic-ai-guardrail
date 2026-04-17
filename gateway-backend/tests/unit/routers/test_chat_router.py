@@ -420,7 +420,9 @@ def test_streaming_uses_completion_metadata(client, mock_llm_service):
 def test_streaming_output_blocked_does_not_leak_content(
     mock_policy_service, mock_provider_router
 ):
-    """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않는다."""
+    """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않고, 레이어
+    메타데이터(layer/severity/confidence/tags)가 error 블록에 실린다.
+    """
     leaked = "비밀번호는 hunter2입니다"
     llm_svc = mock_provider_router.resolve.return_value[0]
     llm_svc.chat = AsyncMock(return_value=_make_completion(leaked))
@@ -433,6 +435,10 @@ def test_streaming_output_blocked_does_not_leak_content(
         return_value=GuardrailResult(
             status=CheckStatus.BLOCK,
             reason="민감 정보 감지",
+            layer="L4",
+            severity="HIGH",
+            confidence=0.88,
+            tags=["pii", "secret_leak"],
         )
     )
 
@@ -460,7 +466,13 @@ def test_streaming_output_blocked_does_not_leak_content(
         chunk = chunks[0]
         assert chunk["choices"][0]["finish_reason"] == "content_filter"
         assert chunk["choices"][0]["delta"] == {}
-        assert chunk.get("error", {}).get("type") == "guardrail_block"
+        err = chunk["error"]
+        assert err["type"] == "guardrail_block"
+        assert err["stage"] == "output"
+        assert err["layer"] == "L4"
+        assert err["severity"] == "HIGH"
+        assert err["confidence"] == 0.88
+        assert err["tags"] == ["pii", "secret_leak"]
     finally:
         app.dependency_overrides.clear()
 
