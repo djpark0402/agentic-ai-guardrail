@@ -158,15 +158,19 @@ def test_chat_completions_non_streaming_returns_200(client):
     )
 
 
-def test_chat_completions_input_blocked_returns_400(
+def test_chat_completions_input_blocked_returns_content_filter(
     mock_policy_service, mock_provider_router
 ):
-    """입력 검사가 BLOCK이면 HTTP 400을 반환한다."""
+    """입력 검사가 BLOCK이면 비스트리밍에서 HTTP 200 + content_filter 응답."""
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(
         return_value=GuardrailResult(
             status=CheckStatus.BLOCK,
             reason="프롬프트 인젝션 감지",
+            layer="L1",
+            severity="CRITICAL",
+            confidence=1.0,
+            tags=["prompt_injection"],
         )
     )
     blocked_svc.check_output = AsyncMock(
@@ -184,15 +188,68 @@ def test_chat_completions_input_blocked_returns_400(
             json={
                 "model": "solar-pro",
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": "악의적 프롬프트",
-                    }
+                    {"role": "user", "content": "악의적 프롬프트"},
                 ],
             },
         )
-        assert response.status_code == 400
-        assert "입력" in response.json()["detail"]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["choices"][0]["finish_reason"] == "content_filter"
+        assert data["choices"][0]["message"]["content"] == ""
+        err = data["error"]
+        assert err["type"] == "guardrail_block"
+        assert err["stage"] == "input"
+        assert "입력" in err["message"]
+        assert err["layer"] == "L1"
+        assert err["severity"] == "CRITICAL"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_completions_input_blocked_streaming_returns_sse(
+    mock_policy_service, mock_provider_router
+):
+    """입력 BLOCK + stream=True 는 SSE 로 content_filter 프레임만 방출."""
+    blocked_svc = MagicMock()
+    blocked_svc.check_input = AsyncMock(
+        return_value=GuardrailResult(
+            status=CheckStatus.BLOCK,
+            reason="프롬프트 인젝션 감지",
+            layer="L1",
+            severity="CRITICAL",
+        )
+    )
+    blocked_svc.check_output = AsyncMock(
+        return_value=GuardrailResult(status=CheckStatus.PASS)
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: blocked_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+
+    try:
+        c = TestClient(app)
+        response = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "악의적 프롬프트"}],
+                "stream": True,
+            },
+        )
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+
+        chunks = _parse_sse_chunks(response.text)
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk["choices"][0]["finish_reason"] == "content_filter"
+        assert chunk["choices"][0]["delta"] == {}
+        assert chunk["error"]["type"] == "guardrail_block"
+        assert chunk["error"]["stage"] == "input"
+        # 입력 차단은 LLM 호출 전에 발생 → chat() 이 호출되지 않아야 함
+        llm_svc = mock_provider_router.resolve.return_value[0]
+        llm_svc.chat.assert_not_awaited()
     finally:
         app.dependency_overrides.clear()
 

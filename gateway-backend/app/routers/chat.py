@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.config import Settings, get_settings
@@ -326,9 +326,10 @@ async def chat_completions(
         비스트리밍: ChatResponse JSON 응답.
         스트리밍: SSE StreamingResponse.
 
-    Raises:
-        HTTPException: 입력 검사 실패 시 400. (출력 검사 실패는 HTTP 200 +
-            OpenAI content_filter 응답 스키마로 반환)
+    Note:
+        입력/출력 가드레일 BLOCK 은 HTTP 200 + OpenAI content_filter 규격
+        (choices[].finish_reason="content_filter" + 비표준 error 블록) 으로
+        스트리밍·비스트리밍 모두 동일한 스키마로 내려간다.
     """
     session_id = str(uuid.uuid4())
     t_request = time.perf_counter()
@@ -370,9 +371,35 @@ async def chat_completions(
         input_result.status.value,
     )
     if input_result.status == CheckStatus.BLOCK:
-        raise HTTPException(
-            status_code=400,
-            detail=_block_message("input", input_result.reason),
+        # 입력 BLOCK — LLM 호출 전에 종료. 스트리밍/비스트리밍 모두 HTTP 200 +
+        # OpenAI content_filter 규격으로 응답하여 인터페이스를 단일화한다.
+        block_chunk_id = f"chatcmpl-{session_id}"
+        block_created = int(time.time())
+        block_model = request.model
+        logger.info(
+            "[%s] 2단계 입력 BLOCK 응답: stream=%s 총 %.1fms",
+            session_id,
+            request.stream,
+            (time.perf_counter() - t_request) * 1000,
+        )
+        if request.stream:
+            return StreamingResponse(
+                _stream_guardrail_block(
+                    input_result,
+                    stage="input",
+                    chunk_id=block_chunk_id,
+                    created=block_created,
+                    model=block_model,
+                ),
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
+        return _build_block_response(
+            input_result,
+            stage="input",
+            chunk_id=block_chunk_id,
+            created=block_created,
+            model=block_model,
         )
 
     # 3단계: 모델명 기반 provider 자동 감지 후 LLM 비스트리밍 호출
