@@ -22,7 +22,7 @@ from app.models.chat import (
     ChatResponseChoice,
     ChatResponseMessage,
 )
-from app.models.guardrail import CheckStatus
+from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
 from app.services.policy_service import PolicyService
 from app.services.provider_router import ProviderRouter
@@ -172,21 +172,68 @@ async def _stream_openai_chunks(
     yield "data: [DONE]\n\n"
 
 
+def _block_message(stage: str, reason: str | None) -> str:
+    """차단 응답에 사용할 사람이 읽을 메시지를 조립한다.
+
+    Args:
+        stage: 차단이 발생한 단계 ("input" 또는 "output").
+        reason: 레이어가 제공한 사유 문자열. None 이면 프리픽스만.
+
+    Returns:
+        `"<프리픽스>"` 또는 `"<프리픽스>: <사유>"` 형태의 문자열.
+    """
+    prefix = (
+        "입력 보안 검사 실패" if stage == "input" else "출력 보안 검사 실패"
+    )
+    return f"{prefix}: {reason}" if reason else prefix
+
+
+def _build_block_error(
+    result: GuardrailResult,
+    stage: str,
+) -> dict[str, Any]:
+    """차단 응답에 실릴 표준 error 객체를 조립한다.
+
+    스트리밍·비스트리밍·입력·출력 차단에서 공통으로 사용하여 응답 스키마를
+    단일화한다. LayerResult 에서 보존된 layer/severity/confidence/tags 를
+    그대로 노출한다.
+
+    Args:
+        result: BLOCK 판정이 담긴 GuardrailResult.
+        stage: "input" 또는 "output".
+
+    Returns:
+        OpenAI 비표준 error 블록 dict.
+    """
+    return {
+        "type": "guardrail_block",
+        "stage": stage,
+        "message": _block_message(stage, result.reason),
+        "layer": result.layer,
+        "reason": result.reason,
+        "severity": result.severity,
+        "confidence": result.confidence,
+        "tags": list(result.tags),
+    }
+
+
 async def _stream_guardrail_block(
-    reason: str | None,
+    result: GuardrailResult,
     *,
+    stage: str,
     chunk_id: str,
     created: int,
     model: str,
 ) -> AsyncGenerator[str]:
-    """출력 가드레일 BLOCK 시 OpenAI 규격 내에서 에러 프레임을 방출한다.
+    """가드레일 BLOCK 시 OpenAI 규격 내에서 에러 프레임을 방출한다.
 
     원본 LLM 응답은 절대 유출하지 않는다. finish_reason 은 OpenAI 모더레이션
-    관례대로 "content_filter" 로 세팅하고, 비표준 `error` 블록에 사유를 담아
-    LiteLLM 등 일부 클라이언트가 인식할 수 있게 한다.
+    관례대로 "content_filter" 로 세팅하고, 비표준 `error` 블록에 사유와 레이어
+    메타데이터를 담아 LiteLLM 등 일부 클라이언트가 인식할 수 있게 한다.
 
     Args:
-        reason: BLOCK 사유 문자열.
+        result: BLOCK 판정이 담긴 GuardrailResult.
+        stage: "input" 또는 "output".
         chunk_id: 스트림 응답 ID.
         created: Unix timestamp.
         model: 응답 모델 이름.
@@ -194,9 +241,6 @@ async def _stream_guardrail_block(
     Yields:
         단일 에러 chunk 프레임과 종료 마커.
     """
-    message = (
-        f"출력 보안 검사 실패: {reason}" if reason else "출력 보안 검사 실패"
-    )
     yield _format_sse_frame(
         _build_chunk(
             chunk_id=chunk_id,
@@ -204,12 +248,7 @@ async def _stream_guardrail_block(
             model=model,
             delta={},
             finish_reason="content_filter",
-            extra={
-                "error": {
-                    "type": "guardrail_block",
-                    "message": message,
-                }
-            },
+            extra={"error": _build_block_error(result, stage)},
         )
     )
     yield "data: [DONE]\n\n"
@@ -290,7 +329,7 @@ async def chat_completions(
     if input_result.status == CheckStatus.BLOCK:
         raise HTTPException(
             status_code=400,
-            detail=f"입력 보안 검사 실패: {input_result.reason}",
+            detail=_block_message("input", input_result.reason),
         )
 
     # 3단계: 모델명 기반 provider 자동 감지 후 LLM 비스트리밍 호출
@@ -349,7 +388,8 @@ async def chat_completions(
             )
             return StreamingResponse(
                 _stream_guardrail_block(
-                    output_result.reason,
+                    output_result,
+                    stage="output",
                     chunk_id=chunk_id,
                     created=created,
                     model=model_name,
@@ -383,7 +423,7 @@ async def chat_completions(
         )
         raise HTTPException(
             status_code=400,
-            detail=f"출력 보안 검사 실패: {output_result.reason}",
+            detail=_block_message("output", output_result.reason),
         )
 
     logger.info(
