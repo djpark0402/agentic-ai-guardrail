@@ -138,7 +138,7 @@ describe('InternalApiKeysPage', () => {
 
     renderPage();
     await screen.findByText('gw-prod-01');
-    await userEvent.click(screen.getByRole('button', { name: '폐기' }));
+    await userEvent.click(screen.getByRole('button', { name: 'gw-prod-01 폐기' }));
 
     expect(confirmSpy).toHaveBeenCalled();
     await waitFor(() => {

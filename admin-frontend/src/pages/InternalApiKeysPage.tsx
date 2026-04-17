@@ -80,7 +80,7 @@ export function InternalApiKeysPage() {
     try {
       const body: Record<string, unknown> = { name: draftName.trim() };
       if (draftDesc.trim()) body.description = draftDesc.trim();
-      if (draftExpires) body.expiresAt = new Date(draftExpires).toISOString();
+      if (draftExpires) body.expiresAt = `${draftExpires}T23:59:59Z`;
 
       const res = await fetch(API, {
         method: 'POST',
@@ -145,7 +145,14 @@ export function InternalApiKeysPage() {
           <button
             type="button"
             className="btn btn--primary"
-            onClick={() => setShowForm((s) => !s)}
+            onClick={() => {
+              if (showForm) {
+                setDraftName('');
+                setDraftDesc('');
+                setDraftExpires('');
+              }
+              setShowForm((s) => !s);
+            }}
           >
             {showForm ? '취소' : '+ 새 키'}
           </button>
@@ -221,6 +228,7 @@ export function InternalApiKeysPage() {
                       <button
                         type="button"
                         className="btn btn--sm btn--danger"
+                        aria-label={`${key.name} 폐기`}
                         onClick={() => handleRevoke(key)}
                       >
                         폐기
