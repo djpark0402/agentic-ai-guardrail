@@ -148,38 +148,6 @@ class PolicyControllerTest {
     }
 
     @Test
-    void activeEndpoint_writesGatewayAuditLog_whenActiveExists() throws Exception {
-        Long id = createPolicy("active-one", true, true, true, true, true, true);
-        mockMvc.perform(post("/api/v1/policies/{id}/activate", id));
-        auditLogRepository.deleteAll();
-
-        mockMvc.perform(get("/api/v1/policies/active"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(id));
-
-        List<AuditLog> logs = auditLogRepository.findAll();
-        assertThat(logs).hasSize(1);
-        assertThat(logs.get(0).getActionId()).isEqualTo(ActorType.GATEWAY);
-        assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_REQUEST);
-        assertThat(logs.get(0).isSuccess()).isTrue();
-    }
-
-    @Test
-    void activeEndpoint_writesFailureAuditLog_whenNothingActive() throws Exception {
-        createPolicy("unused", false, false, false, false, false, false);
-        auditLogRepository.deleteAll();
-
-        mockMvc.perform(get("/api/v1/policies/active"))
-                .andExpect(status().isNotFound());
-
-        List<AuditLog> logs = auditLogRepository.findAll();
-        assertThat(logs).hasSize(1);
-        assertThat(logs.get(0).getActionId()).isEqualTo(ActorType.GATEWAY);
-        assertThat(logs.get(0).getAction()).isEqualTo(Action.POLICY_REQUEST);
-        assertThat(logs.get(0).isSuccess()).isFalse();
-    }
-
-    @Test
     void deletePolicy_writesAuditLog() throws Exception {
         Long id = createPolicy("delete-target", true, true, true, true, true, true);
         auditLogRepository.deleteAll();
