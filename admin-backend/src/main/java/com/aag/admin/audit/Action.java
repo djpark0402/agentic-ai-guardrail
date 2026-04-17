@@ -6,7 +6,10 @@ public enum Action {
     POLICY_CREATE("정책 생성"),
     POLICY_UPDATE("정책 수정"),
     POLICY_DELETE("정책 삭제"),
-    POLICY_ACTIVATE("정책 활성화");
+    POLICY_ACTIVATE("정책 활성화"),
+    APIKEY_CREATE("내부 API 키 생성"),
+    APIKEY_REVOKE("내부 API 키 폐기"),
+    APIKEY_AUTH("Gateway 인증 시도");
 
     private final String description;
 
