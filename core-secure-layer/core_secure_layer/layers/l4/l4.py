@@ -227,15 +227,17 @@ class L4Layer(BaseLayer):
         )
         # cross-encoder 출력: 2차원 [[ent, neu, con]]
         arr = np.array(scores)
+        # config.json id2label: 0=contradiction, 1=neutral, 2=entailment
+        # 이므로 contradiction 확률은 softmax 결과의 인덱스 0 을 사용한다.
         if arr.ndim == 2:
-            # softmax 적용 후 contradiction(인덱스 2) 추출
+            # softmax 적용 후 contradiction(인덱스 0) 추출
             exp = np.exp(arr[0] - np.max(arr[0]))
             probs = exp / exp.sum()
-            return float(probs[2])
+            return float(probs[0])
         if arr.ndim == 1 and len(arr) >= 3:
             exp = np.exp(arr - np.max(arr))
             probs = exp / exp.sum()
-            return float(probs[2])
+            return float(probs[0])
         return float(arr.flat[0])
 
     def _search_policies(self, text: str) -> list[dict[str, str]]:
@@ -347,7 +349,7 @@ class L4Layer(BaseLayer):
             if data.get("violated", False):
                 return "BLOCK"
             return "ALLOW"
-        except _json.JSONDecodeError, AttributeError:
+        except (_json.JSONDecodeError, AttributeError):  # fmt: skip
             # JSON 파싱 실패 → 텍스트에서 판단
             upper = raw.upper()
             if '"VIOLATED": TRUE' in upper:
