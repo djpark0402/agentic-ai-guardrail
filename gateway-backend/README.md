@@ -58,6 +58,27 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 > `choices[0].finish_reason == "content_filter"` 또는
 > `error.type == "guardrail_block"` 검사로 이행해야 한다.
 
+#### 가드레일 입력 범위
+
+입력 검사는 `messages` 배열 **전체**의 텍스트 본문을 순서대로 `\n\n` 으로
+이어 붙여 L1~L6 에 한 번에 전달한다. 마지막 `user` 메시지 한 건만 검사하는
+방식이 아니므로 다음 시나리오가 함께 탐지된다.
+
+- **멀티턴 공격**: 이전 턴에 페이로드를 심고 마지막 턴은 정상처럼 위장하는 공격.
+- **`system` 프롬프트 오염**: 사용자가 system 자리에 악성 지시를 주입하려는 시도.
+- **`tool` 메시지 오염**: 도구 응답 content 에 포함된 악성 페이로드.
+
+현재 검사 대상이 **아닌** 항목(추후 확장 여지):
+
+- 요청 바디의 `tools` / `tool_choice` 정의 자체 (tool description injection).
+- assistant 메시지의 구조화된 `tool_calls`(함수 이름/인자).
+- 멀티모달 content 의 `image_url` 등 non-text part.
+
+> **참고**: role 라벨은 직렬화 문자열에 포함하지 않는다. L5 한국어 PII NER 가
+> 영문 `user` / `system` 토큰을 `login_id` 로 오탐하는 이슈가 있어 텍스트
+> 본문만 이어 붙인다. L1~L6 은 role 기반 분기를 하지 않으므로 검사 정확도에
+> 영향이 없다.
+
 #### 관찰 모드 (`CONTINUE_ON_LAYER_FAILURE=true`)
 
 데모용 대체 경로다. 이 환경변수를 `true` 로 두면 가드레일 레이어가 BLOCK 을
