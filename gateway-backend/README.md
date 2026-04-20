@@ -96,11 +96,55 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 > 관찰 모드는 **보안 기능을 무력화**한다. 실제 운영에서는 절대 켜지 말고,
 > 플레이그라운드/데모/디버깅 용도로만 사용할 것.
 
-### 정책 조회 & 레이어 게이팅
+### 사용자 요청 헤더 검증 + 정책 조회
 
-요청마다 `${ADMIN_BACKEND_URL}/api/v1/policies/active` 를 `GET` 으로 호출하여
-현재 활성 정책을 가져오고, 응답의 `l1Enabled`..`l6Enabled` 플래그에 따라
-`core-secure-layer` 가 해당 레이어(L1~L6)에 대해서만 검사를 수행한다.
+클라이언트는 `/v1/chat/completions` 호출 시 4개 추가 헤더를 반드시 함께
+전송해야 한다.
+
+| 헤더 | 설명 |
+|---|---|
+| `X-API-Key` | 사용자가 ADMIN 에게 미리 발급받은 API Key. |
+| `X-Timestamp` | Unix epoch 초(ms 아님). 서버 시각과 `REQUEST_TIMESTAMP_SKEW_SEC`(기본 300초) 이상 차이가 나면 차단. |
+| `X-Nonce` | 요청마다 유일한 랜덤 문자열. 재연(replay) 방지용. |
+| `X-Signature` | `HMAC-SHA256(SECRET, "{timestamp}.{nonce}.{sha256(body)}")` 의 소문자 hex 64자. |
+
+게이트웨이는 다음 순서로 요청을 처리한다.
+
+1. **로컬 검증** — `X-Timestamp` skew 확인 후, in-memory `NonceStore` 로
+   재연 여부를 확인한다. 실패 시 즉시 **HTTP 401** 응답:
+
+   ```json
+   {
+     "error": {
+       "type": "header_verification_failed",
+       "reason": "X-Timestamp 시간차가 허용 범위(300초)를 초과했습니다"
+     }
+   }
+   ```
+
+2. **ADMIN 위임 검증 + 정책 조회** — `${ADMIN_BACKEND_URL}/api/v1/gateway/verify`
+   로 다음 body 를 `POST` 한다. 헤더에는 게이트웨이 자신의 `ADMIN_API_KEY`
+   가 `X-API-Key` 로 실린다.
+
+   ```json
+   {
+     "apiKey": "<사용자 X-API-Key 그대로>",
+     "timestamp": "<사용자 X-Timestamp 그대로>",
+     "nonce": "<사용자 X-Nonce 그대로>",
+     "bodyHash": "sha256(요청 body) hex 64자",
+     "signature": "<사용자 X-Signature 그대로>"
+   }
+   ```
+
+   서명 검증 자체는 ADMIN 이 수행한다. ADMIN 이 통과시키면 현재 활성
+   정책(`l1Enabled`..`l6Enabled`) 을 반환하고, 게이트웨이는 그 플래그에
+   따라 `core-secure-layer` L1~L6 를 선택적으로 실행한다. 4xx/5xx 가
+   돌아오면 예외가 전파되어 해당 요청은 실패 처리된다.
+
+`SKIP_HEADER_VERIFICATION=true` 로 두면 4개 헤더 검증을 건너뛴다. 이 경우
+헤더가 없는 빈 문자열 값이 ADMIN 으로 전달되므로 ADMIN 이 4xx 를 낼 수
+있다. 정책 조회까지 완전히 우회하려면 `SKIP_POLICY_FETCH=true` 를
+함께 설정한다. 두 플래그는 독립 동작한다.
 
 | 레이어 | 의미 |
 |---|---|
@@ -131,21 +175,32 @@ admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전�
 
 ### 요청 예시
 
+모든 요청에는 4개 검증 헤더(`X-API-Key` / `X-Timestamp` / `X-Nonce` /
+`X-Signature`) 가 필요하다. 로컬에서 검증을 우회하려면
+`SKIP_HEADER_VERIFICATION=true` 로 서버를 띄운다.
+
 ```bash
-# Solar (기본값 — 접두사 불필요)
+# 정상 경로 (검증 헤더 포함)
+API_KEY="uak_xxx"
+SECRET="..."                 # ADMIN 이 사용자에게 발급한 서명 시크릿
+TS=$(date +%s); NONCE=$(uuidgen)
+BODY='{"model":"solar-pro","messages":[{"role":"user","content":"안녕"}]}'
+BODY_HASH=$(printf "%s" "$BODY" | shasum -a 256 | cut -d' ' -f1)
+SIG=$(printf "%s.%s.%s" "$TS" "$NONCE" "$BODY_HASH" \
+      | openssl dgst -sha256 -hmac "$SECRET" -r | cut -d' ' -f1)
+
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model": "solar-pro", "messages": [{"role": "user", "content": "안녕"}]}'
+  -H "X-API-Key: $API_KEY" \
+  -H "X-Timestamp: $TS" \
+  -H "X-Nonce: $NONCE" \
+  -H "X-Signature: $SIG" \
+  --data "$BODY"
 
-# OpenAI (모델명 자동 감지)
+# SKIP_HEADER_VERIFICATION=true 로 띄운 로컬 개발 서버에서 헤더 없이 호출
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "안녕"}]}'
-
-# Ollama (ollama/ 접두사 명시)
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "ollama/gemma3:12b", "messages": [{"role": "user", "content": "안녕"}]}'
 ```
 
 `stream: true`로 요청하면 `text/event-stream` 응답이 반환되며,
@@ -191,7 +246,10 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 - `OLLAMA_BASE_URL` — Ollama 엔드포인트 (기본 `http://localhost:11434/v1`). API 키 불필요. `ollama/모델명` 형식으로 요청.
 
 **공통**
-- `ADMIN_BACKEND_URL` — 정책 조회용 admin-backend 주소
+- `ADMIN_BACKEND_URL` — 검증·정책 조회용 admin-backend 주소
+- `ADMIN_API_KEY` — admin-backend `/api/v1/gateway/verify` 호출 시 게이트웨이가 `X-API-Key` 헤더로 제시할 키. 사용자의 `X-API-Key` 와는 별개 (기본 빈 값 = 헤더 미전송)
+- `REQUEST_TIMESTAMP_SKEW_SEC` — `X-Timestamp` 허용 오차(초). 기본 `300` (5분)
+- `SKIP_HEADER_VERIFICATION` — `true`로 설정하면 사용자 4개 헤더 검증을 건너뛴다. 로컬·데모용이며 `SKIP_POLICY_FETCH` 와 독립 동작 (기본 `false`)
 - `SKIP_POLICY_FETCH` — `true`로 설정하면 admin-backend 정책 조회를 생략하고 **L1~L6 전체 레이어를 강제 실행**. admin-backend 없이 로컬 풀 파이프라인을 검증할 때 사용 (기본 `false`)
 - `CONTINUE_ON_LAYER_FAILURE` — `true`로 설정하면 가드레일이 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에 `guardrail_reports` 블록을 첨부한다(**관찰 모드**, 위 섹션 참고). 데모·디버깅 전용이며 운영에서는 사용 금지 (기본 `false`)
 
@@ -215,7 +273,8 @@ app/
 │   ├── security_layer_service.py  # core-secure-layer 연동 보안 검사
 │   ├── layer_registry.py      # policy index → core layer 싱글턴 매핑
 │   ├── guardrail_converter.py # gateway ↔ core 타입 변환
-│   └── policy_service.py
+│   ├── request_verifier.py    # 사용자 헤더·timestamp·nonce·bodyHash 검증
+│   └── policy_service.py      # ADMIN /api/v1/gateway/verify 위임 호출
 └── static/
     └── index.html       # 플레이그라운드 페이지
 tests/unit/              # pytest 단위 테스트
