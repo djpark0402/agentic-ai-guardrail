@@ -165,6 +165,53 @@ async def test_verify_and_fetch_policy_raises_on_http_error():
         )
 
 
+async def test_verify_and_fetch_policy_unwraps_policy_envelope():
+    """응답이 `policy` 키에 감싸서 내려오는 envelope 구조도 파싱한다."""
+    wrapped = {
+        "valid": True,
+        "clientName": "테스트 클라이언트",
+        "policy": {
+            "isUse": True,
+            "l1Enabled": True,
+            "l2Enabled": True,
+            "l3Enabled": True,
+            "l4Enabled": True,
+            "l5Enabled": True,
+            "l6Enabled": True,
+        },
+    }
+    service = _make_service(lambda _req: httpx.Response(200, json=wrapped))
+    policy = await service.verify_and_fetch_policy(
+        session_id="s",
+        headers=_SAMPLE_HEADERS,
+        body_hash=_SAMPLE_BODY_HASH,
+    )
+    assert isinstance(policy, GuardrailPolicy)
+    assert policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
+
+
+async def test_verify_and_fetch_policy_unwraps_unknown_envelope_key():
+    """envelope 키 이름이 미리 정의된 목록에 없어도 중첩된 정책을 찾아낸다."""
+    wrapped = {
+        "valid": True,
+        "someCustomKey": {
+            "l1Enabled": False,
+            "l2Enabled": True,
+            "l3Enabled": True,
+            "l4Enabled": False,
+            "l5Enabled": True,
+            "l6Enabled": False,
+        },
+    }
+    service = _make_service(lambda _req: httpx.Response(200, json=wrapped))
+    policy = await service.verify_and_fetch_policy(
+        session_id="s",
+        headers=_SAMPLE_HEADERS,
+        body_hash=_SAMPLE_BODY_HASH,
+    )
+    assert policy.enabled_layers() == [2, 3, 5]
+
+
 async def test_verify_and_fetch_policy_logs_session_id(caplog):
     """세션 ID 가 로그에 기록된다."""
     service = _make_service(
