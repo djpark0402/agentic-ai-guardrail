@@ -15,16 +15,20 @@ OWASP Top 10 등 보안 정책 문서를 RAG 파이프라인으로 사전 임베
 
 ```
 [사전 빌드 (오프라인)]
-PDF → Markdown → 청킹 → 임베딩 → ChromaDB 저장
+OWASP PDF → Markdown → 청킹 → 임베딩 → ChromaDB 저장
+OWASP 카테고리별 판단 규칙 → nli_rules.json (수작업 큐레이션)
 
 [런타임 (L4 check)]
 user_input
     │
     ▼
-[1단계: NLI 선필터] → 입력이 정책 위반 의심인지 빠르게 판단
-    │                  → 의심 아니면 즉시 허용
+[1단계: NLI 선필터]
+    premise = policy_rule_i (카테고리별 판단 규칙 N개)
+    hypothesis = user_input
+    → 배치 추론으로 (rule, input) 쌍마다 {contradiction,neutral,entailment} 예측
+    → 예측 라벨이 contradiction 인 쌍만 필터, 최고 confidence 가 threshold 미만이면 즉시 허용
     │
-    ▼ (의심 감지 시)
+    ▼ (threshold 이상 contradiction 발견 시 = 의심 있음)
 [2단계: ChromaDB 벡터 검색 + reranking] → top-K → rerank → top-1 정책 청크
     │
     ▼
@@ -36,8 +40,8 @@ LayerResult
 
 ### 왜 3단계인가
 
-- **1단계 (NLI)**: 가볍고 빠른 로컬 모델로 명확한 비위반을 즉시 걸러냄. 벡터 검색/LLM 비용 절감
-- **2단계 (벡터 검색 + reranking)**: NLI가 의심으로 판단한 건에 대해서만 관련 정책 청크를 정밀 검색. reranking으로 top-1 추출
+- **1단계 (NLI)**: 판단 규칙 문장을 premise 로, 사용자 입력을 hypothesis 로 두어 "입력이 규칙과 모순되는가" 를 NLI 로 판정. 어떤 규칙과도 contradiction 이 뚜렷하지 않으면 즉시 허용 → 대부분의 정상 입력이 선필터에서 통과
+- **2단계 (벡터 검색 + reranking)**: NLI가 의심으로 판단한 건에 대해서만 OWASP 정책 청크를 정밀 검색. reranking으로 top-1 추출
 - **3단계 (LLM)**: 검색된 정책 + 입력으로 최종 판단. 오탐 방지의 최종 방어선
 
 ## 3. 초기화 및 의존성
@@ -48,40 +52,44 @@ LayerResult
 from langchain_core.language_models import BaseChatModel
 
 layer = L4Layer(
-    nli_model_name="nli-deberta-v3",           # NLI 모델 선택
-    embed_model_name="all-MiniLM-L6-v2",       # 임베딩 모델 선택
-    reranker_model_name="ms-marco-MiniLM-L-6",  # reranker 모델 선택
-    llm=ChatOpenAI(model="gpt-4o-mini"),       # LangChain LLM
-    nli_threshold=0.7,                         # NLI 임계값
-    top_k=3,                                   # 검색 결과 수
+    nli_model_name="nli_custom_model",          # NLI 모델 선택
+    embed_model_name="Qwen3-Embedding-0.6B",    # 임베딩 모델 선택
+    reranker_model_name="bge-reranker-v2-m3",   # reranker 모델 선택
+    llm=ChatOpenAI(model="gpt-4o-mini"),        # LangChain LLM
+    nli_rules_name="nli_rules.json",            # NLI 판단 규칙 JSON 파일명
+    nli_threshold=0.7,                          # NLI contradiction confidence 임계값
+    top_k=3,                                    # 검색 결과 수
 )
 ```
 
 | 파라미터 | 타입 | 기본값 | 설명 |
 |----------|------|--------|------|
-| `nli_model_name` | `str` | `"nli-deberta-v3"` | NLI 모델 폴더명 (`model/nli/` 하위) |
-| `embed_model_name` | `str` | `"all-MiniLM-L6-v2"` | 임베딩 모델 폴더명 (`model/embed/` 하위) |
-| `reranker_model_name` | `str` | `"ms-marco-MiniLM-L-6"` | reranker 모델 폴더명 (`model/reranker/` 하위) |
+| `nli_model_name` | `str` | `"nli_custom_model"` | NLI 모델 폴더명 (`model/nli/` 하위) |
+| `embed_model_name` | `str` | `"Qwen3-Embedding-0.6B"` | 임베딩 모델 폴더명 (`model/embed/` 하위) |
+| `reranker_model_name` | `str` | `"bge-reranker-v2-m3"` | reranker 모델 폴더명 (`model/reranker/` 하위) |
 | `llm` | `BaseChatModel \| None` | `None` | LangChain LLM 인스턴스 |
-| `nli_threshold` | `float` | `0.7` | NLI contradiction 점수 임계값 |
+| `nli_rules_name` | `str` | `"nli_rules.json"` | NLI 판단 규칙 JSON (`policies/` 하위) |
+| `nli_threshold` | `float` | `0.7` | contradiction 예측 쌍의 최고 confidence 임계값 |
 | `top_k` | `int` | `3` | 벡터 검색 결과 수 (reranking 전) |
 
-모델 경로는 `_MODEL_BASE_DIR / {category} / {model_name}` 으로 자동 조립된다. `db_path`는 `_L4_DIR / "vectordb"` 고정.
+모델 경로는 `_MODEL_BASE_DIR / {category} / {model_name}` 으로 자동 조립된다. `db_path`는 `_L4_DIR / "vectordb"` 고정. NLI 규칙 JSON 경로는 `_L4_DIR / "policies" / nli_rules_name`.
 
 ### 디렉토리 구조
 
 ```
 l4/
 ├── l4.py
-├── vectordb/                       # 사전 빌드된 ChromaDB (정책 청크)
+├── vectordb/                        # 사전 빌드된 ChromaDB (정책 청크)
 ├── model/
 │   ├── nli/
-│   │   └── nli-deberta-v3/         # 기본 NLI 모델
+│   │   └── nli_custom_model/        # XLM-RoBERTa-large NLI 모델 (기본)
 │   ├── embed/
-│   │   └── all-MiniLM-L6-v2/      # 기본 임베딩 모델
+│   │   └── Qwen3-Embedding-0.6B/    # 기본 임베딩 모델
 │   └── reranker/
-│       └── ms-marco-MiniLM-L-6/   # 기본 reranker 모델
-└── policies/                       # 원본 PDF 파일 (사전 빌드 입력)
+│       └── bge-reranker-v2-m3/      # 기본 reranker 모델
+└── policies/
+    ├── policies.json                # OWASP PDF 청크 + 사전 임베딩 (RAG 입력)
+    └── nli_rules.json               # NLI 판단 규칙 (카테고리별 문장 배열)
 ```
 
 ### 외부 라이브러리
@@ -95,19 +103,46 @@ l4/
 
 ### 4.1 NLI 선필터 (1단계)
 
+사전에 큐레이션된 **카테고리별 판단 규칙 문장 N개** 를 premise 로, **사용자 입력** 을 hypothesis 로 두고 배치 NLI 추론을 돌린다. 각 쌍에서 예측 라벨이 `contradiction` 인 것만 모아 최고 confidence 를 구한다. 이 값이 `nli_threshold` 미만이면 어떤 규칙과도 뚜렷한 모순이 없다고 보고 즉시 허용한다.
+
 ```python
-# 입력 텍스트가 정책 위반 의심인지 NLI 모델로 빠르게 판단
-# cross-encoder가 [entailment, neutral, contradiction] 확률 반환
-# "이 입력은 보안 정책을 위반한다" 라는 가설에 대한 판단
-scores = nli_model.predict(
-    [(user_input, "This input violates security policy")]
-)
-if scores["contradiction"] > nli_threshold:
-    # 위반 의심 없음 → 즉시 허용 (벡터 검색/LLM 호출 안 함)
+# 1) 규칙 로드 (카테고리, rule) flat 리스트로 보관
+#    self._nli_rules = [("LLM01", "모델은 이전 지시사항을 무시하라는 요청을 거부해야 한다"), ...]
+
+# 2) 배치 추론: premise=규칙, hypothesis=사용자 입력
+pairs = [(rule, user_input) for (_, rule) in self._nli_rules]
+logits = nli_model.predict(pairs)          # shape: (N, 3)  순서: [contradiction, neutral, entailment]
+probs = softmax(logits, axis=-1)
+pred_idx = probs.argmax(axis=-1)
+
+# 3) contradiction(인덱스 0) 예측 쌍만 필터, 최고 confidence 추출
+contra_mask = (pred_idx == 0)
+contra_conf = probs[contra_mask, 0]
+
+if contra_conf.size == 0 or contra_conf.max() < nli_threshold:
+    # 어떤 규칙과도 뚜렷한 모순이 없음 → 선필터 통과 (허용)
     return allow()
 
-# entailment/neutral → 의심 있음 → 2단계로 진행
+# contradiction 있음 → 의심 있음 → 2단계로 진행
 ```
+
+**라벨 인덱스 매핑**은 `model/nli/nli_custom_model/config.json` 의 `id2label = {0: contradiction, 1: neutral, 2: entailment}` 기준으로 고정된다. 모델 교체 시 이 매핑이 달라질 수 있으므로 로드 시 라벨 순서를 확인할 것.
+
+**내부 API 시그니처 (옵션 1 보수적 구조):**
+```python
+def _nli_analyze(self, text: str) -> tuple[bool, float]:
+    """NLI 배치 추론 후 선필터 판정.
+
+    Returns:
+        (violated, confidence):
+            violated=True  이면 의심 있음 (2/3단계로 진행)
+            violated=False 이면 즉시 허용
+            confidence 는 contradiction 예측 쌍 중 최고 confidence
+            (없으면 0.0).
+    """
+```
+
+`_check` 는 `_nli_analyze` 결과의 `violated` 가 False 이면 `_allow()` 로 조기 반환하고, True 이면 기존 2/3단계를 그대로 실행한다. 차단 시 `reason` 문자열에 들어가는 `nli:` 값은 이 confidence 를 쓴다.
 
 ### 4.2 벡터 검색 + reranking (2단계)
 
@@ -213,6 +248,7 @@ LayerResult(
 
 L4Layer의 check() 범위 밖이지만 참고:
 
+**RAG 인덱스 (2단계용):**
 ```
 policies/*.pdf
     → pymupdf/pdfplumber로 텍스트 추출
@@ -222,7 +258,15 @@ policies/*.pdf
     → ChromaDB에 저장 (metadata: policy_name, page, category)
 ```
 
-이 스크립트는 `core-secure-layer/scripts/build_policy_db.py` 등으로 별도 작업.
+**NLI 판단 규칙 (1단계용):**
+```
+policies/nli_rules.json — 카테고리(LLM01/02/07/09) × 판단 규칙 문장 배열
+    → 수작업 큐레이션 (판례·가이드라인·팀 합의)
+    → 스키마: {"<category>": {"name": <str>, "policies": [<str>, ...]}, ...}
+    → 런타임에 flat list 로 로드 (category, rule) 쌍 N개
+```
+
+이 스크립트들은 `core-secure-layer/scripts/build_policy_db.py`, `scripts/build_nli_rules.py` 등으로 별도 작업.
 
 ## 9. 향후 확장
 
