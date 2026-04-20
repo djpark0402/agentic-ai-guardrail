@@ -58,6 +58,44 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 > `choices[0].finish_reason == "content_filter"` 또는
 > `error.type == "guardrail_block"` 검사로 이행해야 한다.
 
+#### 관찰 모드 (`CONTINUE_ON_LAYER_FAILURE=true`)
+
+데모용 대체 경로다. 이 환경변수를 `true` 로 두면 가드레일 레이어가 BLOCK 을
+내려도 파이프라인을 **끝까지 실행**(LLM 호출 + 후속 레이어 + 원본 응답 전송)
+하고, 응답에 레이어별 판정 내역을 담은 **`guardrail_reports` 블록**을
+첨부한다. 차단 응답(`content_filter` + `error`)은 내려가지 않는다.
+
+비스트리밍 응답 예시 (정상 200):
+
+```json
+{
+  "id": "chatcmpl-<session-id>",
+  "object": "chat.completion",
+  "choices": [{
+    "index": 0,
+    "message": {"role": "assistant", "content": "안녕하세요! 무엇을 도와드릴까요?"},
+    "finish_reason": "stop"
+  }],
+  "usage": {...},
+  "guardrail_reports": {
+    "mode": "observe",
+    "input": [
+      {"layer": "L1", "status": "block", "reason": "prompt injection pattern matched", "severity": "HIGH", "confidence": 0.91, "tags": ["prompt_injection"]},
+      {"layer": "L3", "status": "pass"}
+    ],
+    "output": [
+      {"layer": "L2", "status": "pass"}
+    ]
+  }
+}
+```
+
+스트리밍에서도 content 는 그대로 재방출되고, 마지막 finish 프레임에 동일한
+`guardrail_reports` 블록이 추가 필드로 실린다.
+
+> 관찰 모드는 **보안 기능을 무력화**한다. 실제 운영에서는 절대 켜지 말고,
+> 플레이그라운드/데모/디버깅 용도로만 사용할 것.
+
 ### 정책 조회 & 레이어 게이팅
 
 요청마다 `${ADMIN_BACKEND_URL}/api/v1/policies/active` 를 `GET` 으로 호출하여
@@ -155,6 +193,7 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 **공통**
 - `ADMIN_BACKEND_URL` — 정책 조회용 admin-backend 주소
 - `SKIP_POLICY_FETCH` — `true`로 설정하면 admin-backend 정책 조회를 생략하고 **L1~L6 전체 레이어를 강제 실행**. admin-backend 없이 로컬 풀 파이프라인을 검증할 때 사용 (기본 `false`)
+- `CONTINUE_ON_LAYER_FAILURE` — `true`로 설정하면 가드레일이 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에 `guardrail_reports` 블록을 첨부한다(**관찰 모드**, 위 섹션 참고). 데모·디버깅 전용이며 운영에서는 사용 금지 (기본 `false`)
 
 > `.env` 파일은 **절대 커밋하지 않는다.** 새 환경 변수가 필요하면
 > `.env.example`에 먼저 추가한다.
