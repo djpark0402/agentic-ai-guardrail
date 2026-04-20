@@ -2,6 +2,7 @@ import { Routes, Route, Navigate, NavLink } from 'react-router-dom';
 import { LayerSettingsPage } from '@/pages/LayerSettingsPage';
 import { AuditLogPage } from '@/pages/AuditLogPage';
 import { InternalApiKeysPage } from '@/pages/InternalApiKeysPage';
+import { AgentApiKeysPage } from '@/pages/AgentApiKeysPage';
 
 export function App() {
   return (
@@ -30,6 +31,12 @@ export function App() {
         >
           Internal API 키
         </NavLink>
+        <NavLink
+          to="/admin/agent-api-keys"
+          className={({ isActive }) => `app-sidebar__item${isActive ? ' active' : ''}`}
+        >
+          Agent API 키
+        </NavLink>
       </aside>
       <main className="app-main">
         <Routes>
@@ -37,6 +44,7 @@ export function App() {
           <Route path="/admin/layers" element={<LayerSettingsPage />} />
           <Route path="/admin/audit-logs" element={<AuditLogPage />} />
           <Route path="/admin/internal-api-keys" element={<InternalApiKeysPage />} />
+          <Route path="/admin/agent-api-keys" element={<AgentApiKeysPage />} />
         </Routes>
       </main>
     </div>
