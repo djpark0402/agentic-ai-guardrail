@@ -9,7 +9,10 @@ public enum Action {
     POLICY_ACTIVATE("정책 활성화"),
     APIKEY_CREATE("내부 API 키 생성"),
     APIKEY_REVOKE("내부 API 키 폐기"),
-    APIKEY_AUTH("Gateway 인증 시도");
+    APIKEY_AUTH("Gateway 인증 시도"),
+    AGENT_KEY_CREATE("Agent API 키 생성"),
+    AGENT_KEY_REVOKE("Agent API 키 폐기"),
+    AGENT_AUTH("Agent 서명 검증");
 
     private final String description;
 
