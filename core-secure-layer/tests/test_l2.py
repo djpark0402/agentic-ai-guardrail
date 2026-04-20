@@ -9,6 +9,8 @@ from core_secure_layer.layers.types import (
 # 테스트용 더미 모델 경로 상수
 _FAKE_MODEL_PATH = "tests/fixtures/fake-gpt2"
 _DEFAULT_THRESHOLD = 600.0
+_DEFAULT_ENTROPY_LOW = 1.5
+_DEFAULT_ENTROPY_HIGH = 5.5
 
 
 @pytest.fixture
@@ -18,6 +20,8 @@ def layer():
     inst.name = "L2"
     inst.model_path = _FAKE_MODEL_PATH
     inst.ppl_threshold = _DEFAULT_THRESHOLD
+    inst.entropy_low = _DEFAULT_ENTROPY_LOW
+    inst.entropy_high = _DEFAULT_ENTROPY_HIGH
     return inst
 
 
@@ -32,6 +36,8 @@ def layer_with_ppl():
     inst.name = "L2"
     inst.model_path = _FAKE_MODEL_PATH
     inst.ppl_threshold = _DEFAULT_THRESHOLD
+    inst.entropy_low = _DEFAULT_ENTROPY_LOW
+    inst.entropy_high = _DEFAULT_ENTROPY_HIGH
     inst._model_loaded = True
     return inst
 
@@ -380,4 +386,522 @@ class TestFailOpen:
             metadata=None,
         )
         result = await layer.check(req)
+        assert result.allowed is True
+
+
+# ──────────────────────────────────────────────
+# 7. (신규) 2차 regex 모듈 함수 직접 검증
+# ──────────────────────────────────────────────
+
+
+class TestCheckRegexFunction:
+    """모듈 함수 ``_check_regex`` 의 포지티브/네거티브 매치 검증.
+
+    구현 완료 시 ``_check_regex`` 는 (violated, message) 튜플을 반환하며,
+    매치된 경우 메시지는 ``"의심 패턴 탐지: <desc>"`` 형식이어야 한다.
+    """
+
+    def test_same_char_repeated_10_times_blocked(self):
+        # 10자 동일 문자 → `(.)\1{9,}` 매치
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("aaaaaaaaaa")
+        assert violated is True
+        assert msg == "의심 패턴 탐지: 동일 문자 10회 이상 반복"
+
+    def test_same_char_repeated_9_times_not_blocked(self):
+        # 9자 동일 문자는 9회 반복(총 길이 9) 이므로 \1{9,} 기준
+        # 추가 9회 반복이 필요해 미매치 (10자 필요)
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("aaaaaaaaa")
+        assert violated is False
+        assert msg == "의심 패턴 없음"
+
+    def test_korean_jamo_5_chars_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("ㄱㄴㄷㄹㅁ")
+        assert violated is True
+        assert msg == "의심 패턴 탐지: 자음/모음만 5자 이상 나열"
+
+    def test_korean_jamo_2_chars_not_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, _msg = _check_regex("ㄱㄴ")
+        assert violated is False
+
+    def test_sql_select_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("SELECT * FROM users")
+        assert violated is True
+        assert msg == "의심 패턴 탐지: SQL 명령"
+
+    def test_rm_rf_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("rm -rf /")
+        assert violated is True
+        assert msg == "의심 패턴 탐지: rm -rf"
+
+    def test_anthropic_api_key_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex(
+            "sk-ant-api03-abcdefghij1234567890",
+        )
+        assert violated is True
+        assert msg == "의심 패턴 탐지: Anthropic API Key"
+
+    def test_aws_access_key_blocked(self):
+        # AKIA + 16자 uppercase/digit
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("AKIAABCDEFGHIJKLMNOP")
+        assert violated is True
+        assert msg == "의심 패턴 탐지: AWS Access Key"
+
+    def test_jwt_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex(
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+        )
+        assert violated is True
+        assert msg == "의심 패턴 탐지: JWT"
+
+    def test_password_exposure_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("password=hunter2")
+        assert violated is True
+        assert msg == "의심 패턴 탐지: 비밀번호 노출"
+
+    def test_script_injection_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("<script>alert(1)</script>")
+        assert violated is True
+        assert msg == "의심 패턴 탐지: 스크립트 인젝션"
+
+    def test_normal_korean_sentence_not_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("오늘 날씨가 좋다")
+        assert violated is False
+        assert msg == "의심 패턴 없음"
+
+    def test_normal_english_sentence_not_blocked(self):
+        from core_secure_layer.layers.l2.l2 import _check_regex
+
+        violated, msg = _check_regex("Hello world")
+        assert violated is False
+        assert msg == "의심 패턴 없음"
+
+    def test_default_patterns_constant_exists(self):
+        # 모듈 상수 _DEFAULT_PATTERNS 는 22개 튜플 리스트여야 함
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        assert hasattr(l2_module, "_DEFAULT_PATTERNS")
+        patterns = l2_module._DEFAULT_PATTERNS
+        assert len(patterns) == 22
+        # 각 원소는 (str, str) 튜플
+        for item in patterns:
+            assert isinstance(item, tuple)
+            assert len(item) == 2
+            assert isinstance(item[0], str)
+            assert isinstance(item[1], str)
+
+
+# ──────────────────────────────────────────────
+# 8. (신규) 3차 _shannon_entropy 수치 검증
+# ──────────────────────────────────────────────
+
+
+class TestShannonEntropyFunction:
+    """모듈 함수 ``_shannon_entropy`` 가 정확한 값을 내는지 검증."""
+
+    def test_empty_string_entropy_is_zero(self):
+        from core_secure_layer.layers.l2.l2 import _shannon_entropy
+
+        assert _shannon_entropy("") == 0.0
+
+    def test_single_char_entropy_is_zero(self):
+        from core_secure_layer.layers.l2.l2 import _shannon_entropy
+
+        assert _shannon_entropy("a") == pytest.approx(0.0)
+
+    def test_uniform_single_symbol_entropy_is_zero(self):
+        from core_secure_layer.layers.l2.l2 import _shannon_entropy
+
+        assert _shannon_entropy("aaaa") == pytest.approx(0.0)
+
+    def test_two_symbols_uniform_entropy_is_one(self):
+        from core_secure_layer.layers.l2.l2 import _shannon_entropy
+
+        # "ab" → 두 심볼 균등 → -2 * (0.5 * log2(0.5)) = 1.0
+        assert _shannon_entropy("ab") == pytest.approx(1.0)
+
+    def test_four_symbols_uniform_entropy_is_two(self):
+        from core_secure_layer.layers.l2.l2 import _shannon_entropy
+
+        # "abcd" → 네 심볼 균등 → log2(4) = 2.0
+        assert _shannon_entropy("abcd") == pytest.approx(2.0)
+
+
+# ──────────────────────────────────────────────
+# 9. (신규) 3차 _check_entropy 시그니처 및 메시지 포맷
+# ──────────────────────────────────────────────
+
+
+class TestCheckEntropyFunction:
+    """모듈 함수 ``_check_entropy`` 의 반환값 튜플 검증.
+
+    반환 형식은 ``(violated, message, ent)`` 세쌍 튜플.
+    메시지 포맷은 원본 스펙 그대로 유지한다.
+    """
+
+    def test_very_low_entropy_blocked(self):
+        # "aaaa" 엔트로피 0.0 < 하한 1.5 → 차단
+        from core_secure_layer.layers.l2.l2 import _check_entropy
+
+        violated, msg, ent = _check_entropy("aaaa")
+        assert violated is True
+        assert ent == pytest.approx(0.0)
+        # 메시지는 `엔트로피 {ent:.2f} < 하한 {low} (너무 단조로움)`
+        assert "엔트로피 0.00" in msg
+        assert "< 하한 1.5" in msg
+        assert "너무 단조로움" in msg
+
+    def test_normal_korean_sentence_in_range(self):
+        from core_secure_layer.layers.l2.l2 import _check_entropy
+
+        violated, msg, ent = _check_entropy("오늘 날씨가 좋다")
+        assert violated is False
+        assert "정상 범위" in msg
+        # 엔트로피 값은 대략 2~4 정도 범위가 기대됨
+        assert _DEFAULT_ENTROPY_LOW <= ent <= _DEFAULT_ENTROPY_HIGH
+
+    def test_very_high_entropy_blocked(self):
+        # 매우 다양한 64자 base64-like → 엔트로피 약 5.95
+        from core_secure_layer.layers.l2.l2 import _check_entropy
+
+        payload = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+        )
+        violated, msg, ent = _check_entropy(payload)
+        assert violated is True
+        assert ent > _DEFAULT_ENTROPY_HIGH
+        assert "> 상한 5.5" in msg
+        assert "너무 무작위" in msg
+
+    def test_custom_low_high_params_allow(self):
+        # low=0.5, high=2.5 로 확장하면 "abcd" (ent=2.0) 허용
+        from core_secure_layer.layers.l2.l2 import _check_entropy
+
+        violated, msg, ent = _check_entropy(
+            "abcd",
+            low=0.5,
+            high=2.5,
+        )
+        assert violated is False
+        assert ent == pytest.approx(2.0)
+        assert "정상 범위" in msg
+
+
+# ──────────────────────────────────────────────
+# 10. (신규) L2Layer._check 통합 — 2차 regex 차단
+# ──────────────────────────────────────────────
+
+
+class TestRegexBlocked:
+    """1차 통과 후 2차 regex 매치로 차단되는 시나리오."""
+
+    async def test_same_char_10_times_blocks_with_regex_tags(self, layer):
+        result = await layer.check(_req("aaaaaaaaaa"))
+        assert result.allowed is False
+        assert result.severity == Severity.MEDIUM
+        assert "동일 문자 10회 이상 반복" in result.reason
+        assert result.tags == ["anomaly", "regex"]
+
+    async def test_anthropic_key_blocked_with_regex_tags(self, layer):
+        result = await layer.check(
+            _req("sk-ant-api03-abcdefghij1234567890"),
+        )
+        assert result.allowed is False
+        assert "Anthropic API Key" in result.reason
+        assert result.tags == ["anomaly", "regex"]
+
+    async def test_sql_select_blocked_with_regex_tags(self, layer):
+        result = await layer.check(_req("SELECT * FROM users"))
+        assert result.allowed is False
+        assert "SQL 명령" in result.reason
+        assert result.tags == ["anomaly", "regex"]
+
+    async def test_no_space_50_chars_blocked_with_regex_tags(self, layer):
+        # "abc" * 30 = 90자 공백 없음 → "공백 없는 50자 이상 연속" 매치
+        # (entropy 보다 먼저 regex 에서 잡혀야 함)
+        result = await layer.check(_req("abc" * 30))
+        assert result.allowed is False
+        assert "공백 없는 50자 이상 연속" in result.reason
+        assert result.tags == ["anomaly", "regex"]
+
+    async def test_password_exposure_blocked_reason_format(self, layer):
+        result = await layer.check(_req("password=hunter2"))
+        assert result.allowed is False
+        # 메시지는 "의심 패턴 탐지: <desc>" 포맷
+        assert result.reason.startswith("의심 패턴 탐지:")
+        assert "비밀번호 노출" in result.reason
+
+    async def test_regex_block_severity_is_medium(self, layer):
+        result = await layer.check(_req("rm -rf /"))
+        assert result.allowed is False
+        assert result.severity == Severity.MEDIUM
+
+
+# ──────────────────────────────────────────────
+# 11. (신규) L2Layer._check 통합 — 3차 entropy 차단
+# ──────────────────────────────────────────────
+
+
+class TestEntropyBlocked:
+    """1/2차 통과 후 3차 엔트로피 범위 이탈로 차단되는 시나리오."""
+
+    async def test_high_entropy_blocks_when_regex_bypassed(
+        self,
+        layer,
+        monkeypatch,
+    ):
+        # regex 단계를 우회(전역 모듈 함수 mock)해 3차 entropy 만 검증
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        monkeypatch.setattr(
+            l2_module,
+            "_check_regex",
+            lambda text, patterns=None: (False, "의심 패턴 없음"),
+        )
+        # 엔트로피 > 5.5 유도용 문자열
+        payload = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+        )
+        result = await layer.check(_req(payload))
+        assert result.allowed is False
+        assert result.severity == Severity.MEDIUM
+        assert result.tags == ["anomaly", "entropy"]
+        assert "너무 무작위" in result.reason
+        assert "> 상한 5.5" in result.reason
+
+    async def test_entropy_block_reason_starts_with_prefix(
+        self,
+        layer,
+        monkeypatch,
+    ):
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        monkeypatch.setattr(
+            l2_module,
+            "_check_regex",
+            lambda text, patterns=None: (False, "의심 패턴 없음"),
+        )
+        payload = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+        )
+        result = await layer.check(_req(payload))
+        assert result.reason.startswith("엔트로피")
+
+
+# ──────────────────────────────────────────────
+# 12. (신규) 4단계 순서 잠금 검증
+# ──────────────────────────────────────────────
+
+
+class TestFourStageOrdering:
+    """1 → 2 → 3 → 4차 순서 보장. 앞 단계 차단 시 뒤 단계 미실행."""
+
+    async def test_charset_violation_skips_regex_stage(
+        self,
+        layer,
+        monkeypatch,
+    ):
+        # regex 가 (True, "의심 패턴 탐지: FAKE") 를 반환하도록 하더라도
+        # charset 위반(이모지)은 1차에서 먼저 차단돼 regex 분기 미진입
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        calls: list[str] = []
+
+        def _regex_spy(text, patterns=None):
+            calls.append(text)
+            return True, "의심 패턴 탐지: FAKE"
+
+        monkeypatch.setattr(
+            l2_module,
+            "_check_regex",
+            _regex_spy,
+        )
+        result = await layer.check(_req("안녕 😀"))
+        assert result.allowed is False
+        # 1차 차단이므로 charset 태그가 달려야 한다
+        assert "charset" in result.tags
+        assert "disallowed_character" in result.tags
+        # regex 단계는 호출되지 않아야 한다
+        assert calls == []
+
+    async def test_regex_match_skips_entropy_stage(
+        self,
+        layer,
+        monkeypatch,
+    ):
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        entropy_calls: list[str] = []
+
+        def _entropy_spy(text, low=1.5, high=5.5):
+            entropy_calls.append(text)
+            return False, "엔트로피 3.00 정상 범위", 3.0
+
+        monkeypatch.setattr(
+            l2_module,
+            "_check_entropy",
+            _entropy_spy,
+        )
+        # regex 단계에서 "rm -rf" 매치로 차단 → entropy 미호출
+        result = await layer.check(_req("rm -rf /"))
+        assert result.allowed is False
+        assert result.tags == ["anomaly", "regex"]
+        assert entropy_calls == []
+
+    async def test_entropy_match_skips_ppl_stage(
+        self,
+        layer_with_ppl,
+        monkeypatch,
+    ):
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        ppl_calls: list[str] = []
+
+        def _ppl_spy(text: str) -> float:
+            ppl_calls.append(text)
+            return 9999.0
+
+        monkeypatch.setattr(
+            layer_with_ppl,
+            "_compute_ppl",
+            _ppl_spy,
+        )
+        # regex 는 통과시키고 entropy 만 차단되도록 강제
+        monkeypatch.setattr(
+            l2_module,
+            "_check_regex",
+            lambda text, patterns=None: (False, "의심 패턴 없음"),
+        )
+        monkeypatch.setattr(
+            l2_module,
+            "_check_entropy",
+            lambda text, low=1.5, high=5.5: (
+                True,
+                "엔트로피 0.50 < 하한 1.5 (너무 단조로움)",
+                0.5,
+            ),
+        )
+        result = await layer_with_ppl.check(_req("무해해보이는 정상문장"))
+        assert result.allowed is False
+        assert result.tags == ["anomaly", "entropy"]
+        # PPL 계산은 3차 차단 때문에 호출되지 않아야 한다
+        assert ppl_calls == []
+
+
+# ──────────────────────────────────────────────
+# 13. (신규) 4단계 전부 통과 — 허용 경로
+# ──────────────────────────────────────────────
+
+
+class TestFourStageAllowPath:
+    """네 단계 모두 통과하는 정상 입력은 허용된다."""
+
+    async def test_normal_korean_sentence_passes_all_stages(
+        self,
+        layer,
+    ):
+        # 모델 미로드 → 4차는 자동 skip. 1~3차 통과 확인
+        result = await layer.check(_req("오늘 날씨가 좋다"))
+        assert result.allowed is True
+        assert result.reason is None
+        assert result.tags == []
+
+    async def test_plain_english_passes_all_stages(self, layer):
+        result = await layer.check(_req("Hello world"))
+        assert result.allowed is True
+
+
+# ──────────────────────────────────────────────
+# 14. (신규) 엔트로피 파라미터 커스터마이징
+# ──────────────────────────────────────────────
+
+
+class TestEntropyConstructorParams:
+    """``entropy_low`` / ``entropy_high`` 파라미터가 런타임에 반영되는가."""
+
+    def test_constructor_accepts_entropy_low_high(self):
+        inst = L2Layer(
+            model_name="gpt2",
+            ppl_threshold=_DEFAULT_THRESHOLD,
+            entropy_low=0.5,
+            entropy_high=7.0,
+        )
+        assert inst.entropy_low == 0.5
+        assert inst.entropy_high == 7.0
+
+    def test_constructor_default_entropy_low_high(self):
+        inst = L2Layer(
+            model_name="gpt2",
+            ppl_threshold=_DEFAULT_THRESHOLD,
+        )
+        assert inst.entropy_low == _DEFAULT_ENTROPY_LOW
+        assert inst.entropy_high == _DEFAULT_ENTROPY_HIGH
+
+    async def test_lowered_high_blocks_normal_like_input(
+        self,
+        monkeypatch,
+    ):
+        # entropy_high=3.0 으로 낮추면 "abcd" (ent=2.0) 는 통과,
+        # "abcdefghij" (ent=약 3.32) 는 차단
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        inst = L2Layer.__new__(L2Layer)
+        inst.name = "L2"
+        inst.model_path = _FAKE_MODEL_PATH
+        inst.ppl_threshold = _DEFAULT_THRESHOLD
+        inst.entropy_low = 0.5
+        inst.entropy_high = 3.0
+        # regex 는 통과시킴 (10자 공백 없음이지만 50자 미만이라 미매치)
+        monkeypatch.setattr(
+            l2_module,
+            "_check_regex",
+            lambda text, patterns=None: (False, "의심 패턴 없음"),
+        )
+        result = await inst.check(_req("abcdefghij"))
+        assert result.allowed is False
+        assert result.tags == ["anomaly", "entropy"]
+        assert "> 상한 3.0" in result.reason
+
+    async def test_raised_low_still_allows_diverse_input(
+        self,
+        monkeypatch,
+    ):
+        # entropy_low=0.5 로 낮춰도 "오늘 날씨가 좋다" 는 여전히 정상 범위
+        from core_secure_layer.layers.l2 import l2 as l2_module
+
+        inst = L2Layer.__new__(L2Layer)
+        inst.name = "L2"
+        inst.model_path = _FAKE_MODEL_PATH
+        inst.ppl_threshold = _DEFAULT_THRESHOLD
+        inst.entropy_low = 0.5
+        inst.entropy_high = _DEFAULT_ENTROPY_HIGH
+        monkeypatch.setattr(
+            l2_module,
+            "_check_regex",
+            lambda text, patterns=None: (False, "의심 패턴 없음"),
+        )
+        result = await inst.check(_req("오늘 날씨가 좋다"))
         assert result.allowed is True
