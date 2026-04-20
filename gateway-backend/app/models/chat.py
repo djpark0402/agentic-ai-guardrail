@@ -117,6 +117,9 @@ class ChatResponse(BaseModel):
         usage: 토큰 사용량 통계 (Solar 가 제공할 경우).
         error: 가드레일 차단 시 첨부되는 비표준 error 블록. 정상 응답에서는
             None 으로 두고, 직렬화 시 존재할 때만 노출된다.
+        guardrail_reports: 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`)에서
+            레이어별 판정 내역을 담는 비표준 메타데이터 블록. 일반 모드에서는
+            None.
     """
 
     id: str
@@ -126,3 +129,4 @@ class ChatResponse(BaseModel):
     choices: list[ChatResponseChoice]
     usage: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+    guardrail_reports: dict[str, Any] | None = None

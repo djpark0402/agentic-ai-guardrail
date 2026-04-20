@@ -589,6 +589,199 @@ def test_all_enabled_policy_has_all_layers():
     assert policy.l6 is True
 
 
+def _observe_settings_override():
+    """CONTINUE_ON_LAYER_FAILURE=true 를 주입하는 Settings 오버라이드."""
+
+    def _settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=False,
+            continue_on_layer_failure=True,
+        )
+
+    return _settings
+
+
+def test_observe_mode_input_block_allows_llm_call(
+    mock_policy_service, mock_provider_router
+):
+    """관찰 모드에서는 입력 레이어가 BLOCK 을 내도 LLM 을 호출하고
+    정상 200 응답에 guardrail_reports 가 첨부된다."""
+    observe_svc = MagicMock()
+    observe_svc.check_input_all = AsyncMock(
+        return_value=[
+            GuardrailResult(
+                status=CheckStatus.BLOCK,
+                reason="injection",
+                layer="L1",
+                severity="HIGH",
+                confidence=0.9,
+                tags=["prompt_injection"],
+            ),
+            GuardrailResult(status=CheckStatus.PASS, layer="L3"),
+        ]
+    )
+    observe_svc.check_output_all = AsyncMock(
+        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L2")]
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: observe_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _observe_settings_override()
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "데모 프롬프트"}],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # BLOCK 이어도 차단 응답 대신 정상 LLM 응답이 돌아와야 한다.
+        assert data["choices"][0]["finish_reason"] != "content_filter"
+        assert data["choices"][0]["message"]["content"] == (
+            "안녕하세요! 무엇을 도와드릴까요?"
+        )
+        assert data.get("error") is None
+
+        # guardrail_reports 가 모든 레이어 판정을 담고 있어야 한다.
+        reports = data["guardrail_reports"]
+        assert reports["mode"] == "observe"
+        assert [r["layer"] for r in reports["input"]] == ["L1", "L3"]
+        assert [r["status"] for r in reports["input"]] == ["block", "pass"]
+        assert reports["input"][0]["reason"] == "injection"
+        assert reports["input"][0]["severity"] == "HIGH"
+        assert reports["input"][0]["tags"] == ["prompt_injection"]
+
+        # LLM 은 호출되었어야 한다.
+        llm_svc = mock_provider_router.resolve.return_value[0]
+        llm_svc.chat.assert_awaited_once()
+
+        # 관찰 모드에서는 *_all 메서드만 호출되고, 기존 짧은회로 메서드는
+        # 사용되지 않는다.
+        assert not observe_svc.check_input.called
+        assert not observe_svc.check_output.called
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_observe_mode_output_block_keeps_original_content(
+    mock_policy_service, mock_provider_router
+):
+    """관찰 모드에서는 출력 레이어가 BLOCK 을 내도 원본 LLM 응답이
+    그대로 사용자에게 전송된다."""
+    original_reply = "안녕하세요! 무엇을 도와드릴까요?"
+    observe_svc = MagicMock()
+    observe_svc.check_input_all = AsyncMock(
+        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L1")]
+    )
+    observe_svc.check_output_all = AsyncMock(
+        return_value=[
+            GuardrailResult(status=CheckStatus.PASS, layer="L1"),
+            GuardrailResult(
+                status=CheckStatus.BLOCK,
+                reason="pii leak",
+                layer="L4",
+                severity="CRITICAL",
+                confidence=0.95,
+                tags=["pii"],
+            ),
+        ]
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: observe_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _observe_settings_override()
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "질문"}],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["choices"][0]["message"]["content"] == original_reply
+        assert data["choices"][0]["finish_reason"] != "content_filter"
+
+        reports = data["guardrail_reports"]
+        assert reports["mode"] == "observe"
+        assert [r["status"] for r in reports["output"]] == ["pass", "block"]
+        assert reports["output"][1]["reason"] == "pii leak"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_observe_mode_streaming_attaches_guardrail_reports(
+    mock_policy_service, mock_provider_router
+):
+    """관찰 모드의 스트리밍 응답은 마지막 finish 프레임에
+    guardrail_reports 를 싣고 원본 content 를 그대로 전달한다."""
+    observe_svc = MagicMock()
+    observe_svc.check_input_all = AsyncMock(
+        return_value=[
+            GuardrailResult(
+                status=CheckStatus.BLOCK,
+                reason="injection",
+                layer="L1",
+                severity="HIGH",
+            )
+        ]
+    )
+    observe_svc.check_output_all = AsyncMock(
+        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L2")]
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: observe_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _observe_settings_override()
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "데모"}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        chunks = _parse_sse_chunks(resp.text)
+
+        # content_filter 가 아니라 정상 종료 프레임이어야 한다.
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+        rebuilt = "".join(
+            c["choices"][0]["delta"].get("content", "") for c in chunks
+        )
+        assert rebuilt == "안녕하세요! 무엇을 도와드릴까요?"
+
+        # 마지막 finish 프레임에 guardrail_reports 가 실린다.
+        last = chunks[-1]
+        reports = last["guardrail_reports"]
+        assert reports["mode"] == "observe"
+        assert reports["input"][0]["layer"] == "L1"
+        assert reports["input"][0]["status"] == "block"
+        assert reports["output"][0]["status"] == "pass"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_skip_policy_fetch_forces_all_layers_enabled(
     mock_security_service, mock_provider_router
 ):

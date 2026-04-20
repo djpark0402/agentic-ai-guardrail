@@ -118,6 +118,7 @@ async def _stream_openai_chunks(
     created: int,
     model: str,
     finish_reason: str,
+    final_extra: dict[str, Any] | None = None,
 ) -> AsyncGenerator[str]:
     """검증이 끝난 전체 content를 OpenAI SSE 규격으로 재방출한다.
 
@@ -131,6 +132,8 @@ async def _stream_openai_chunks(
         created: Unix timestamp.
         model: 응답 모델 이름.
         finish_reason: Solar 가 제공한 종료 이유. 비어 있으면 "stop".
+        final_extra: 마지막 finish 프레임에 병합할 비표준 확장 필드.
+            관찰 모드에서 `{"guardrail_reports": {...}}` 를 싣기 위해 사용.
 
     Yields:
         OpenAI 호환 SSE 프레임 문자열.
@@ -158,7 +161,7 @@ async def _stream_openai_chunks(
                 finish_reason=None,
             )
         )
-    # 3. finish 프레임
+    # 3. finish 프레임 (관찰 모드면 guardrail_reports 를 여기 실어 보낸다)
     yield _format_sse_frame(
         _build_chunk(
             chunk_id=chunk_id,
@@ -166,6 +169,7 @@ async def _stream_openai_chunks(
             model=model,
             delta={},
             finish_reason=finish_reason or "stop",
+            extra=final_extra,
         )
     )
     # 4. 종료 마커
@@ -254,6 +258,36 @@ async def _stream_guardrail_block(
     yield "data: [DONE]\n\n"
 
 
+def _report_entry(result: GuardrailResult) -> dict[str, Any]:
+    """관찰 모드 `guardrail_reports` 항목 하나를 직렬화한다.
+
+    PASS 는 layer/status 만, BLOCK 은 reason·severity·confidence·tags 까지
+    함께 실어 플레이그라운드/데모에서 바로 시각화할 수 있게 한다.
+    """
+    entry: dict[str, Any] = {
+        "layer": result.layer,
+        "status": result.status.value,
+    }
+    if result.status is CheckStatus.BLOCK:
+        entry["reason"] = result.reason
+        entry["severity"] = result.severity
+        entry["confidence"] = result.confidence
+        entry["tags"] = list(result.tags)
+    return entry
+
+
+def _build_guardrail_reports(
+    input_results: list[GuardrailResult],
+    output_results: list[GuardrailResult],
+) -> dict[str, Any]:
+    """관찰 모드 응답에 첨부할 `guardrail_reports` 블록을 조립한다."""
+    return {
+        "mode": "observe",
+        "input": [_report_entry(r) for r in input_results],
+        "output": [_report_entry(r) for r in output_results],
+    }
+
+
 def _build_block_response(
     result: GuardrailResult,
     *,
@@ -293,6 +327,156 @@ def _build_block_response(
         ],
         usage=None,
         error=_build_block_error(result, stage),
+    )
+
+
+async def _run_observe_mode_pipeline(
+    *,
+    request: ChatRequest,
+    session_id: str,
+    t_request: float,
+    policy: GuardrailPolicy,
+    security_service: SecurityLayerService,
+    provider_router: ProviderRouter,
+) -> ChatResponse | StreamingResponse:
+    """`CONTINUE_ON_LAYER_FAILURE=true` 데모 모드 전용 파이프라인.
+
+    기본(차단) 경로와 달리 BLOCK 판정을 early-return 하지 않고 입력 레이어
+    전체 → LLM 호출 → 출력 레이어 전체 순서로 끝까지 실행한 뒤, 응답에
+    `guardrail_reports` 블록을 첨부한다. 스트리밍인 경우 마지막 finish
+    프레임에 동일한 메타데이터를 실어 보낸다.
+
+    Args:
+        request: 원본 `ChatRequest`.
+        session_id: 세션 UUID.
+        t_request: 요청 시작 시각(perf_counter).
+        policy: 적용할 보안 정책.
+        security_service: 보안 레이어 서비스.
+        provider_router: LLM provider 라우터.
+
+    Returns:
+        스트리밍/비스트리밍에 따라 `StreamingResponse` 또는 `ChatResponse`.
+    """
+    # 2단계: 입력 레이어 전체 실행
+    t0 = time.perf_counter()
+    input_results = await security_service.check_input_all(
+        messages=request.messages,
+        policy=policy,
+    )
+    logger.info(
+        "[%s] (관찰) 2단계 입력 검사 완료: %.1fms 결과=%s",
+        session_id,
+        (time.perf_counter() - t0) * 1000,
+        [r.status.value for r in input_results],
+    )
+    for r in input_results:
+        if r.status is CheckStatus.BLOCK:
+            logger.warning(
+                "[%s] (관찰) 입력 BLOCK 무시하고 진행: layer=%s reason=%s",
+                session_id,
+                r.layer,
+                r.reason,
+            )
+
+    # 3단계: LLM 호출 (기존 경로와 동일)
+    t0 = time.perf_counter()
+    api_messages = [
+        msg.model_dump(exclude_none=True) for msg in request.messages
+    ]
+    passthrough = request.model_dump(
+        exclude={"messages", "stream"},
+        exclude_none=True,
+    )
+    llm_service, resolved_model = provider_router.resolve(request.model)
+    passthrough["model"] = resolved_model
+    completion = await llm_service.chat(messages=api_messages, **passthrough)
+    content = completion.choices[0].message.content or ""
+    logger.info(
+        "[%s] (관찰) 3단계 LLM 호출 완료: %.1fms provider=%s model=%s",
+        session_id,
+        (time.perf_counter() - t0) * 1000,
+        llm_service.provider_name,
+        resolved_model,
+    )
+
+    # 4단계: 출력 레이어 전체 실행
+    t0 = time.perf_counter()
+    output_results = await security_service.check_output_all(
+        content=content,
+        policy=policy,
+    )
+    logger.info(
+        "[%s] (관찰) 4단계 출력 검사 완료: %.1fms 결과=%s",
+        session_id,
+        (time.perf_counter() - t0) * 1000,
+        [r.status.value for r in output_results],
+    )
+    for r in output_results:
+        if r.status is CheckStatus.BLOCK:
+            logger.warning(
+                "[%s] (관찰) 출력 BLOCK 무시하고 진행: layer=%s reason=%s",
+                session_id,
+                r.layer,
+                r.reason,
+            )
+
+    reports = _build_guardrail_reports(input_results, output_results)
+
+    chunk_id = f"chatcmpl-{session_id}"
+    created = getattr(completion, "created", None) or int(time.time())
+    model_name = getattr(completion, "model", None) or request.model
+    finish_reason = completion.choices[0].finish_reason or "stop"
+    total_ms = (time.perf_counter() - t_request) * 1000
+
+    # 5-a단계: 스트리밍 — 마지막 finish 프레임에 guardrail_reports 주입
+    if request.stream:
+        logger.info(
+            "[%s] (관찰) 5단계 응답 전송: stream=True 총 %.1fms",
+            session_id,
+            total_ms,
+        )
+        return StreamingResponse(
+            _stream_openai_chunks(
+                content,
+                chunk_id=chunk_id,
+                created=created,
+                model=model_name,
+                finish_reason=finish_reason,
+                final_extra={"guardrail_reports": reports},
+            ),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
+    # 5-b단계: 비스트리밍 — ChatResponse.guardrail_reports 로 첨부
+    logger.info(
+        "[%s] (관찰) 5단계 응답 전송: stream=False 총 %.1fms",
+        session_id,
+        total_ms,
+    )
+    return ChatResponse(
+        id=chunk_id,
+        object="chat.completion",
+        created=created,
+        model=model_name,
+        choices=[
+            ChatResponseChoice(
+                index=choice.index,
+                message=ChatResponseMessage(
+                    role=choice.message.role,
+                    content=(choice.message.content or ""),
+                    tool_calls=_dump_tool_calls(choice.message),
+                ),
+                finish_reason=choice.finish_reason,
+            )
+            for choice in completion.choices
+        ],
+        usage=(
+            completion.usage.model_dump()
+            if getattr(completion, "usage", None) is not None
+            else None
+        ),
+        guardrail_reports=reports,
     )
 
 
@@ -357,6 +541,18 @@ async def chat_completions(
         (time.perf_counter() - t0) * 1000,
         policy.enabled_layers(),
     )
+
+    # 관찰(데모) 모드: BLOCK 이 있어도 파이프라인을 끝까지 실행하고
+    # 응답에 레이어별 판정 내역(`guardrail_reports`)을 첨부한다.
+    if settings.continue_on_layer_failure:
+        return await _run_observe_mode_pipeline(
+            request=request,
+            session_id=session_id,
+            t_request=t_request,
+            policy=policy,
+            security_service=security_service,
+            provider_router=provider_router,
+        )
 
     # 2단계: 입력 프롬프트 보안 검사
     t0 = time.perf_counter()
