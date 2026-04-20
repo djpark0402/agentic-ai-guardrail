@@ -10,3 +10,8 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
 server:
   port: 8081
+aag:
+  crypto:
+    keystore-path: ${AAG_KEYSTORE_PATH:config/aag-keystore.p12}
+    keystore-password: ${AAG_KEYSTORE_PASSWORD:}
+    key-alias: ${AAG_KEYSTORE_KEY_ALIAS:aag-secret-aes}
