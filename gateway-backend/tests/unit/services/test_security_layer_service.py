@@ -96,6 +96,69 @@ async def test_check_input_logs_enabled_layers(service, caplog):
     assert "[1, 3, 4, 6]" in caplog.text
 
 
+async def test_check_input_logs_layer_block_reason(service, mocker, caplog):
+    """레이어가 BLOCK 이면 레이어명과 사유를 로그에 남긴다."""
+    from core_secure_layer.layers.types import LayerResult, Severity
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L1"
+    mock_layer.check.return_value = LayerResult(
+        name="L1",
+        allowed=False,
+        reason="injection detected",
+        severity=Severity.HIGH,
+    )
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        return_value=mock_layer,
+    )
+
+    with caplog.at_level(logging.INFO):
+        await service.check_input(
+            messages=[Message(role="user", content="악성 입력")],
+            policy=_policy(l2=False, l3=False, l4=False, l5=False, l6=False),
+        )
+
+    assert "입력 레이어 결과" in caplog.text
+    assert "layer=L1" in caplog.text
+    assert "status=block" in caplog.text
+    assert "reason=injection detected" in caplog.text
+
+
+async def test_run_layer_input_logs_unmapped_layer_reason(service, caplog):
+    """매핑 없는 레이어 PASS 도 이유와 함께 로그에 남긴다."""
+    with caplog.at_level(logging.INFO):
+        await service._run_layer_input(
+            99, [Message(role="user", content="테스트")]
+        )
+
+    assert "입력 레이어 결과" in caplog.text
+    assert "layer=L99" in caplog.text
+    assert "status=pass" in caplog.text
+    assert "note=매핑 없음" in caplog.text
+
+
+async def test_run_layer_output_logs_not_implemented_reason(
+    service, mocker, caplog
+):
+    """미구현 출력 레이어 PASS 도 이유와 함께 로그에 남긴다."""
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L4"
+    mock_layer.check.side_effect = NotImplementedError
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        return_value=mock_layer,
+    )
+
+    with caplog.at_level(logging.INFO):
+        await service._run_layer_output(4, "응답 텍스트")
+
+    assert "출력 레이어 결과" in caplog.text
+    assert "layer=L4" in caplog.text
+    assert "status=pass" in caplog.text
+    assert "note=미구현" in caplog.text
+
+
 # ── core-secure-layer 실연동 테스트 ─────────────────────────
 
 

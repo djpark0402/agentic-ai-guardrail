@@ -15,6 +15,53 @@ from app.services.layer_registry import get_layer
 logger = logging.getLogger(__name__)
 
 
+def _stage_label(stage: str) -> str:
+    """로그 표시에 사용할 단계 한글명을 반환한다."""
+    return "입력" if stage == "input" else "출력"
+
+
+def _log_layer_result(
+    stage: str,
+    result: GuardrailResult,
+    *,
+    layer_name: str,
+    note: str | None = None,
+) -> None:
+    """레이어 실행 결과를 구조화된 한 줄 로그로 남긴다.
+
+    Args:
+        stage: 입력/출력 구분값.
+        result: 레이어 실행 결과.
+        layer_name: 로그에 강제로 표시할 레이어 이름.
+        note: PASS 처리 사유 같은 보조 설명.
+    """
+    fields = [
+        f"layer={layer_name}",
+        f"status={result.status.value}",
+    ]
+    if result.reason:
+        fields.append(f"reason={result.reason}")
+    if note:
+        fields.append(f"note={note}")
+    if result.severity:
+        fields.append(f"severity={result.severity}")
+    if result.confidence is not None:
+        fields.append(f"confidence={result.confidence:.2f}")
+    if result.tags:
+        fields.append(f"tags={list(result.tags)}")
+
+    log_fn = (
+        logger.warning
+        if result.status is CheckStatus.BLOCK
+        else logger.info
+    )
+    log_fn(
+        "%s 레이어 결과: %s",
+        _stage_label(stage),
+        " ".join(fields),
+    )
+
+
 def _with_layer_name(
     result: GuardrailResult,
     layer_idx: int,
@@ -165,17 +212,44 @@ class SecurityLayerService:
         """
         layer = get_layer(layer_idx)
         if layer is None:
-            logger.debug("레이어 L%d: 매핑 없음, PASS", layer_idx)
-            return GuardrailResult(status=CheckStatus.PASS)
+            result = GuardrailResult(
+                status=CheckStatus.PASS,
+                layer=f"L{layer_idx}",
+            )
+            _log_layer_result(
+                "input",
+                result,
+                layer_name=f"L{layer_idx}",
+                note="매핑 없음",
+            )
+            return result
 
         request = messages_to_request(messages)
         try:
-            result = await layer.check(request)
+            core_result = await layer.check(request)
         except NotImplementedError:
-            logger.debug("레이어 %s: 미구현, PASS", layer.name)
-            return GuardrailResult(status=CheckStatus.PASS)
+            result = GuardrailResult(
+                status=CheckStatus.PASS,
+                layer=layer.name,
+            )
+            _log_layer_result(
+                "input",
+                result,
+                layer_name=layer.name,
+                note="미구현",
+            )
+            return result
 
-        return layer_result_to_guardrail_result(result)
+        result = _with_layer_name(
+            layer_result_to_guardrail_result(core_result),
+            layer_idx,
+        )
+        _log_layer_result(
+            "input",
+            result,
+            layer_name=result.layer or f"L{layer_idx}",
+        )
+        return result
 
     async def _run_layer_output(
         self,
@@ -193,14 +267,41 @@ class SecurityLayerService:
         """
         layer = get_layer(layer_idx)
         if layer is None:
-            logger.debug("레이어 L%d: 매핑 없음, PASS", layer_idx)
-            return GuardrailResult(status=CheckStatus.PASS)
+            result = GuardrailResult(
+                status=CheckStatus.PASS,
+                layer=f"L{layer_idx}",
+            )
+            _log_layer_result(
+                "output",
+                result,
+                layer_name=f"L{layer_idx}",
+                note="매핑 없음",
+            )
+            return result
 
         request = content_to_request(content)
         try:
-            result = await layer.check(request)
+            core_result = await layer.check(request)
         except NotImplementedError:
-            logger.debug("레이어 %s: 미구현, PASS", layer.name)
-            return GuardrailResult(status=CheckStatus.PASS)
+            result = GuardrailResult(
+                status=CheckStatus.PASS,
+                layer=layer.name,
+            )
+            _log_layer_result(
+                "output",
+                result,
+                layer_name=layer.name,
+                note="미구현",
+            )
+            return result
 
-        return layer_result_to_guardrail_result(result)
+        result = _with_layer_name(
+            layer_result_to_guardrail_result(core_result),
+            layer_idx,
+        )
+        _log_layer_result(
+            "output",
+            result,
+            layer_name=result.layer or f"L{layer_idx}",
+        )
+        return result
