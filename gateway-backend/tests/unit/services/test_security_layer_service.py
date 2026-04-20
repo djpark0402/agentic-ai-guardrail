@@ -52,7 +52,9 @@ async def test_check_input_returns_pass_when_all_enabled(service):
 
 async def test_check_output_returns_pass_when_all_enabled(service):
     """모든 레이어 활성 정책으로 check_output() 은 PASS 를 반환한다."""
-    result = await service.check_output(content="응답", policy=_policy())
+    result = await service.check_output(
+        content="안녕하세요! 무엇을 도와드릴까요?", policy=_policy()
+    )
     assert result.status == CheckStatus.PASS
 
 
