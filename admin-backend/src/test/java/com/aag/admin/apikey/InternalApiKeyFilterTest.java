@@ -53,9 +53,9 @@ class InternalApiKeyFilterTest {
     }
 
     @Test
-    void gatewayEndpoint_withValidKey_returns200_updatesLastUsedAt_writesSuccessAudit() throws Exception {
-        mockMvc.perform(get("/api/v1/gateway/policies/active").header("X-API-Key", validKey))
-                .andExpect(status().isOk());
+    void gatewayEndpoint_withValidKey_passesThroughFilter_updatesLastUsedAt_writesSuccessAudit() throws Exception {
+        mockMvc.perform(get("/api/v1/gateway/ping").header("X-API-Key", validKey))
+                .andExpect(status().isNotFound());
 
         List<InternalApiKey> keys = apiKeyRepository.findAll();
         assertThat(keys).hasSize(1);
@@ -68,7 +68,7 @@ class InternalApiKeyFilterTest {
 
     @Test
     void gatewayEndpoint_withoutHeader_returns401_writesFailAudit() throws Exception {
-        mockMvc.perform(get("/api/v1/gateway/policies/active"))
+        mockMvc.perform(get("/api/v1/gateway/ping"))
                 .andExpect(status().isUnauthorized());
 
         List<AuditLog> logs = auditLogRepository.findAll();
@@ -79,7 +79,7 @@ class InternalApiKeyFilterTest {
 
     @Test
     void gatewayEndpoint_withUnknownKey_returns401() throws Exception {
-        mockMvc.perform(get("/api/v1/gateway/policies/active").header("X-API-Key", "iak_deadbeef"))
+        mockMvc.perform(get("/api/v1/gateway/ping").header("X-API-Key", "iak_deadbeef"))
                 .andExpect(status().isUnauthorized());
 
         List<AuditLog> logs = auditLogRepository.findAll();
@@ -92,7 +92,7 @@ class InternalApiKeyFilterTest {
         apiKeyService.revoke(key);
         auditLogRepository.deleteAll();
 
-        mockMvc.perform(get("/api/v1/gateway/policies/active").header("X-API-Key", validKey))
+        mockMvc.perform(get("/api/v1/gateway/ping").header("X-API-Key", validKey))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -103,7 +103,7 @@ class InternalApiKeyFilterTest {
         apiKeyRepository.save(key);
         auditLogRepository.deleteAll();
 
-        mockMvc.perform(get("/api/v1/gateway/policies/active").header("X-API-Key", validKey))
+        mockMvc.perform(get("/api/v1/gateway/ping").header("X-API-Key", validKey))
                 .andExpect(status().isUnauthorized());
     }
 
