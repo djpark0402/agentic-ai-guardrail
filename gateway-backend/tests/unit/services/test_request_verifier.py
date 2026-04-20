@@ -3,6 +3,7 @@
 import hashlib
 
 import pytest
+
 from app.services.request_verifier import (
     HeaderVerificationError,
     NonceStore,
