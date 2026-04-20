@@ -11,8 +11,8 @@ from app.services.guardrail_converter import (
 )
 
 
-def test_messages_to_request_concatenates_all_user_turns():
-    """멀티턴의 모든 user 메시지가 user_input 에 모두 포함된다."""
+def test_messages_to_request_concatenates_user_turns_only():
+    """멀티턴의 user 메시지만 user_input 에 이어 붙고, assistant 는 제외된다."""
     messages = [
         Message(role="user", content="첫 번째"),
         Message(role="assistant", content="응답"),
@@ -21,11 +21,11 @@ def test_messages_to_request_concatenates_all_user_turns():
     req = messages_to_request(messages)
     assert "첫 번째" in req.user_input
     assert "두 번째" in req.user_input
-    assert "응답" in req.user_input
+    assert "응답" not in req.user_input
 
 
 def test_messages_to_request_handles_multimodal_content():
-    """멀티모달(list[dict]) content 에서 텍스트 부분을 결합한다."""
+    """user 메시지의 멀티모달 content 에서 텍스트 part 만 결합한다."""
     messages = [
         Message(
             role="user",
@@ -41,19 +41,20 @@ def test_messages_to_request_handles_multimodal_content():
     assert "이것은 무엇인가요?" in req.user_input
 
 
-def test_messages_to_request_includes_system_and_assistant():
-    """user 가 없어도 system/assistant 메시지가 직렬화에 포함된다."""
+def test_messages_to_request_excludes_system_and_assistant():
+    """system/assistant 메시지 content 는 검사 대상에서 제외된다."""
     messages = [
         Message(role="system", content="시스템 프롬프트"),
         Message(role="assistant", content="응답"),
     ]
     req = messages_to_request(messages)
-    assert "시스템 프롬프트" in req.user_input
-    assert "응답" in req.user_input
+    assert "시스템 프롬프트" not in req.user_input
+    assert "응답" not in req.user_input
+    assert req.user_input == ""
 
 
-def test_messages_to_request_preserves_turn_order():
-    """system → user → assistant → user 순서가 직렬화에서도 유지된다."""
+def test_messages_to_request_preserves_user_turn_order():
+    """user1 → user2 순서가 직렬화에서도 유지된다(비-user 는 건너뛴다)."""
     messages = [
         Message(role="system", content="시스템"),
         Message(role="user", content="사용자1"),
@@ -62,15 +63,15 @@ def test_messages_to_request_preserves_turn_order():
     ]
     req = messages_to_request(messages)
     text = req.user_input
-    idx_system = text.index("시스템")
+    assert "시스템" not in text
+    assert "응답1" not in text
     idx_user1 = text.index("사용자1")
-    idx_assistant = text.index("응답1")
     idx_user2 = text.index("사용자2")
-    assert idx_system < idx_user1 < idx_assistant < idx_user2
+    assert idx_user1 < idx_user2
 
 
-def test_messages_to_request_handles_none_content():
-    """content=None 인 메시지도 자리를 보존하고 후속 턴을 드롭하지 않는다."""
+def test_messages_to_request_drops_non_user_content():
+    """content=None 인 assistant 와 tool 결과는 검사 문자열에서 빠진다."""
     messages = [
         Message(role="user", content="질문"),
         Message(role="assistant", content=None, tool_calls=[{"id": "t1"}]),
@@ -78,11 +79,11 @@ def test_messages_to_request_handles_none_content():
     ]
     req = messages_to_request(messages)
     assert "질문" in req.user_input
-    assert "도구 결과" in req.user_input
+    assert "도구 결과" not in req.user_input
 
 
-def test_messages_to_request_handles_tool_role():
-    """role='tool' 메시지의 content 도 검사 대상에 포함된다."""
+def test_messages_to_request_excludes_tool_role():
+    """role='tool' 메시지의 content 는 검사 대상에서 제외된다."""
     messages = [
         Message(role="user", content="tool 호출 트리거"),
         Message(
@@ -92,8 +93,18 @@ def test_messages_to_request_handles_tool_role():
         ),
     ]
     req = messages_to_request(messages)
-    assert "악성 페이로드 가능 영역" in req.user_input
     assert "tool 호출 트리거" in req.user_input
+    assert "악성 페이로드 가능 영역" not in req.user_input
+
+
+def test_messages_to_request_returns_empty_when_no_user_messages():
+    """user 메시지가 하나도 없으면 user_input 은 빈 문자열이다."""
+    messages = [
+        Message(role="system", content="시스템 전용"),
+        Message(role="assistant", content="응답만"),
+    ]
+    req = messages_to_request(messages)
+    assert req.user_input == ""
 
 
 def test_content_to_request_wraps_string():

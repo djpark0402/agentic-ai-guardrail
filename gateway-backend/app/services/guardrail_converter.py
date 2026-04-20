@@ -32,26 +32,23 @@ def _extract_text(content: object) -> str:
 
 
 def messages_to_request(messages: list[Message]) -> GuardrailRequest:
-    r"""`messages` 전체 텍스트를 `\n\n` 으로 연결한 단일 문자열로 직렬화한다.
+    r"""`role='user'` 메시지만 골라 `\n\n` 으로 연결한 문자열로 직렬화한다.
 
-    멀티턴 공격(이전 턴에 심은 페이로드)과 system/tool 메시지 오염을 함께
-    검사하기 위해, 메시지 순서를 보존한 채 모든 턴의 텍스트 본문을 한 번에
-    레이어에 전달한다.
-
-    Role 라벨(``[user]``, ``<|system|>`` 등)을 prefix 로 넣지 않는 이유:
-    L5 의 한국어 PII NER 가 영문 ``user`` / ``system`` 토큰을
-    ``login_id`` 엔티티로 오탐하는 false positive 가 관측되었기 때문이다.
-    L1~L6 은 어느 것도 role 에 기반해 분기하지 않으므로 role 라벨 손실은
-    검사 정확도에 영향이 없다.
+    사용자가 직접 입력한 프롬프트만 가드레일 검사 대상에 포함한다.
+    system / assistant / tool 메시지 content 는 제외한다. 여러 user
+    턴이 존재하면 원래 순서를 유지해 모두 이어 붙인다. user 메시지가
+    하나도 없으면 빈 문자열을 전달한다.
 
     Args:
-        messages: 사용자 입력 메시지 목록.
+        messages: 요청 바디의 ``messages`` 배열.
 
     Returns:
-        각 메시지의 텍스트 본문이 ``\n\n`` 으로 연결된 단일 문자열을
+        user 메시지 텍스트 본문이 ``\n\n`` 으로 연결된 단일 문자열을
         ``user_input`` 에 담은 GuardrailRequest.
     """
-    texts = [_extract_text(msg.content) for msg in messages]
+    texts = [
+        _extract_text(msg.content) for msg in messages if msg.role == "user"
+    ]
     return GuardrailRequest(user_input="\n\n".join(texts))
 
 
