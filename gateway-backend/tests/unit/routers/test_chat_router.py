@@ -103,6 +103,25 @@ def mock_provider_router():
     return router
 
 
+def _default_settings_override():
+    """로컬 `.env` 값이 새 관찰 모드 플래그 등을 통해 테스트로 누출되는 것을
+    차단하기 위한 Settings 오버라이드. 차단 경로를 쓰는 모든 테스트에서 공용.
+    """
+
+    def _settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=False,
+            continue_on_layer_failure=False,
+        )
+
+    return _settings
+
+
 @pytest.fixture
 def mock_llm_service(mock_provider_router):
     """mock_provider_router 에서 resolve 가 반환하는 LLMService."""
@@ -129,6 +148,7 @@ def client(
             llm_model=s.llm_model,
             upstage_api_key=s.upstage_api_key.get_secret_value(),
             skip_policy_fetch=False,
+            continue_on_layer_failure=False,
         )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
@@ -180,6 +200,7 @@ def test_chat_completions_input_blocked_returns_content_filter(
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: blocked_svc
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
 
     try:
         c = TestClient(app)
@@ -226,6 +247,7 @@ def test_chat_completions_input_blocked_streaming_returns_sse(
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: blocked_svc
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
 
     try:
         c = TestClient(app)
@@ -276,6 +298,7 @@ def test_chat_completions_output_blocked_returns_content_filter(
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: blocked_svc
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
 
     try:
         c = TestClient(app)
@@ -445,6 +468,7 @@ def test_streaming_output_blocked_does_not_leak_content(
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: blocked_svc
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
 
     try:
         c = TestClient(app)
@@ -797,6 +821,7 @@ def test_skip_policy_fetch_forces_all_layers_enabled(
             llm_model=s.llm_model,
             upstage_api_key=s.upstage_api_key.get_secret_value(),
             skip_policy_fetch=True,
+            continue_on_layer_failure=False,
         )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_ps
