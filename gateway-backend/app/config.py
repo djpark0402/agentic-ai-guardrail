@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # 공통
     admin_backend_url: str = "http://localhost:8001"
     skip_policy_fetch: bool = False
+    # 데모용 관찰 모드 — True 면 레이어가 BLOCK 판정을 내려도 파이프라인을
+    # 끝까지 진행하고, 응답에 `guardrail_reports` 블록으로 각 레이어 판정을
+    # 첨부한다. False (기본) 면 기존 동작 유지(첫 BLOCK 시 즉시 차단 응답).
+    continue_on_layer_failure: bool = False
 
 
 @lru_cache

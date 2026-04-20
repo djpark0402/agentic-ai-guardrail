@@ -43,3 +43,27 @@ def test_get_settings_is_cached(monkeypatch):
     s2 = get_settings()
     assert s1 is s2
     get_settings.cache_clear()
+
+
+def test_continue_on_layer_failure_defaults_to_false(monkeypatch):
+    """CONTINUE_ON_LAYER_FAILURE 미설정 시 기본값은 False 여야 한다."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.delenv("CONTINUE_ON_LAYER_FAILURE", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.continue_on_layer_failure is False
+
+
+def test_continue_on_layer_failure_reads_env(monkeypatch):
+    """CONTINUE_ON_LAYER_FAILURE=true 이면 플래그가 켜진다."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("CONTINUE_ON_LAYER_FAILURE", "true")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.continue_on_layer_failure is True
