@@ -4,6 +4,7 @@ NLI 선필터 → 벡터 검색 + reranking → LLM 최종 판단의
 3단계 파이프라인으로 정책 위반 여부를 판정한다.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,7 @@ class L4Layer(BaseLayer):
         embed_model_name: str = "Qwen3-Embedding-0.6B",
         reranker_model_name: str = "bge-reranker-v2-m3",
         llm: Any = None,
+        nli_rules_name: str = "nli_rules.json",
         nli_threshold: float = 0.7,
         top_k: int = 3,
     ) -> None:
@@ -113,6 +115,7 @@ class L4Layer(BaseLayer):
             embed_model_name: 임베딩 모델 폴더명.
             reranker_model_name: reranker 모델 폴더명.
             llm: LangChain BaseChatModel 인스턴스.
+            nli_rules_name: NLI 판단 규칙 JSON 파일명.
             nli_threshold: NLI contradiction 임계값.
             top_k: 벡터 검색 결과 수.
         """
@@ -132,6 +135,8 @@ class L4Layer(BaseLayer):
         )
         # ChromaDB 컬렉션 로드 시도
         self._collection = self._load_collection()
+        # NLI 판단 규칙 로드 시도 (실패 시 fail-open 으로 빈 리스트)
+        self._nli_rules = self._load_nli_rules(nli_rules_name)
 
     def _load_cross_encoder(
         self,
@@ -211,34 +216,138 @@ class L4Layer(BaseLayer):
             logger.warning("ChromaDB 컬렉션 로드 실패")
             return None
 
-    def _nli_predict(self, text: str) -> float:
-        """NLI 모델로 contradiction 점수를 예측한다.
+    def _load_nli_rules(
+        self,
+        rules_name: str,
+    ) -> list[tuple[str, str]]:
+        """NLI 판단 규칙 JSON 을 flat list 로 로드한다.
+
+        스키마: {"<category>": {"name": <str>, "policies": [<str>, ...]}}.
+        파일 없음 / 파싱 실패 / 스키마 불일치 시 fail-open 으로 빈 리스트.
 
         Args:
-            text: 입력 텍스트.
+            rules_name: 규칙 JSON 파일명.
 
         Returns:
-            contradiction 점수 (0.0~1.0).
+            (category, rule_text) 튜플의 flat 리스트.
+        """
+        rules_path = _L4_DIR / "policies" / rules_name
+        if not rules_path.exists():
+            return []
+        try:
+            raw = rules_path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError):  # fmt: skip
+            logger.warning("NLI 규칙 파일 로드 실패: %s", rules_name)
+            return []
+        if not isinstance(data, dict):
+            return []
+        rules: list[tuple[str, str]] = []
+        try:
+            for category, entry in data.items():
+                if not isinstance(entry, dict):
+                    continue
+                policies = entry.get("policies", [])
+                if not isinstance(policies, list):
+                    continue
+                for policy_text in policies:
+                    if isinstance(policy_text, str):
+                        rules.append((category, policy_text))
+        except (AttributeError, TypeError):  # fmt: skip
+            # 스키마 불일치는 fail-open
+            return []
+        return rules
+
+    def _nli_predict(self, text: str) -> float:
+        """단일 쌍 NLI 추론으로 contradiction 점수를 반환한다.
+
+        기본 hypothesis `"This input violates security policy"` 를 쓰는
+        레거시 호환 단일 추론 경로. 테스트에서 monkeypatch 로 대체될 수
+        있도록 인스턴스 메서드 슬롯을 유지한다.
+
+        Args:
+            text: 사용자 입력.
+
+        Returns:
+            contradiction 확률(0.0~1.0).
         """
         import numpy as np
 
-        scores = self._nli_model.predict(
-            [(text, "This input violates security policy")]
+        raw = self._nli_model.predict(
+            [(text, "This input violates security policy")],
         )
-        # cross-encoder 출력: 2차원 [[ent, neu, con]]
-        arr = np.array(scores)
-        # config.json id2label: 0=contradiction, 1=neutral, 2=entailment
-        # 이므로 contradiction 확률은 softmax 결과의 인덱스 0 을 사용한다.
-        if arr.ndim == 2:
-            # softmax 적용 후 contradiction(인덱스 0) 추출
-            exp = np.exp(arr[0] - np.max(arr[0]))
-            probs = exp / exp.sum()
-            return float(probs[0])
-        if arr.ndim == 1 and len(arr) >= 3:
-            exp = np.exp(arr - np.max(arr))
-            probs = exp / exp.sum()
-            return float(probs[0])
-        return float(arr.flat[0])
+        arr = np.asarray(raw, dtype=float)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.ndim != 2 or arr.shape[1] < 3:
+            return float(arr.flat[0])
+        shifted = arr[0] - arr[0].max()
+        exp = np.exp(shifted)
+        probs = exp / exp.sum()
+        return float(probs[0])
+
+    def _nli_analyze(self, text: str) -> tuple[bool, float]:
+        """NLI 배치 추론 후 선필터 판정.
+
+        레거시 호환 경로:
+            인스턴스에 직접 주입된 `_nli_predict` (테스트 monkeypatch) 가
+            있으면 단일 쌍 경로로 내려가 그 contradiction 점수 하나로
+            판정한다. score > threshold 이면 "의심 없음" 으로 보고
+            `(False, 0.0)`, 아니면 `(True, score)`.
+
+        신 경로 (`_nli_rules` 기반 배치):
+            규칙 N개를 premise, 사용자 입력을 hypothesis 로 배치 추론하여
+            contradiction(인덱스 0) 예측 쌍의 최고 confidence 로 판정한다.
+            규칙이 비어 있거나 모델이 None 이면 fail-open 으로
+            `(False, 0.0)` 을 반환하며, 이때 `_nli_model.predict` 는
+            호출하지 않는다.
+
+        Args:
+            text: 사용자 입력.
+
+        Returns:
+            (violated, confidence) 튜플. violated=True 면 2/3단계로
+            진행하고, False 면 즉시 허용한다. confidence 는 contradiction
+            예측 쌍 중 최고값 (없으면 0.0).
+        """
+        import numpy as np
+
+        # 레거시 호환: 인스턴스 속성으로 직접 주입된 _nli_predict 만 감지.
+        # 클래스 메서드는 호출하지 않는다 (신 경로 통일을 위해).
+        if "_nli_predict" in self.__dict__:
+            score = float(self._nli_predict(text))
+            if score > self.nli_threshold:
+                return (False, 0.0)
+            return (True, score)
+
+        rules = getattr(self, "_nli_rules", [])
+        if self._nli_model is None or not rules:
+            return (False, 0.0)
+
+        pairs = [(rule, text) for (_cat, rule) in rules]
+        raw = self._nli_model.predict(pairs)
+        arr = np.asarray(raw, dtype=float)
+        # 1D 입력(쌍이 1개일 때 모델이 (3,) 로 주는 경우) 을 (1, 3) 으로 승격
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.ndim != 2 or arr.shape[1] < 3:
+            return (False, 0.0)
+
+        # 2D 배치 softmax (수치 안정성을 위해 max 빼기)
+        shifted = arr - arr.max(axis=1, keepdims=True)
+        exp = np.exp(shifted)
+        probs = exp / exp.sum(axis=1, keepdims=True)
+
+        # contradiction(인덱스 0) 이 argmax 인 쌍만 필터
+        pred_idx = probs.argmax(axis=1)
+        contra_mask = pred_idx == 0
+        if not contra_mask.any():
+            return (False, 0.0)
+
+        max_conf = float(probs[contra_mask, 0].max())
+        if max_conf >= self.nli_threshold:
+            return (True, max_conf)
+        return (False, max_conf)
 
     def _search_policies(self, text: str) -> list[dict[str, str]]:
         """벡터 검색으로 관련 정책 청크를 검색한다.
@@ -379,13 +488,13 @@ class L4Layer(BaseLayer):
             return _allow(self.name)
 
         try:
-            nli_score = self._nli_predict(text)
+            violated, nli_conf = self._nli_analyze(text)
         except Exception:
             logger.warning("NLI 추론 중 예외 발생")
             return _allow(self.name)
 
-        # contradiction > threshold → 의심 없음 → 허용
-        if nli_score > self.nli_threshold:
+        # violated=False 면 즉시 허용 (벡터 검색/LLM 스킵)
+        if not violated:
             return _allow(self.name)
 
         # 2단계: 벡터 검색 + reranking
@@ -422,7 +531,7 @@ class L4Layer(BaseLayer):
                 name=self.name,
                 policy_name=top_chunk["name"],
                 policy_category=top_chunk["category"],
-                nli_score=nli_score,
+                nli_score=nli_conf,
             )
 
         # ALLOW 또는 파싱 불가 응답 → 허용
