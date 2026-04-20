@@ -15,6 +15,20 @@ from app.services.layer_registry import get_layer
 logger = logging.getLogger(__name__)
 
 
+def _with_layer_name(
+    result: GuardrailResult,
+    layer_idx: int,
+) -> GuardrailResult:
+    """결과에 `layer` 가 비어 있으면 `L{idx}` 로 보강한 사본을 돌려준다.
+
+    관찰 모드 응답에서 레이어별 판정을 순서대로 식별하기 위해 필요하다.
+    PASS/미구현/미매핑 레이어는 `layer` 가 비어 있을 수 있으므로 여기서 메운다.
+    """
+    if result.layer:
+        return result
+    return result.model_copy(update={"layer": f"L{layer_idx}"})
+
+
 class SecurityLayerService:
     """core-secure-layer 를 통한 L1~L6 보안 검사 서비스.
 
@@ -74,6 +88,66 @@ class SecurityLayerService:
             if result.status is CheckStatus.BLOCK:
                 return result
         return GuardrailResult(status=CheckStatus.PASS)
+
+    async def check_input_all(
+        self,
+        messages: list[Message],
+        policy: GuardrailPolicy,
+    ) -> list[GuardrailResult]:
+        """활성 레이어 전부를 순차 실행하고 각 결과를 수집한다.
+
+        관찰(데모) 모드 전용 경로로, BLOCK 판정이 나와도 후속 레이어 실행을
+        중단하지 않는다. 각 결과에는 `layer` 필드가 `"L{idx}"` 형식으로
+        보강되어, 정책 순서에 따른 레이어별 판정 내역을 클라이언트에 그대로
+        노출할 수 있다.
+
+        Args:
+            messages: 사용자 입력 메시지 목록.
+            policy: 적용할 보안 정책.
+
+        Returns:
+            활성 레이어 개수만큼의 `GuardrailResult` 리스트. 순서는
+            `policy.enabled_layers()` 와 일치한다.
+        """
+        enabled = policy.enabled_layers()
+        logger.info(
+            "입력 보안 검사(관찰 모드) 시작: 메시지 수=%d enabled_layers=%s",
+            len(messages),
+            enabled,
+        )
+        results: list[GuardrailResult] = []
+        for layer_idx in enabled:
+            result = await self._run_layer_input(layer_idx, messages)
+            results.append(_with_layer_name(result, layer_idx))
+        return results
+
+    async def check_output_all(
+        self,
+        content: str,
+        policy: GuardrailPolicy,
+    ) -> list[GuardrailResult]:
+        """활성 레이어 전부를 순차 실행하고 각 출력 결과를 수집한다.
+
+        관찰(데모) 모드 전용 경로. `check_input_all` 과 대칭.
+
+        Args:
+            content: LLM 응답 텍스트.
+            policy: 적용할 보안 정책.
+
+        Returns:
+            활성 레이어 개수만큼의 `GuardrailResult` 리스트.
+        """
+        enabled = policy.enabled_layers()
+        logger.info(
+            "출력 보안 검사(관찰 모드) 시작: content_len=%d enabled_layers=%s",
+            len(content),
+            enabled,
+        )
+        results: list[GuardrailResult] = []
+        for layer_idx in enabled:
+            result = await self._run_layer_output(layer_idx, content)
+            results.append(_with_layer_name(result, layer_idx))
+        return results
 
     async def _run_layer_input(
         self,

@@ -194,6 +194,120 @@ async def test_run_layer_output_block_propagates(service, mocker):
     assert result.layer == "L3"
 
 
+async def test_check_input_all_collects_every_enabled_layer_result(mocker):
+    """check_input_all 은 BLOCK 이 있어도 모든 활성 레이어를 실행하고
+    결과 리스트를 policy 순서대로 반환한다 (short-circuit 안 함)."""
+    from core_secure_layer.layers.types import (
+        LayerResult,
+        Severity,
+    )
+
+    call_log: list[str] = []
+
+    def _make_layer(name: str, allowed: bool, reason: str | None = None):
+        mock = mocker.MagicMock()
+        mock.name = name
+
+        async def fake_check(request):
+            call_log.append(name)
+            return LayerResult(
+                name=name,
+                allowed=allowed,
+                reason=reason,
+                severity=(Severity.HIGH if not allowed else Severity.NONE),
+            )
+
+        mock.check = fake_check
+        return mock
+
+    mock_l1 = _make_layer("L1", allowed=False, reason="injection")
+    mock_l2 = _make_layer("L2", allowed=True)
+    mock_l3 = _make_layer("L3", allowed=False, reason="pii")
+
+    def fake_get_layer(idx):
+        return {1: mock_l1, 2: mock_l2, 3: mock_l3}.get(idx)
+
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        side_effect=fake_get_layer,
+    )
+
+    service = SecurityLayerService()
+    policy = _policy(l4=False, l5=False, l6=False)
+    messages = [Message(role="user", content="데모 입력")]
+    results = await service.check_input_all(messages=messages, policy=policy)
+
+    # 모든 활성 레이어가 호출되었고 순서가 policy.enabled_layers() 와 일치.
+    assert call_log == ["L1", "L2", "L3"]
+    assert [r.layer for r in results] == ["L1", "L2", "L3"]
+    assert [r.status for r in results] == [
+        CheckStatus.BLOCK,
+        CheckStatus.PASS,
+        CheckStatus.BLOCK,
+    ]
+    assert results[0].reason == "injection"
+    assert results[2].reason == "pii"
+
+
+async def test_check_output_all_collects_every_enabled_layer_result(mocker):
+    """check_output_all 도 BLOCK 이 있어도 모든 활성 레이어를 끝까지 실행."""
+    from core_secure_layer.layers.types import LayerResult, Severity
+
+    call_log: list[str] = []
+
+    def _make_layer(name: str, allowed: bool):
+        mock = mocker.MagicMock()
+        mock.name = name
+
+        async def fake_check(request):
+            call_log.append(name)
+            return LayerResult(
+                name=name,
+                allowed=allowed,
+                severity=(Severity.LOW if not allowed else Severity.NONE),
+            )
+
+        mock.check = fake_check
+        return mock
+
+    mock_l2 = _make_layer("L2", allowed=False)
+    mock_l4 = _make_layer("L4", allowed=True)
+
+    def fake_get_layer(idx):
+        return {2: mock_l2, 4: mock_l4}.get(idx)
+
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        side_effect=fake_get_layer,
+    )
+
+    service = SecurityLayerService()
+    policy = _policy(l1=False, l3=False, l5=False, l6=False)
+    results = await service.check_output_all(
+        content="demo output", policy=policy
+    )
+
+    assert call_log == ["L2", "L4"]
+    assert [r.layer for r in results] == ["L2", "L4"]
+    assert [r.status for r in results] == [
+        CheckStatus.BLOCK,
+        CheckStatus.PASS,
+    ]
+
+
+async def test_check_input_all_fills_layer_name_for_unmapped_index():
+    """미매핑/PASS 레이어도 결과 리스트에 포함되며 layer 이름이 보존된다."""
+    spy = _SpyService()
+    policy = _policy(l2=False, l4=False, l5=False, l6=False)
+    results = await spy.check_input_all(
+        messages=[Message(role="user", content="x")], policy=policy
+    )
+    assert spy.input_calls == [1, 3]
+    assert len(results) == 2
+    assert all(r.status == CheckStatus.PASS for r in results)
+    assert [r.layer for r in results] == ["L1", "L3"]
+
+
 async def test_check_input_short_circuits_on_block(mocker):
     """첫 BLOCK 발생 시 후속 레이어를 호출하지 않는다."""
     from core_secure_layer.layers.types import (
