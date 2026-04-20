@@ -671,3 +671,148 @@ class TestLayerResultShape:
         assert result.allowed is True
         assert result.severity == Severity.NONE
         assert result.confidence == 1.0
+
+
+# ──────────────────────────────────────────────
+# 5. 버그 재현: NLI 라벨 인덱스 반전 (#1)
+# ──────────────────────────────────────────────
+
+
+def _make_bare_layer():
+    # 모델 로드 없이 L4Layer 인스턴스를 구성한다.
+    # __init__ 을 우회하기 때문에 실제 파일시스템/모델 접근이 발생하지 않는다.
+    inst = L4Layer.__new__(L4Layer)
+    inst.name = "L4"
+    inst.nli_threshold = _DEFAULT_NLI_THRESHOLD
+    inst.top_k = _DEFAULT_TOP_K
+    inst._nli_model = None
+    inst._embed_model = None
+    inst._reranker_model = None
+    inst._collection = None
+    inst._llm = None
+    return inst
+
+
+class TestNliLabelIndexBug:
+    """`_nli_predict` 가 contradiction(인덱스 0) 확률을 반환해야 함을 검증.
+
+    `core_secure_layer/layers/l4/model/nli/nli_custom_model/config.json`
+    의 id2label 은 `{0: contradiction, 1: neutral, 2: entailment}` 이므로
+    cross-encoder 로짓의 인덱스 0 이 contradiction, 인덱스 2 가
+    entailment 이다. 현재 구현은 인덱스 2 를 반환하여 라벨이 뒤집혀
+    있으므로 아래 테스트들은 반드시 실패해야 한다.
+    """
+
+    def test_contradiction_dominant_2d_logits(self):
+        # 2차원 로짓에서 contradiction 이 압도적이면 높은 확률을 반환해야 함
+        import numpy as np
+
+        inst = _make_bare_layer()
+        inst._nli_model = MagicMock()
+        inst._nli_model.predict.return_value = np.array(
+            [[10.0, -1.0, -1.0]],
+        )
+        score = inst._nli_predict("arbitrary text")
+        assert score >= 0.9, (
+            f"contradiction 로짓이 압도적일 때 확률이 0.9 이상이어야 하는데 "
+            f"{score} 가 반환됨 (인덱스 반전 버그)"
+        )
+
+    def test_entailment_dominant_2d_logits(self):
+        # 2차원 로짓에서 entailment 가 압도적이면 contradiction 확률은 낮아야 함
+        import numpy as np
+
+        inst = _make_bare_layer()
+        inst._nli_model = MagicMock()
+        inst._nli_model.predict.return_value = np.array(
+            [[-1.0, -1.0, 10.0]],
+        )
+        score = inst._nli_predict("arbitrary text")
+        assert score <= 0.1, (
+            f"entailment 로짓이 압도적일 때 contradiction 확률이 0.1 이하여야 "
+            f"하는데 {score} 가 반환됨 (인덱스 반전 버그)"
+        )
+
+    def test_contradiction_dominant_1d_logits(self):
+        # 1차원 로짓(ndim==1 분기) 도 동일하게 contradiction 을 반환해야 함
+        import numpy as np
+
+        inst = _make_bare_layer()
+        inst._nli_model = MagicMock()
+        inst._nli_model.predict.return_value = np.array(
+            [10.0, -1.0, -1.0],
+        )
+        score = inst._nli_predict("arbitrary text")
+        assert score >= 0.9, (
+            f"1차원 로짓 contradiction 압도 시 확률이 0.9 이상이어야 하는데 "
+            f"{score} 가 반환됨 (ndim==1 분기 인덱스 반전 버그)"
+        )
+
+
+# ──────────────────────────────────────────────
+# 6. 버그 재현: Python 2 스타일 except 구문 잔재 (#2)
+# ──────────────────────────────────────────────
+
+
+class TestL4ModuleSyntax:
+    """`l4.py` 에 Python 2 스타일 except 절이 남아 있지 않아야 함을 검증.
+
+    현재 `_llm_judge` 내부에
+    `except _json.JSONDecodeError, AttributeError:` (Python 2 문법) 이
+    남아 있다. 올바른 형태는 `except (_json.JSONDecodeError, AttributeError):`.
+
+    Python 3.14 이후에서는 `except A, B:` 가 SyntaxError 가 아닌 tuple
+    해석으로 허용되지만, 이는 Python 2 잔재로서 의도가 모호하고 가독성이
+    나쁘므로 명시적 괄호 tuple 형태로 작성해야 한다. 아래 테스트는
+    `l4.py` 소스 텍스트에 해당 패턴이 남아 있으면 실패한다.
+    """
+
+    def test_no_python2_style_except_clause(self):
+        # l4.py 에 `except X.Y, Z:` 혹은 `except X, Y:` 처럼 괄호 없이
+        # 두 예외를 콤마로 나열한 Python 2 스타일 except 절이 없어야 한다.
+        import re
+        from pathlib import Path
+
+        source_path = (
+            Path(__file__).resolve().parent.parent
+            / "core_secure_layer"
+            / "layers"
+            / "l4"
+            / "l4.py"
+        )
+        source = source_path.read_text(encoding="utf-8")
+        # `except <식별자/속성접근>, <식별자>:` 패턴 (괄호 없음)
+        # 괄호로 묶인 tuple 형태는 매치하지 않는다.
+        pattern = re.compile(
+            r"^\s*except\s+[A-Za-z_][\w\.]*\s*,\s*[A-Za-z_][\w\.]*\s*:",
+            re.MULTILINE,
+        )
+        matches = pattern.findall(source)
+        assert not matches, (
+            "l4.py 에 Python 2 스타일 except 절이 남아 있음: "
+            f"{matches!r}. 괄호 tuple 문법 `except (A, B):` 로 수정 필요."
+        )
+
+    def test_except_json_decode_error_uses_tuple_syntax(self):
+        # JSONDecodeError 가 포함된 except 절은 반드시 괄호 tuple 형태여야 함
+        from pathlib import Path
+
+        source_path = (
+            Path(__file__).resolve().parent.parent
+            / "core_secure_layer"
+            / "layers"
+            / "l4"
+            / "l4.py"
+        )
+        source = source_path.read_text(encoding="utf-8")
+        # 올바른 형태가 최소 1회 등장해야 함
+        assert "except (_json.JSONDecodeError, AttributeError):" in source, (
+            "_llm_judge 의 except 절이 괄호 tuple 형태"
+            " `except (_json.JSONDecodeError, AttributeError):`"
+            " 로 작성되어 있지 않음."
+        )
+        # 잘못된 Python 2 스타일이 존재하면 안 됨
+        assert "except _json.JSONDecodeError, AttributeError:" not in source, (
+            "l4.py 에 Python 2 스타일 "
+            "`except _json.JSONDecodeError, AttributeError:` 가 남아 있음."
+        )
