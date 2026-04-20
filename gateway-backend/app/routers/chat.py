@@ -7,11 +7,12 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import Settings, get_settings
 from app.dependencies import (
+    get_nonce_store,
     get_policy_service,
     get_provider_router,
     get_security_service,
@@ -26,6 +27,15 @@ from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
 from app.services.policy_service import PolicyService
 from app.services.provider_router import ProviderRouter
+from app.services.request_verifier import (
+    HeaderVerificationError,
+    NonceStore,
+    VerifiedHeaders,
+    body_hash_hex,
+    extract_headers,
+    verify_and_remember_nonce,
+    verify_timestamp,
+)
 from app.services.security_layer_service import SecurityLayerService
 
 logger = logging.getLogger(__name__)
@@ -480,40 +490,88 @@ async def _run_observe_mode_pipeline(
     )
 
 
+def _header_error_response(reason: str) -> JSONResponse:
+    """헤더 검증 실패 시 사용자에게 내려줄 401 응답을 조립한다."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": {
+                "type": "header_verification_failed",
+                "reason": reason,
+            }
+        },
+    )
+
+
+def _verify_user_headers(
+    request: Request,
+    *,
+    settings: Settings,
+    nonce_store: NonceStore,
+    now: float,
+) -> VerifiedHeaders:
+    """사용자 요청 헤더 4개를 추출·검증하여 VerifiedHeaders 를 반환한다.
+
+    `settings.skip_header_verification=True` 면 검증을 건너뛰고 헤더에서
+    읽을 수 있는 값만 담아 반환한다(값이 없는 필드는 빈 문자열).
+
+    Raises:
+        HeaderVerificationError: 필수 헤더 누락/빈값, timestamp skew 초과,
+            nonce 재연 중 하나라도 발생하면 호출측이 401 응답으로 전환하도록
+            예외를 전파한다.
+    """
+    if settings.skip_header_verification:
+        return VerifiedHeaders(
+            api_key=request.headers.get("x-api-key", ""),
+            timestamp=request.headers.get("x-timestamp", ""),
+            nonce=request.headers.get("x-nonce", ""),
+            signature=request.headers.get("x-signature", ""),
+        )
+    verified = extract_headers(request.headers)
+    verify_timestamp(
+        verified.timestamp,
+        now=now,
+        skew_sec=settings.request_timestamp_skew_sec,
+    )
+    verify_and_remember_nonce(verified.nonce, nonce_store, now=now)
+    return verified
+
+
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(
+    http_request: Request,
     request: ChatRequest,
     policy_service: Annotated[PolicyService, Depends(get_policy_service)],
     security_service: Annotated[
         SecurityLayerService, Depends(get_security_service)
     ],
     provider_router: Annotated[ProviderRouter, Depends(get_provider_router)],
+    nonce_store: Annotated[NonceStore, Depends(get_nonce_store)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> ChatResponse | StreamingResponse:
+) -> ChatResponse | StreamingResponse | JSONResponse:
     """OpenAI 호환 채팅 완성 요청을 처리한다.
 
     가드레일 파이프라인:
-    1. admin-backend에서 보안 정책 조회
+    0. 사용자 헤더 4개(X-API-Key/X-Timestamp/X-Nonce/X-Signature) 검증
+    1. admin-backend `/api/v1/gateway/verify` 로 검증+정책 조회
     2. security-layer로 입력 프롬프트 검사
     3. 모델명 기반 provider 자동 감지 후 LLM 비스트리밍 호출
     4. security-layer로 출력 결과 검사 (사용자 전송 이전에 선행)
     5. `stream=False`면 JSON, `stream=True`면 SSE로 재방출
 
     Args:
+        http_request: 원본 HTTP 요청 (헤더·body 원문 접근 용).
         request: OpenAI 호환 채팅 완성 요청.
-        policy_service: 보안 정책 조회 서비스.
+        policy_service: ADMIN 검증·정책 조회 서비스.
         security_service: 보안 레이어 검사 서비스.
         provider_router: 모델명 기반 LLM provider 라우터.
-        settings: 애플리케이션 설정 (정책 조회 생략 여부 포함).
+        nonce_store: 재연 방지용 in-memory nonce 저장소.
+        settings: 애플리케이션 설정.
 
     Returns:
+        헤더 검증 실패: HTTP 401 + `header_verification_failed` JSON.
         비스트리밍: ChatResponse JSON 응답.
         스트리밍: SSE StreamingResponse.
-
-    Note:
-        입력/출력 가드레일 BLOCK 은 HTTP 200 + OpenAI content_filter 규격
-        (choices[].finish_reason="content_filter" + 비표준 error 블록) 으로
-        스트리밍·비스트리밍 모두 동일한 스키마로 내려간다.
     """
     session_id = str(uuid.uuid4())
     t_request = time.perf_counter()
@@ -526,14 +584,30 @@ async def chat_completions(
         len(request.messages),
     )
 
-    # 1단계: admin-backend에서 보안 정책 조회
+    # 0단계: 사용자 요청 헤더 검증 (+ body hash 계산)
+    raw_body = await http_request.body()
+    body_hash = body_hash_hex(raw_body)
+    try:
+        verified_headers = _verify_user_headers(
+            http_request,
+            settings=settings,
+            nonce_store=nonce_store,
+            now=time.time(),
+        )
+    except HeaderVerificationError as exc:
+        logger.warning("[%s] 헤더 검증 실패: %s", session_id, exc)
+        return _header_error_response(str(exc))
+
+    # 1단계: admin-backend에서 보안 정책 조회 (검증 위임)
     t0 = time.perf_counter()
     if settings.skip_policy_fetch:
         # 정책 조회는 생략하되 L1~L6 전체 레이어를 강제로 실행한다.
         policy = GuardrailPolicy.all_enabled()
     else:
-        policy = await policy_service.fetch_policy(
+        policy = await policy_service.verify_and_fetch_policy(
             session_id=session_id,
+            headers=verified_headers,
+            body_hash=body_hash,
         )
     logger.info(
         "[%s] 1단계 정책 조회 완료: %.1fms enabled_layers=%s",

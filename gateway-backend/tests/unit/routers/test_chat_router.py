@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.dependencies import (
+    get_nonce_store,
     get_policy_service,
     get_provider_router,
     get_security_service,
@@ -16,6 +17,9 @@ from app.dependencies import (
 from app.main import app
 from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
+from app.services.request_verifier import (
+    NonceStore,
+)
 
 
 def _make_completion(
@@ -79,8 +83,14 @@ def _make_mock_provider_router(llm_service=None):
 def mock_policy_service():
     """항상 전체 활성화 정책을 반환하는 더미 PolicyService."""
     svc = MagicMock()
-    svc.fetch_policy = AsyncMock(return_value=_all_enabled_policy())
+    svc.verify_and_fetch_policy = AsyncMock(return_value=_all_enabled_policy())
     return svc
+
+
+@pytest.fixture
+def nonce_store():
+    """각 테스트마다 새 NonceStore 를 주입해 재연 방지 상태를 격리한다."""
+    return NonceStore(ttl_sec=600)
 
 
 @pytest.fixture
@@ -106,6 +116,9 @@ def mock_provider_router():
 def _default_settings_override():
     """로컬 `.env` 값이 새 관찰 모드 플래그 등을 통해 테스트로 누출되는 것을
     차단하기 위한 Settings 오버라이드. 차단 경로를 쓰는 모든 테스트에서 공용.
+
+    사용자 헤더 검증은 기본 off (`skip_header_verification=True`) — 헤더
+    검증을 직접 검사하는 테스트만 별도로 False 로 오버라이드한다.
     """
 
     def _settings():
@@ -116,6 +129,7 @@ def _default_settings_override():
             llm_model=s.llm_model,
             upstage_api_key=s.upstage_api_key.get_secret_value(),
             skip_policy_fetch=False,
+            skip_header_verification=True,
             continue_on_layer_failure=False,
         )
 
@@ -133,30 +147,22 @@ def client(
     mock_policy_service,
     mock_security_service,
     mock_provider_router,
+    nonce_store,
 ):
     """모든 서비스가 mock된 TestClient.
 
     로컬 `.env` 값(특히 `SKIP_POLICY_FETCH`)의 영향을 배제하기 위해
-    `get_settings` 도 `skip_policy_fetch=False` 로 고정 오버라이드한다.
+    `get_settings` 를 고정 오버라이드하고, 헤더 검증은 기본 off 로
+    둔다(`skip_header_verification=True`).
     """
-
-    def _default_settings():
-        s = get_settings()
-        from app.config import Settings
-
-        return Settings(
-            llm_model=s.llm_model,
-            upstage_api_key=s.upstage_api_key.get_secret_value(),
-            skip_policy_fetch=False,
-            continue_on_layer_failure=False,
-        )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: (
         mock_security_service
     )
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _default_settings
+    app.dependency_overrides[get_nonce_store] = lambda: nonce_store
+    app.dependency_overrides[get_settings] = _default_settings_override()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -502,7 +508,7 @@ def test_streaming_output_blocked_does_not_leak_content(
 
 
 def test_policy_fetch_called_once(client, mock_policy_service):
-    """요청 처리 시 fetch_policy가 정확히 한 번 호출된다."""
+    """요청 처리 시 verify_and_fetch_policy 가 정확히 한 번 호출된다."""
     client.post(
         "/v1/chat/completions",
         json={
@@ -510,7 +516,7 @@ def test_policy_fetch_called_once(client, mock_policy_service):
             "messages": [{"role": "user", "content": "테스트"}],
         },
     )
-    mock_policy_service.fetch_policy.assert_called_once()
+    mock_policy_service.verify_and_fetch_policy.assert_called_once()
 
 
 def test_input_check_called_with_messages(client, mock_security_service):
@@ -574,7 +580,7 @@ def test_policy_fetch_error_returns_structured_503(client, mock_policy_service):
     import httpx as _httpx
 
     request = _httpx.Request("GET", "https://admin/api")
-    mock_policy_service.fetch_policy = AsyncMock(
+    mock_policy_service.verify_and_fetch_policy = AsyncMock(
         side_effect=_httpx.ConnectError(
             message="Connection refused",
             request=request,
@@ -624,6 +630,7 @@ def _observe_settings_override():
             llm_model=s.llm_model,
             upstage_api_key=s.upstage_api_key.get_secret_value(),
             skip_policy_fetch=False,
+            skip_header_verification=True,
             continue_on_layer_failure=True,
         )
 
@@ -809,9 +816,9 @@ def test_observe_mode_streaming_attaches_guardrail_reports(
 def test_skip_policy_fetch_forces_all_layers_enabled(
     mock_security_service, mock_provider_router
 ):
-    """SKIP_POLICY_FETCH=true 이면 fetch_policy 를 호출하지 않고 L1~L6 전부를 강제 활성화한다."""  # noqa: E501
+    """SKIP_POLICY_FETCH=true 이면 verify_and_fetch_policy 를 호출하지 않고 L1~L6 전부를 강제 활성화한다."""  # noqa: E501
     mock_ps = MagicMock()
-    mock_ps.fetch_policy = AsyncMock()
+    mock_ps.verify_and_fetch_policy = AsyncMock()
 
     def _skip_settings():
         s = get_settings()
@@ -821,6 +828,7 @@ def test_skip_policy_fetch_forces_all_layers_enabled(
             llm_model=s.llm_model,
             upstage_api_key=s.upstage_api_key.get_secret_value(),
             skip_policy_fetch=True,
+            skip_header_verification=True,
             continue_on_layer_failure=False,
         )
 
@@ -841,7 +849,7 @@ def test_skip_policy_fetch_forces_all_layers_enabled(
             },
         )
         assert resp.status_code == 200
-        mock_ps.fetch_policy.assert_not_called()
+        mock_ps.verify_and_fetch_policy.assert_not_called()
 
         # SKIP 시 check_input/check_output 이 L1~L6 전체 정책을 받아야 한다
         input_policy = mock_security_service.check_input.call_args.kwargs[
@@ -852,5 +860,187 @@ def test_skip_policy_fetch_forces_all_layers_enabled(
         ]
         assert input_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
         assert output_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
+    finally:
+        app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# 사용자 요청 헤더 검증 (SKIP_HEADER_VERIFICATION=false)
+# ---------------------------------------------------------------------------
+
+
+def _verify_enabled_settings():
+    """헤더 검증을 강제 (skip_header_verification=False) 하는 Settings 오버라이드."""  # noqa: E501
+
+    def _settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=False,
+            skip_header_verification=False,
+            continue_on_layer_failure=False,
+            request_timestamp_skew_sec=300,
+        )
+
+    return _settings
+
+
+def _valid_user_headers() -> dict[str, str]:
+    """timestamp/nonce 이 서버 시간 기준으로 유효한 4개 헤더."""
+    import time as _time
+
+    return {
+        "X-API-Key": "uak_user",
+        "X-Timestamp": str(int(_time.time())),
+        "X-Nonce": "nonce-unique-xyz",
+        "X-Signature": "a" * 64,
+    }
+
+
+def _setup_header_verify_overrides(
+    mock_policy_service,
+    mock_security_service,
+    mock_provider_router,
+    nonce_store,
+):
+    """헤더 검증 테스트용 DI 오버라이드를 일괄 등록한다."""
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: (
+        mock_security_service
+    )
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_nonce_store] = lambda: nonce_store
+    app.dependency_overrides[get_settings] = _verify_enabled_settings()
+
+
+def test_header_verification_missing_returns_401(
+    mock_policy_service,
+    mock_security_service,
+    mock_provider_router,
+    nonce_store,
+):
+    """헤더가 하나라도 누락되면 401 + header_verification_failed 를 반환한다."""
+    _setup_header_verify_overrides(
+        mock_policy_service,
+        mock_security_service,
+        mock_provider_router,
+        nonce_store,
+    )
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "안녕"}],
+            },
+        )
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body["error"]["type"] == "header_verification_failed"
+        assert "X-API-Key" in body["error"]["reason"]
+        # 검증 실패 시 ADMIN 정책 조회가 호출되지 않아야 한다.
+        mock_policy_service.verify_and_fetch_policy.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_header_verification_timestamp_skew_returns_401(
+    mock_policy_service,
+    mock_security_service,
+    mock_provider_router,
+    nonce_store,
+):
+    """timestamp 시간차가 허용 범위를 넘으면 401."""
+    _setup_header_verify_overrides(
+        mock_policy_service,
+        mock_security_service,
+        mock_provider_router,
+        nonce_store,
+    )
+    headers = _valid_user_headers()
+    headers["X-Timestamp"] = "1000000000"  # 2001년 — 현재와 수년 차이
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "안녕"}],
+            },
+        )
+        assert resp.status_code == 401
+        assert resp.json()["error"]["type"] == "header_verification_failed"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_header_verification_replayed_nonce_returns_401(
+    mock_policy_service,
+    mock_security_service,
+    mock_provider_router,
+    nonce_store,
+):
+    """동일 nonce 를 연속 두 번 보내면 두 번째 요청이 401."""
+    _setup_header_verify_overrides(
+        mock_policy_service,
+        mock_security_service,
+        mock_provider_router,
+        nonce_store,
+    )
+    headers = _valid_user_headers()
+    body = {
+        "model": "solar-pro",
+        "messages": [{"role": "user", "content": "안녕"}],
+    }
+    try:
+        c = TestClient(app)
+        first = c.post("/v1/chat/completions", headers=headers, json=body)
+        assert first.status_code == 200
+        second = c.post("/v1/chat/completions", headers=headers, json=body)
+        assert second.status_code == 401
+        assert second.json()["error"]["type"] == "header_verification_failed"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_header_verification_success_passes_headers_to_policy_service(
+    mock_policy_service,
+    mock_security_service,
+    mock_provider_router,
+    nonce_store,
+):
+    """정상 헤더는 그대로 verify_and_fetch_policy 에 전달된다."""
+    _setup_header_verify_overrides(
+        mock_policy_service,
+        mock_security_service,
+        mock_provider_router,
+        nonce_store,
+    )
+    headers = _valid_user_headers()
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "안녕"}],
+            },
+        )
+        assert resp.status_code == 200
+        call_kwargs = (
+            mock_policy_service.verify_and_fetch_policy.call_args.kwargs
+        )
+        assert call_kwargs["headers"].api_key == headers["X-API-Key"]
+        assert call_kwargs["headers"].timestamp == headers["X-Timestamp"]
+        assert call_kwargs["headers"].nonce == headers["X-Nonce"]
+        assert call_kwargs["headers"].signature == headers["X-Signature"]
+        # bodyHash 는 sha256 hex 64자여야 한다.
+        assert len(call_kwargs["body_hash"]) == 64
     finally:
         app.dependency_overrides.clear()
