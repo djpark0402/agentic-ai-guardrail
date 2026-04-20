@@ -83,6 +83,13 @@ class PolicyService:
             url,
             headers.nonce,
         )
+        # 디버깅 목적: ADMIN 으로 실제 전송되는 X-API-Key 헤더와 body 원문을
+        # 그대로 콘솔에 남긴다. 운영 환경에서는 제거하거나 DEBUG 레벨로 낮출 것.
+        logger.info(
+            "[DEBUG] ADMIN 요청 헤더 X-API-Key=%s body=%s",
+            req_headers.get("X-API-Key", "(미설정)"),
+            payload,
+        )
         try:
             response = await self._client.post(
                 url,
