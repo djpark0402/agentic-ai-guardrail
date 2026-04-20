@@ -51,6 +51,47 @@ _SSE_HEADERS: dict[str, str] = {
     "X-Accel-Buffering": "no",
 }
 
+# 로그에 찍히는 사용자 프롬프트 1건당 최대 길이. 이보다 길면 말줄임표로 잘린다.
+_LOG_PROMPT_CHAR_LIMIT = 200
+
+
+def _message_text(content: object) -> str:
+    """Message.content 를 로그용 한 줄 문자열로 변환한다.
+
+    OpenAI 호환 확장으로 content 는 문자열, content part 목록(dict 리스트),
+    또는 None 이 될 수 있다. multimodal part 는 text 필드만 추려 연결한다.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return " ".join(parts)
+    return str(content)
+
+
+def _summarize_user_prompts(messages: list[Any]) -> str:
+    """로그에 찍을 사용자 입력 요약 문자열을 조립한다.
+
+    role 별로 접두사를 붙이고(`[user]`, `[system]` 등), 줄바꿈을 스페이스로
+    치환하여 한 줄로 만든다. `_LOG_PROMPT_CHAR_LIMIT` 를 넘는 개별 메시지는
+    말줄임표로 잘린다.
+    """
+    segments: list[str] = []
+    for msg in messages:
+        text = _message_text(getattr(msg, "content", None)).replace("\n", " ")
+        if len(text) > _LOG_PROMPT_CHAR_LIMIT:
+            text = text[:_LOG_PROMPT_CHAR_LIMIT] + "…"
+        role = getattr(msg, "role", "?")
+        segments.append(f"[{role}] {text}")
+    return " | ".join(segments)
+
 
 def _chunk_content(content: str, size: int = _SSE_CHUNK_SIZE) -> list[str]:
     """전체 응답 문자열을 고정 길이 청크 목록으로 분할한다.
@@ -577,11 +618,12 @@ async def chat_completions(
     t_request = time.perf_counter()
 
     logger.info(
-        "[%s] 요청 수신: model=%s stream=%s messages=%d건",
+        "[%s] 요청 수신: model=%s stream=%s messages=%d건 내용=%s",
         session_id,
         request.model,
         request.stream,
         len(request.messages),
+        _summarize_user_prompts(request.messages),
     )
 
     # 0단계: 사용자 요청 헤더 검증 (+ body hash 계산)
