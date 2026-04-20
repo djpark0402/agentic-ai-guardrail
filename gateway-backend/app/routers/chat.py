@@ -54,6 +54,72 @@ _SSE_HEADERS: dict[str, str] = {
 # 로그에 찍히는 사용자 프롬프트 1건당 최대 길이. 이보다 길면 말줄임표로 잘린다.
 _LOG_PROMPT_CHAR_LIMIT = 200
 
+_TIMING_ORDER: tuple[str, ...] = (
+    "header_verification",
+    "policy_fetch",
+    "input_guardrail",
+    "llm_call",
+    "output_guardrail",
+    "response_emit",
+    "total",
+)
+
+
+def _elapsed_ms(started_at: float) -> float:
+    """지정 시각부터 현재까지의 경과 시간을 밀리초로 반환한다."""
+    return (time.perf_counter() - started_at) * 1000
+
+
+def _record_timing(
+    timings: dict[str, float],
+    name: str,
+    started_at: float,
+) -> float:
+    """단계별 경과 시간을 기록하고 반환한다."""
+    elapsed = _elapsed_ms(started_at)
+    timings[name] = elapsed
+    return elapsed
+
+
+def _log_request_summary(
+    session_id: str,
+    *,
+    final_status: str,
+    stream: bool,
+    timings: dict[str, float],
+) -> None:
+    """요청 종료 시점의 단계별 소요 시간을 구조화해 로그에 남긴다."""
+    lines = [
+        f"[{session_id}] 요청 완료 요약: "
+        f"final_status={final_status} stream={stream}"
+    ]
+    for name in _TIMING_ORDER:
+        elapsed = timings.get(name)
+        if elapsed is None:
+            continue
+        lines.append(f"  {name}_ms={elapsed:.1f}")
+    logger.info("\n".join(lines))
+
+
+def _finalize_request_log(
+    session_id: str,
+    *,
+    final_status: str,
+    stream: bool,
+    timings: dict[str, float],
+    t_request: float,
+    t_response: float,
+) -> None:
+    """응답 직전 시간을 포함해 최종 요약 로그를 남긴다."""
+    _record_timing(timings, "response_emit", t_response)
+    timings["total"] = _elapsed_ms(t_request)
+    _log_request_summary(
+        session_id,
+        final_status=final_status,
+        stream=stream,
+        timings=timings,
+    )
+
 
 def _message_text(content: object) -> str:
     """Message.content 를 로그용 한 줄 문자열로 변환한다.
@@ -386,6 +452,7 @@ async def _run_observe_mode_pipeline(
     request: ChatRequest,
     session_id: str,
     t_request: float,
+    timings: dict[str, float],
     policy: GuardrailPolicy,
     security_service: SecurityLayerService,
     provider_router: ProviderRouter,
@@ -401,6 +468,7 @@ async def _run_observe_mode_pipeline(
         request: 원본 `ChatRequest`.
         session_id: 세션 UUID.
         t_request: 요청 시작 시각(perf_counter).
+        timings: 단계별 소요 시간을 누적하는 딕셔너리.
         policy: 적용할 보안 정책.
         security_service: 보안 레이어 서비스.
         provider_router: LLM provider 라우터.
@@ -414,10 +482,13 @@ async def _run_observe_mode_pipeline(
         messages=request.messages,
         policy=policy,
     )
+    input_guardrail_ms = _record_timing(
+        timings, "input_guardrail", t0
+    )
     logger.info(
         "[%s] (관찰) 2단계 입력 검사 완료: %.1fms 결과=%s",
         session_id,
-        (time.perf_counter() - t0) * 1000,
+        input_guardrail_ms,
         [r.status.value for r in input_results],
     )
     for r in input_results:
@@ -442,10 +513,11 @@ async def _run_observe_mode_pipeline(
     passthrough["model"] = resolved_model
     completion = await llm_service.chat(messages=api_messages, **passthrough)
     content = completion.choices[0].message.content or ""
+    llm_call_ms = _record_timing(timings, "llm_call", t0)
     logger.info(
         "[%s] (관찰) 3단계 LLM 호출 완료: %.1fms provider=%s model=%s",
         session_id,
-        (time.perf_counter() - t0) * 1000,
+        llm_call_ms,
         llm_service.provider_name,
         resolved_model,
     )
@@ -456,10 +528,13 @@ async def _run_observe_mode_pipeline(
         content=content,
         policy=policy,
     )
+    output_guardrail_ms = _record_timing(
+        timings, "output_guardrail", t0
+    )
     logger.info(
         "[%s] (관찰) 4단계 출력 검사 완료: %.1fms 결과=%s",
         session_id,
-        (time.perf_counter() - t0) * 1000,
+        output_guardrail_ms,
         [r.status.value for r in output_results],
     )
     for r in output_results:
@@ -477,16 +552,17 @@ async def _run_observe_mode_pipeline(
     created = getattr(completion, "created", None) or int(time.time())
     model_name = getattr(completion, "model", None) or request.model
     finish_reason = completion.choices[0].finish_reason or "stop"
-    total_ms = (time.perf_counter() - t_request) * 1000
+    total_ms = _elapsed_ms(t_request)
 
     # 5-a단계: 스트리밍 — 마지막 finish 프레임에 guardrail_reports 주입
     if request.stream:
+        t_response = time.perf_counter()
         logger.info(
             "[%s] (관찰) 5단계 응답 전송: stream=True 총 %.1fms",
             session_id,
             total_ms,
         )
-        return StreamingResponse(
+        response = StreamingResponse(
             _stream_openai_chunks(
                 content,
                 chunk_id=chunk_id,
@@ -498,14 +574,24 @@ async def _run_observe_mode_pipeline(
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
+        _finalize_request_log(
+            session_id,
+            final_status="observe_success",
+            stream=True,
+            timings=timings,
+            t_request=t_request,
+            t_response=t_response,
+        )
+        return response
 
     # 5-b단계: 비스트리밍 — ChatResponse.guardrail_reports 로 첨부
+    t_response = time.perf_counter()
     logger.info(
         "[%s] (관찰) 5단계 응답 전송: stream=False 총 %.1fms",
         session_id,
         total_ms,
     )
-    return ChatResponse(
+    response = ChatResponse(
         id=chunk_id,
         object="chat.completion",
         created=created,
@@ -529,6 +615,15 @@ async def _run_observe_mode_pipeline(
         ),
         guardrail_reports=reports,
     )
+    _finalize_request_log(
+        session_id,
+        final_status="observe_success",
+        stream=False,
+        timings=timings,
+        t_request=t_request,
+        t_response=t_response,
+    )
+    return response
 
 
 def _header_error_response(reason: str) -> JSONResponse:
@@ -616,6 +711,7 @@ async def chat_completions(
     """
     session_id = str(uuid.uuid4())
     t_request = time.perf_counter()
+    timings: dict[str, float] = {}
 
     logger.info(
         "[%s] 요청 수신: model=%s stream=%s messages=%d건 내용=%s",
@@ -629,6 +725,7 @@ async def chat_completions(
     # 0단계: 사용자 요청 헤더 검증 (+ body hash 계산)
     raw_body = await http_request.body()
     body_hash = body_hash_hex(raw_body)
+    t0 = time.perf_counter()
     try:
         verified_headers = _verify_user_headers(
             http_request,
@@ -637,8 +734,20 @@ async def chat_completions(
             now=time.time(),
         )
     except HeaderVerificationError as exc:
+        _record_timing(timings, "header_verification", t0)
         logger.warning("[%s] 헤더 검증 실패: %s", session_id, exc)
-        return _header_error_response(str(exc))
+        t_response = time.perf_counter()
+        response = _header_error_response(str(exc))
+        _finalize_request_log(
+            session_id,
+            final_status="header_verification_failed",
+            stream=request.stream,
+            timings=timings,
+            t_request=t_request,
+            t_response=t_response,
+        )
+        return response
+    _record_timing(timings, "header_verification", t0)
 
     # 1단계: admin-backend에서 보안 정책 조회 (검증 위임)
     t0 = time.perf_counter()
@@ -651,10 +760,11 @@ async def chat_completions(
             headers=verified_headers,
             body_hash=body_hash,
         )
+    policy_fetch_ms = _record_timing(timings, "policy_fetch", t0)
     logger.info(
         "[%s] 1단계 정책 조회 완료: %.1fms enabled_layers=%s",
         session_id,
-        (time.perf_counter() - t0) * 1000,
+        policy_fetch_ms,
         policy.enabled_layers(),
     )
 
@@ -665,6 +775,7 @@ async def chat_completions(
             request=request,
             session_id=session_id,
             t_request=t_request,
+            timings=timings,
             policy=policy,
             security_service=security_service,
             provider_router=provider_router,
@@ -676,10 +787,13 @@ async def chat_completions(
         messages=request.messages,
         policy=policy,
     )
+    input_guardrail_ms = _record_timing(
+        timings, "input_guardrail", t0
+    )
     logger.info(
         "[%s] 2단계 입력 검사 완료: %.1fms result=%s",
         session_id,
-        (time.perf_counter() - t0) * 1000,
+        input_guardrail_ms,
         input_result.status.value,
     )
     if input_result.status == CheckStatus.BLOCK:
@@ -694,8 +808,9 @@ async def chat_completions(
             request.stream,
             (time.perf_counter() - t_request) * 1000,
         )
+        t_response = time.perf_counter()
         if request.stream:
-            return StreamingResponse(
+            response = StreamingResponse(
                 _stream_guardrail_block(
                     input_result,
                     stage="input",
@@ -706,13 +821,23 @@ async def chat_completions(
                 media_type="text/event-stream",
                 headers=_SSE_HEADERS,
             )
-        return _build_block_response(
-            input_result,
-            stage="input",
-            chunk_id=block_chunk_id,
-            created=block_created,
-            model=block_model,
+        else:
+            response = _build_block_response(
+                input_result,
+                stage="input",
+                chunk_id=block_chunk_id,
+                created=block_created,
+                model=block_model,
+            )
+        _finalize_request_log(
+            session_id,
+            final_status="blocked_input",
+            stream=request.stream,
+            timings=timings,
+            t_request=t_request,
+            t_response=t_response,
         )
+        return response
 
     # 3단계: 모델명 기반 provider 자동 감지 후 LLM 비스트리밍 호출
     # messages 는 None/옵션 필드를 제거한 뒤 그대로 전달하여
@@ -730,10 +855,11 @@ async def chat_completions(
     passthrough["model"] = resolved_model
     completion = await llm_service.chat(messages=api_messages, **passthrough)
     content = completion.choices[0].message.content or ""
+    llm_call_ms = _record_timing(timings, "llm_call", t0)
     logger.info(
         "[%s] 3단계 LLM 호출 완료: %.1fms provider=%s model=%s",
         session_id,
-        (time.perf_counter() - t0) * 1000,
+        llm_call_ms,
         llm_service.provider_name,
         resolved_model,
     )
@@ -744,10 +870,13 @@ async def chat_completions(
         content=content,
         policy=policy,
     )
+    output_guardrail_ms = _record_timing(
+        timings, "output_guardrail", t0
+    )
     logger.info(
         "[%s] 4단계 출력 검사 완료: %.1fms result=%s",
         session_id,
-        (time.perf_counter() - t0) * 1000,
+        output_guardrail_ms,
         output_result.status.value,
     )
 
@@ -758,17 +887,18 @@ async def chat_completions(
     model_name = getattr(completion, "model", None) or request.model
     finish_reason = completion.choices[0].finish_reason or "stop"
 
-    total_ms = (time.perf_counter() - t_request) * 1000
+    total_ms = _elapsed_ms(t_request)
 
     # 5-a단계: 스트리밍 요청 — OpenAI 호환 SSE 규격으로 재방출
     if request.stream:
+        t_response = time.perf_counter()
         if output_result.status == CheckStatus.BLOCK:
             logger.info(
                 "[%s] 5단계 응답 전송: stream=True (BLOCK) 총 %.1fms",
                 session_id,
                 total_ms,
             )
-            return StreamingResponse(
+            response = StreamingResponse(
                 _stream_guardrail_block(
                     output_result,
                     stage="output",
@@ -779,12 +909,21 @@ async def chat_completions(
                 media_type="text/event-stream",
                 headers=_SSE_HEADERS,
             )
+            _finalize_request_log(
+                session_id,
+                final_status="blocked_output",
+                stream=True,
+                timings=timings,
+                t_request=t_request,
+                t_response=t_response,
+            )
+            return response
         logger.info(
             "[%s] 5단계 응답 전송: stream=True 총 %.1fms",
             session_id,
             total_ms,
         )
-        return StreamingResponse(
+        response = StreamingResponse(
             _stream_openai_chunks(
                 content,
                 chunk_id=chunk_id,
@@ -795,23 +934,43 @@ async def chat_completions(
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
+        _finalize_request_log(
+            session_id,
+            final_status="success",
+            stream=True,
+            timings=timings,
+            t_request=t_request,
+            t_response=t_response,
+        )
+        return response
 
     # 5-b단계: 비스트리밍 요청 — 출력 BLOCK도 OpenAI content_filter 규격으로
     # HTTP 200 반환 (스트리밍 경로와 인터페이스 일치).
     if output_result.status == CheckStatus.BLOCK:
+        t_response = time.perf_counter()
         logger.info(
             "[%s] 5단계 응답 전송: stream=False (BLOCK) 총 %.1fms",
             session_id,
             total_ms,
         )
-        return _build_block_response(
+        response = _build_block_response(
             output_result,
             stage="output",
             chunk_id=chunk_id,
             created=created,
             model=model_name,
         )
+        _finalize_request_log(
+            session_id,
+            final_status="blocked_output",
+            stream=False,
+            timings=timings,
+            t_request=t_request,
+            t_response=t_response,
+        )
+        return response
 
+    t_response = time.perf_counter()
     logger.info(
         "[%s] 5단계 응답 전송: stream=False 총 %.1fms",
         session_id,
@@ -821,7 +980,7 @@ async def chat_completions(
     # Solar 원본 completion 의 메타데이터(id 제외)를 그대로 보존하여
     # OpenAI 호환 클라이언트가 usage/finish_reason/tool_calls 를 받을 수 있게
     # 한다. id 는 가드레일 세션 추적을 위해 게이트웨이가 재할당.
-    return ChatResponse(
+    response = ChatResponse(
         id=chunk_id,
         object="chat.completion",
         created=created,
@@ -844,6 +1003,15 @@ async def chat_completions(
             else None
         ),
     )
+    _finalize_request_log(
+        session_id,
+        final_status="success",
+        stream=False,
+        timings=timings,
+        t_request=t_request,
+        t_response=t_response,
+    )
+    return response
 
 
 def _dump_tool_calls(

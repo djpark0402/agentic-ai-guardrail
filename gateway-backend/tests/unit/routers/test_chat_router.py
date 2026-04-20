@@ -1,6 +1,7 @@
 """Chat 라우터 테스트."""
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -184,6 +185,29 @@ def test_chat_completions_non_streaming_returns_200(client):
     )
 
 
+def test_chat_completions_logs_request_summary(client, caplog):
+    """정상 완료 시 단계별 시간 요약 로그를 남긴다."""
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "안녕"}],
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert "요청 완료 요약" in caplog.text
+    assert "final_status=success" in caplog.text
+    assert "policy_fetch_ms=" in caplog.text
+    assert "input_guardrail_ms=" in caplog.text
+    assert "llm_call_ms=" in caplog.text
+    assert "output_guardrail_ms=" in caplog.text
+    assert "response_emit_ms=" in caplog.text
+    assert "total_ms=" in caplog.text
+
+
 def test_chat_completions_input_blocked_returns_content_filter(
     mock_policy_service, mock_provider_router
 ):
@@ -229,6 +253,49 @@ def test_chat_completions_input_blocked_returns_content_filter(
         assert "입력" in err["message"]
         assert err["layer"] == "L1"
         assert err["severity"] == "CRITICAL"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_completions_input_block_logs_request_summary(
+    mock_policy_service, mock_provider_router, caplog
+):
+    """입력 BLOCK 종료도 요약 로그에 최종 상태를 남긴다."""
+    blocked_svc = MagicMock()
+    blocked_svc.check_input = AsyncMock(
+        return_value=GuardrailResult(
+            status=CheckStatus.BLOCK,
+            reason="프롬프트 인젝션 감지",
+            layer="L1",
+        )
+    )
+    blocked_svc.check_output = AsyncMock(
+        return_value=GuardrailResult(status=CheckStatus.PASS)
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: blocked_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
+
+    try:
+        c = TestClient(app)
+        with caplog.at_level(logging.INFO):
+            response = c.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "solar-pro",
+                    "messages": [
+                        {"role": "user", "content": "악의적 프롬프트"},
+                    ],
+                },
+            )
+
+        assert response.status_code == 200
+        assert "요청 완료 요약" in caplog.text
+        assert "final_status=blocked_input" in caplog.text
+        assert "input_guardrail_ms=" in caplog.text
+        assert "total_ms=" in caplog.text
     finally:
         app.dependency_overrides.clear()
 
@@ -328,6 +395,47 @@ def test_chat_completions_output_blocked_returns_content_filter(
         assert err["severity"] == "HIGH"
         assert err["confidence"] == 0.92
         assert err["tags"] == ["harmful_content"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_completions_output_block_logs_request_summary(
+    mock_policy_service, mock_provider_router, caplog
+):
+    """출력 BLOCK 종료도 요약 로그에 최종 상태를 남긴다."""
+    blocked_svc = MagicMock()
+    blocked_svc.check_input = AsyncMock(
+        return_value=GuardrailResult(status=CheckStatus.PASS)
+    )
+    blocked_svc.check_output = AsyncMock(
+        return_value=GuardrailResult(
+            status=CheckStatus.BLOCK,
+            reason="유해 콘텐츠 감지",
+            layer="L3",
+        )
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: blocked_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
+
+    try:
+        c = TestClient(app)
+        with caplog.at_level(logging.INFO):
+            response = c.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "solar-pro",
+                    "messages": [{"role": "user", "content": "질문"}],
+                },
+            )
+
+        assert response.status_code == 200
+        assert "요청 완료 요약" in caplog.text
+        assert "final_status=blocked_output" in caplog.text
+        assert "output_guardrail_ms=" in caplog.text
+        assert "total_ms=" in caplog.text
     finally:
         app.dependency_overrides.clear()
 
@@ -809,6 +917,44 @@ def test_observe_mode_streaming_attaches_guardrail_reports(
         assert reports["input"][0]["layer"] == "L1"
         assert reports["input"][0]["status"] == "block"
         assert reports["output"][0]["status"] == "pass"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_observe_mode_logs_request_summary(
+    mock_policy_service, mock_provider_router, caplog
+):
+    """관찰 모드도 종료 시 같은 구조의 시간 요약 로그를 남긴다."""
+    observe_svc = MagicMock()
+    observe_svc.check_input_all = AsyncMock(
+        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L1")]
+    )
+    observe_svc.check_output_all = AsyncMock(
+        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L2")]
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: observe_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _observe_settings_override()
+
+    try:
+        c = TestClient(app)
+        with caplog.at_level(logging.INFO):
+            response = c.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "solar-pro",
+                    "messages": [{"role": "user", "content": "데모"}],
+                },
+            )
+
+        assert response.status_code == 200
+        assert "요청 완료 요약" in caplog.text
+        assert "final_status=observe_success" in caplog.text
+        assert "input_guardrail_ms=" in caplog.text
+        assert "output_guardrail_ms=" in caplog.text
+        assert "response_emit_ms=" in caplog.text
     finally:
         app.dependency_overrides.clear()
 
