@@ -7,8 +7,9 @@ Agentic AI Guardrail의 API Gateway. **LangChain** 기반으로 Upstage Solar(Pr
 ## 파이프라인
 
 ```
-client → [policy fetch] → [input check] → [LLM (non-stream)] → [output check] → client
+client → [policy fetch] → [input check] → [LLM (non-stream)] → [output check*] → client
                                                                                     └ stream=true 시 SSE 재방출
+* outboundEnabled=false 면 [output check] 단계는 통째로 스킵된다.
 ```
 
 - **Multi-provider 지원:** 모델명으로 provider를 자동 감지한다.
@@ -16,6 +17,9 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
   `ollama/모델명` → Ollama / 그 외 → Solar (기본값).
 - LLM 호출은 **항상 비스트리밍**이다. 전체 응답을 받은 뒤 출력 가드레일 검사를
   먼저 수행한 다음, 사용자 응답만 선택적으로 SSE로 재방출한다.
+- ADMIN 정책의 **`outboundEnabled=false`** 이면 L1~L6 활성 레이어와 무관하게
+  출력 가드레일을 전부 스킵하고 원본 LLM 응답을 그대로 전달한다. 입력
+  가드레일은 영향을 받지 않는다.
 - 입력/출력 가드레일이 BLOCK 하면 `stream` 플래그와 무관하게 **HTTP 200 과
   정상 LLM 응답 shape**(`finish_reason="stop"`) 을 유지한다. 원본 LLM 응답은
   절대 유출되지 않고, `choices[0].message.content` 에 **몇 번째 레이어에서
@@ -158,9 +162,27 @@ user 메시지가 하나도 없으면 빈 문자열이 전달된다.
    ```
 
    서명 검증 자체는 ADMIN 이 수행한다. ADMIN 이 통과시키면 현재 활성
-   정책(`l1Enabled`..`l6Enabled`) 을 반환하고, 게이트웨이는 그 플래그에
-   따라 `core-secure-layer` L1~L6 를 선택적으로 실행한다. 4xx/5xx 가
-   돌아오면 예외가 전파되어 해당 요청은 실패 처리된다.
+   정책(`l1Enabled`..`l6Enabled`, `outboundEnabled`) 을 반환하고,
+   게이트웨이는 그 플래그에 따라 `core-secure-layer` L1~L6 를 선택적으로
+   실행하며, `outboundEnabled=false` 면 출력 가드레일 파이프라인 전체를
+   건너뛴다. 4xx/5xx 가 돌아오면 예외가 전파되어 해당 요청은 실패 처리된다.
+
+   ADMIN 응답 예시 (핵심 필드만):
+
+   ```json
+   {
+     "l1Enabled": true,
+     "l2Enabled": true,
+     "l3Enabled": true,
+     "l4Enabled": true,
+     "l5Enabled": true,
+     "l6Enabled": true,
+     "outboundEnabled": true
+   }
+   ```
+
+   > 기존 호환: ADMIN 응답에 `outboundEnabled` 키가 없으면 기본값
+   > `true` 로 간주되어 출력 가드레일이 기존과 동일하게 동작한다.
 
 `SKIP_HEADER_VERIFICATION=true` 로 두면 4개 헤더 검증을 건너뛴다. 이 경우
 헤더가 없는 빈 문자열 값이 ADMIN 으로 전달되므로 ADMIN 이 4xx 를 낼 수
@@ -180,6 +202,19 @@ user 메시지가 하나도 없으면 빈 문자열이 전달된다.
 `layer_registry` 를 통해 싱글턴으로 관리하며, 아직 구현되지 않은
 레이어(`NotImplementedError`)는 자동으로 PASS 처리된다.
 레이어 구현이 완료되면 gateway 변경 없이 즉시 활성화된다.
+
+#### 파이프라인 스위치 — `outboundEnabled`
+
+| 플래그 | 대상 | 동작 |
+|---|---|---|
+| `outboundEnabled` | 출력 가드레일 전체 | `false` 면 L1~L6 활성 여부와 관계없이 LLM 응답에 대한 검사(`check_output`) 를 통째로 스킵하고 원본 응답을 그대로 반환. `true` (기본값) 면 활성 레이어로 검사 수행. |
+
+- 입력 가드레일에는 영향이 없다 — `lN_enabled` 플래그는 그대로 적용된다.
+- 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`)에서도 동일하게 스킵되며,
+  응답의 `guardrail_reports.output` 은 빈 배열로 실려 클라이언트가 스킵
+  여부를 확인할 수 있다.
+- ADMIN 응답에 `outboundEnabled` 키가 없으면 하위 호환을 위해 `true` 로
+  간주한다.
 
 admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전파되어 해당
 요청은 실패로 처리된다.

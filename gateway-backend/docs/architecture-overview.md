@@ -231,8 +231,12 @@ sequenceDiagram
     else 입력 PASS
         R->>LLM: chat(messages, ...)
         LLM-->>R: completion
-        R->>S: check_output(content, policy)
-        S-->>R: GuardrailResult
+        alt policy.outbound == false
+            Note over R: 출력 가드레일 스킵 (outboundEnabled=false)
+        else policy.outbound == true
+            R->>S: check_output(content, policy)
+            S-->>R: GuardrailResult
+        end
         R-->>C: OpenAI 호환 응답 (JSON 또는 SSE)
     end
 ```
@@ -295,7 +299,7 @@ def get_layer(layer_index: int) -> BaseLayer | None:
 - 요청 헤더: 게이트웨이 자신의 `ADMIN_API_KEY` 를 `X-API-Key` 헤더로 함께 싣는다. 사용자의 `X-API-Key` 와는 별개 — 사용자 키는 body 의 `apiKey` 필드에만 들어간다.
 - 응답: ADMIN 이 정책을 **바로 내려줄 수도**, 검증 메타(valid/clientName 등) 를 최상위에 둔 **envelope 로 감싸 내려줄 수도** 있다. `_extract_policy_dict` 가 최상위 `l1Enabled` 존재 / `policy`·`data`·`result`·`payload` 같은 envelope 키 / 최상위 nested dict 순으로 탐색해 정책 dict 를 추출한 뒤, `GuardrailPolicy.model_validate(...)` 로 Pydantic 모델에 바인딩한다.
 
-`app/models/policy.py:22-29`
+`app/models/policy.py`
 
 ```python
 model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -306,10 +310,12 @@ l3: bool = Field(alias="l3Enabled")
 l4: bool = Field(alias="l4Enabled")
 l5: bool = Field(alias="l5Enabled")
 l6: bool = Field(alias="l6Enabled")
+outbound: bool = Field(default=True, alias="outboundEnabled")
 ```
 
 - admin-backend 응답의 camelCase 키(`l1Enabled`) 를 alias 로 받고, 내부에서는 snake_case 짧은 이름(`l1`) 을 쓴다.
 - `extra="ignore"` 덕분에 `name`, `id`, `createdAt` 같은 모르는 필드는 무시된다.
+- **`outbound`** 는 출력 가드레일 파이프라인 전체 on/off 스위치다. False 면 L1~L6 활성 레이어와 무관하게 `check_output` 단계를 통째로 생략한다. ADMIN 응답에 `outboundEnabled` 키가 없으면 기본값 `True` 로 간주되어 기존 동작을 유지한다(하위 호환).
 
 `app/models/policy.py:66-73`
 

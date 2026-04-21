@@ -752,10 +752,15 @@
               <span class="arrow">→</span>
               <span>LLM (non-stream)</span>
               <span class="arrow">→</span>
-              <span>output check</span>
+              <span>output check*</span>
               <span class="arrow">→</span>
               <span>user (stream 선택)</span>
             </div>
+            <p class="helper-text">
+              * ADMIN 정책의 <code>outboundEnabled=false</code> 이면
+              <code>output check</code> 단계는 통째로 생략되고 LLM 원본
+              응답이 그대로 전달됩니다.
+            </p>
           </div>
           <aside class="hero-note">
             <h2>Provider 라우팅 가이드</h2>
