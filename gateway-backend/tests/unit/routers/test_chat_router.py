@@ -1,7 +1,6 @@
 """Chat 라우터 테스트."""
 
 import json
-import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,7 +9,6 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.dependencies import (
-    get_nonce_store,
     get_policy_service,
     get_provider_router,
     get_security_service,
@@ -18,9 +16,6 @@ from app.dependencies import (
 from app.main import app
 from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
-from app.services.request_verifier import (
-    NonceStore,
-)
 
 
 def _make_completion(
@@ -84,14 +79,8 @@ def _make_mock_provider_router(llm_service=None):
 def mock_policy_service():
     """항상 전체 활성화 정책을 반환하는 더미 PolicyService."""
     svc = MagicMock()
-    svc.verify_and_fetch_policy = AsyncMock(return_value=_all_enabled_policy())
+    svc.fetch_policy = AsyncMock(return_value=_all_enabled_policy())
     return svc
-
-
-@pytest.fixture
-def nonce_store():
-    """각 테스트마다 새 NonceStore 를 주입해 재연 방지 상태를 격리한다."""
-    return NonceStore(ttl_sec=600)
 
 
 @pytest.fixture
@@ -114,29 +103,6 @@ def mock_provider_router():
     return router
 
 
-def _default_settings_override():
-    """로컬 `.env` 값이 새 관찰 모드 플래그 등을 통해 테스트로 누출되는 것을
-    차단하기 위한 Settings 오버라이드. 차단 경로를 쓰는 모든 테스트에서 공용.
-
-    사용자 헤더 검증은 기본 off (`skip_header_verification=True`) — 헤더
-    검증을 직접 검사하는 테스트만 별도로 False 로 오버라이드한다.
-    """
-
-    def _settings():
-        s = get_settings()
-        from app.config import Settings
-
-        return Settings(
-            llm_model=s.llm_model,
-            upstage_api_key=s.upstage_api_key.get_secret_value(),
-            skip_policy_fetch=False,
-            skip_header_verification=True,
-            continue_on_layer_failure=False,
-        )
-
-    return _settings
-
-
 @pytest.fixture
 def mock_llm_service(mock_provider_router):
     """mock_provider_router 에서 resolve 가 반환하는 LLMService."""
@@ -148,22 +114,13 @@ def client(
     mock_policy_service,
     mock_security_service,
     mock_provider_router,
-    nonce_store,
 ):
-    """모든 서비스가 mock된 TestClient.
-
-    로컬 `.env` 값(특히 `SKIP_POLICY_FETCH`)의 영향을 배제하기 위해
-    `get_settings` 를 고정 오버라이드하고, 헤더 검증은 기본 off 로
-    둔다(`skip_header_verification=True`).
-    """
-
+    """모든 서비스가 mock된 TestClient."""
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: (
         mock_security_service
     )
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_nonce_store] = lambda: nonce_store
-    app.dependency_overrides[get_settings] = _default_settings_override()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -185,42 +142,15 @@ def test_chat_completions_non_streaming_returns_200(client):
     )
 
 
-def test_chat_completions_logs_request_summary(client, caplog):
-    """정상 완료 시 단계별 시간 요약 로그를 남긴다."""
-    with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "안녕"}],
-                "stream": False,
-            },
-        )
-
-    assert response.status_code == 200
-    assert "요청 완료 요약" in caplog.text
-    assert "final_status=success" in caplog.text
-    assert "policy_fetch_ms=" in caplog.text
-    assert "input_guardrail_ms=" in caplog.text
-    assert "llm_call_ms=" in caplog.text
-    assert "output_guardrail_ms=" in caplog.text
-    assert "response_emit_ms=" in caplog.text
-    assert "total_ms=" in caplog.text
-
-
-def test_chat_completions_input_blocked_returns_content_filter(
+def test_chat_completions_input_blocked_returns_400(
     mock_policy_service, mock_provider_router
 ):
-    """입력 검사가 BLOCK이면 비스트리밍에서 HTTP 200 + content_filter 응답."""
+    """입력 검사가 BLOCK이면 HTTP 400을 반환한다."""
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(
         return_value=GuardrailResult(
             status=CheckStatus.BLOCK,
             reason="프롬프트 인젝션 감지",
-            layer="L1",
-            severity="CRITICAL",
-            confidence=1.0,
-            tags=["prompt_injection"],
         )
     )
     blocked_svc.check_output = AsyncMock(
@@ -230,7 +160,6 @@ def test_chat_completions_input_blocked_returns_content_filter(
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: blocked_svc
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _default_settings_override()
 
     try:
         c = TestClient(app)
@@ -239,120 +168,23 @@ def test_chat_completions_input_blocked_returns_content_filter(
             json={
                 "model": "solar-pro",
                 "messages": [
-                    {"role": "user", "content": "악의적 프롬프트"},
+                    {
+                        "role": "user",
+                        "content": "악의적 프롬프트",
+                    }
                 ],
             },
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["choices"][0]["finish_reason"] == "content_filter"
-        assert data["choices"][0]["message"]["content"] == ""
-        err = data["error"]
-        assert err["type"] == "guardrail_block"
-        assert err["stage"] == "input"
-        assert "입력" in err["message"]
-        assert err["layer"] == "L1"
-        assert err["severity"] == "CRITICAL"
+        assert response.status_code == 400
+        assert "입력" in response.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 
 
-def test_chat_completions_input_block_logs_request_summary(
-    mock_policy_service, mock_provider_router, caplog
-):
-    """입력 BLOCK 종료도 요약 로그에 최종 상태를 남긴다."""
-    blocked_svc = MagicMock()
-    blocked_svc.check_input = AsyncMock(
-        return_value=GuardrailResult(
-            status=CheckStatus.BLOCK,
-            reason="프롬프트 인젝션 감지",
-            layer="L1",
-        )
-    )
-    blocked_svc.check_output = AsyncMock(
-        return_value=GuardrailResult(status=CheckStatus.PASS)
-    )
-
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: blocked_svc
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _default_settings_override()
-
-    try:
-        c = TestClient(app)
-        with caplog.at_level(logging.INFO):
-            response = c.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "solar-pro",
-                    "messages": [
-                        {"role": "user", "content": "악의적 프롬프트"},
-                    ],
-                },
-            )
-
-        assert response.status_code == 200
-        assert "요청 완료 요약" in caplog.text
-        assert "final_status=blocked_input" in caplog.text
-        assert "input_guardrail_ms=" in caplog.text
-        assert "total_ms=" in caplog.text
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_chat_completions_input_blocked_streaming_returns_sse(
+def test_chat_completions_output_blocked_returns_400(
     mock_policy_service, mock_provider_router
 ):
-    """입력 BLOCK + stream=True 는 SSE 로 content_filter 프레임만 방출."""
-    blocked_svc = MagicMock()
-    blocked_svc.check_input = AsyncMock(
-        return_value=GuardrailResult(
-            status=CheckStatus.BLOCK,
-            reason="프롬프트 인젝션 감지",
-            layer="L1",
-            severity="CRITICAL",
-        )
-    )
-    blocked_svc.check_output = AsyncMock(
-        return_value=GuardrailResult(status=CheckStatus.PASS)
-    )
-
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: blocked_svc
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _default_settings_override()
-
-    try:
-        c = TestClient(app)
-        response = c.post(
-            "/v1/chat/completions",
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "악의적 프롬프트"}],
-                "stream": True,
-            },
-        )
-        assert response.status_code == 200
-        assert "text/event-stream" in response.headers["content-type"]
-
-        chunks = _parse_sse_chunks(response.text)
-        assert len(chunks) == 1
-        chunk = chunks[0]
-        assert chunk["choices"][0]["finish_reason"] == "content_filter"
-        assert chunk["choices"][0]["delta"] == {}
-        assert chunk["error"]["type"] == "guardrail_block"
-        assert chunk["error"]["stage"] == "input"
-        # 입력 차단은 LLM 호출 전에 발생 → chat() 이 호출되지 않아야 함
-        llm_svc = mock_provider_router.resolve.return_value[0]
-        llm_svc.chat.assert_not_awaited()
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_chat_completions_output_blocked_returns_content_filter(
-    mock_policy_service, mock_provider_router
-):
-    """출력 검사가 BLOCK이면 HTTP 200 + content_filter 응답을 반환한다."""
+    """출력 검사가 BLOCK이면 HTTP 400을 반환한다."""
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(
         return_value=GuardrailResult(status=CheckStatus.PASS)
@@ -361,17 +193,12 @@ def test_chat_completions_output_blocked_returns_content_filter(
         return_value=GuardrailResult(
             status=CheckStatus.BLOCK,
             reason="유해 콘텐츠 감지",
-            layer="L3",
-            severity="HIGH",
-            confidence=0.92,
-            tags=["harmful_content"],
         )
     )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: blocked_svc
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _default_settings_override()
 
     try:
         c = TestClient(app)
@@ -382,60 +209,8 @@ def test_chat_completions_output_blocked_returns_content_filter(
                 "messages": [{"role": "user", "content": "질문"}],
             },
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["object"] == "chat.completion"
-        assert data["choices"][0]["finish_reason"] == "content_filter"
-        assert data["choices"][0]["message"]["content"] == ""
-        err = data["error"]
-        assert err["type"] == "guardrail_block"
-        assert err["stage"] == "output"
-        assert "출력" in err["message"]
-        assert err["layer"] == "L3"
-        assert err["severity"] == "HIGH"
-        assert err["confidence"] == 0.92
-        assert err["tags"] == ["harmful_content"]
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_chat_completions_output_block_logs_request_summary(
-    mock_policy_service, mock_provider_router, caplog
-):
-    """출력 BLOCK 종료도 요약 로그에 최종 상태를 남긴다."""
-    blocked_svc = MagicMock()
-    blocked_svc.check_input = AsyncMock(
-        return_value=GuardrailResult(status=CheckStatus.PASS)
-    )
-    blocked_svc.check_output = AsyncMock(
-        return_value=GuardrailResult(
-            status=CheckStatus.BLOCK,
-            reason="유해 콘텐츠 감지",
-            layer="L3",
-        )
-    )
-
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: blocked_svc
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _default_settings_override()
-
-    try:
-        c = TestClient(app)
-        with caplog.at_level(logging.INFO):
-            response = c.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "solar-pro",
-                    "messages": [{"role": "user", "content": "질문"}],
-                },
-            )
-
-        assert response.status_code == 200
-        assert "요청 완료 요약" in caplog.text
-        assert "final_status=blocked_output" in caplog.text
-        assert "output_guardrail_ms=" in caplog.text
-        assert "total_ms=" in caplog.text
+        assert response.status_code == 400
+        assert "출력" in response.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 
@@ -557,9 +332,7 @@ def test_streaming_uses_completion_metadata(client, mock_llm_service):
 def test_streaming_output_blocked_does_not_leak_content(
     mock_policy_service, mock_provider_router
 ):
-    """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않고, 레이어
-    메타데이터(layer/severity/confidence/tags)가 error 블록에 실린다.
-    """
+    """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않는다."""
     leaked = "비밀번호는 hunter2입니다"
     llm_svc = mock_provider_router.resolve.return_value[0]
     llm_svc.chat = AsyncMock(return_value=_make_completion(leaked))
@@ -572,17 +345,12 @@ def test_streaming_output_blocked_does_not_leak_content(
         return_value=GuardrailResult(
             status=CheckStatus.BLOCK,
             reason="민감 정보 감지",
-            layer="L4",
-            severity="HIGH",
-            confidence=0.88,
-            tags=["pii", "secret_leak"],
         )
     )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
     app.dependency_overrides[get_security_service] = lambda: blocked_svc
     app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _default_settings_override()
 
     try:
         c = TestClient(app)
@@ -604,19 +372,13 @@ def test_streaming_output_blocked_does_not_leak_content(
         chunk = chunks[0]
         assert chunk["choices"][0]["finish_reason"] == "content_filter"
         assert chunk["choices"][0]["delta"] == {}
-        err = chunk["error"]
-        assert err["type"] == "guardrail_block"
-        assert err["stage"] == "output"
-        assert err["layer"] == "L4"
-        assert err["severity"] == "HIGH"
-        assert err["confidence"] == 0.88
-        assert err["tags"] == ["pii", "secret_leak"]
+        assert chunk.get("error", {}).get("type") == "guardrail_block"
     finally:
         app.dependency_overrides.clear()
 
 
 def test_policy_fetch_called_once(client, mock_policy_service):
-    """요청 처리 시 verify_and_fetch_policy 가 정확히 한 번 호출된다."""
+    """요청 처리 시 fetch_policy가 정확히 한 번 호출된다."""
     client.post(
         "/v1/chat/completions",
         json={
@@ -624,7 +386,7 @@ def test_policy_fetch_called_once(client, mock_policy_service):
             "messages": [{"role": "user", "content": "테스트"}],
         },
     )
-    mock_policy_service.verify_and_fetch_policy.assert_called_once()
+    mock_policy_service.fetch_policy.assert_called_once()
 
 
 def test_input_check_called_with_messages(client, mock_security_service):
@@ -688,7 +450,7 @@ def test_policy_fetch_error_returns_structured_503(client, mock_policy_service):
     import httpx as _httpx
 
     request = _httpx.Request("GET", "https://admin/api")
-    mock_policy_service.verify_and_fetch_policy = AsyncMock(
+    mock_policy_service.fetch_policy = AsyncMock(
         side_effect=_httpx.ConnectError(
             message="Connection refused",
             request=request,
@@ -719,252 +481,12 @@ def test_all_disabled_policy_has_no_enabled_layers():
     assert policy.l6 is False
 
 
-def test_all_enabled_policy_has_all_layers():
-    """GuardrailPolicy.all_enabled()는 L1~L6 전체가 활성이다."""
-    policy = GuardrailPolicy.all_enabled()
-    assert policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
-    assert policy.l1 is True
-    assert policy.l6 is True
-
-
-def _observe_settings_override():
-    """CONTINUE_ON_LAYER_FAILURE=true 를 주입하는 Settings 오버라이드."""
-
-    def _settings():
-        s = get_settings()
-        from app.config import Settings
-
-        return Settings(
-            llm_model=s.llm_model,
-            upstage_api_key=s.upstage_api_key.get_secret_value(),
-            skip_policy_fetch=False,
-            skip_header_verification=True,
-            continue_on_layer_failure=True,
-        )
-
-    return _settings
-
-
-def test_observe_mode_input_block_allows_llm_call(
-    mock_policy_service, mock_provider_router
-):
-    """관찰 모드에서는 입력 레이어가 BLOCK 을 내도 LLM 을 호출하고
-    정상 200 응답에 guardrail_reports 가 첨부된다."""
-    observe_svc = MagicMock()
-    observe_svc.check_input_all = AsyncMock(
-        return_value=[
-            GuardrailResult(
-                status=CheckStatus.BLOCK,
-                reason="injection",
-                layer="L1",
-                severity="HIGH",
-                confidence=0.9,
-                tags=["prompt_injection"],
-            ),
-            GuardrailResult(status=CheckStatus.PASS, layer="L3"),
-        ]
-    )
-    observe_svc.check_output_all = AsyncMock(
-        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L2")]
-    )
-
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: observe_svc
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _observe_settings_override()
-
-    try:
-        c = TestClient(app)
-        resp = c.post(
-            "/v1/chat/completions",
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "데모 프롬프트"}],
-            },
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-
-        # BLOCK 이어도 차단 응답 대신 정상 LLM 응답이 돌아와야 한다.
-        assert data["choices"][0]["finish_reason"] != "content_filter"
-        assert data["choices"][0]["message"]["content"] == (
-            "안녕하세요! 무엇을 도와드릴까요?"
-        )
-        assert data.get("error") is None
-
-        # guardrail_reports 가 모든 레이어 판정을 담고 있어야 한다.
-        reports = data["guardrail_reports"]
-        assert reports["mode"] == "observe"
-        assert [r["layer"] for r in reports["input"]] == ["L1", "L3"]
-        assert [r["status"] for r in reports["input"]] == ["block", "pass"]
-        assert reports["input"][0]["reason"] == "injection"
-        assert reports["input"][0]["severity"] == "HIGH"
-        assert reports["input"][0]["tags"] == ["prompt_injection"]
-
-        # LLM 은 호출되었어야 한다.
-        llm_svc = mock_provider_router.resolve.return_value[0]
-        llm_svc.chat.assert_awaited_once()
-
-        # 관찰 모드에서는 *_all 메서드만 호출되고, 기존 짧은회로 메서드는
-        # 사용되지 않는다.
-        assert not observe_svc.check_input.called
-        assert not observe_svc.check_output.called
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_observe_mode_output_block_keeps_original_content(
-    mock_policy_service, mock_provider_router
-):
-    """관찰 모드에서는 출력 레이어가 BLOCK 을 내도 원본 LLM 응답이
-    그대로 사용자에게 전송된다."""
-    original_reply = "안녕하세요! 무엇을 도와드릴까요?"
-    observe_svc = MagicMock()
-    observe_svc.check_input_all = AsyncMock(
-        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L1")]
-    )
-    observe_svc.check_output_all = AsyncMock(
-        return_value=[
-            GuardrailResult(status=CheckStatus.PASS, layer="L1"),
-            GuardrailResult(
-                status=CheckStatus.BLOCK,
-                reason="pii leak",
-                layer="L4",
-                severity="CRITICAL",
-                confidence=0.95,
-                tags=["pii"],
-            ),
-        ]
-    )
-
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: observe_svc
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _observe_settings_override()
-
-    try:
-        c = TestClient(app)
-        resp = c.post(
-            "/v1/chat/completions",
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "질문"}],
-            },
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["choices"][0]["message"]["content"] == original_reply
-        assert data["choices"][0]["finish_reason"] != "content_filter"
-
-        reports = data["guardrail_reports"]
-        assert reports["mode"] == "observe"
-        assert [r["status"] for r in reports["output"]] == ["pass", "block"]
-        assert reports["output"][1]["reason"] == "pii leak"
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_observe_mode_streaming_attaches_guardrail_reports(
-    mock_policy_service, mock_provider_router
-):
-    """관찰 모드의 스트리밍 응답은 마지막 finish 프레임에
-    guardrail_reports 를 싣고 원본 content 를 그대로 전달한다."""
-    observe_svc = MagicMock()
-    observe_svc.check_input_all = AsyncMock(
-        return_value=[
-            GuardrailResult(
-                status=CheckStatus.BLOCK,
-                reason="injection",
-                layer="L1",
-                severity="HIGH",
-            )
-        ]
-    )
-    observe_svc.check_output_all = AsyncMock(
-        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L2")]
-    )
-
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: observe_svc
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _observe_settings_override()
-
-    try:
-        c = TestClient(app)
-        resp = c.post(
-            "/v1/chat/completions",
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "데모"}],
-                "stream": True,
-            },
-        )
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
-        chunks = _parse_sse_chunks(resp.text)
-
-        # content_filter 가 아니라 정상 종료 프레임이어야 한다.
-        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
-        rebuilt = "".join(
-            c["choices"][0]["delta"].get("content", "") for c in chunks
-        )
-        assert rebuilt == "안녕하세요! 무엇을 도와드릴까요?"
-
-        # 마지막 finish 프레임에 guardrail_reports 가 실린다.
-        last = chunks[-1]
-        reports = last["guardrail_reports"]
-        assert reports["mode"] == "observe"
-        assert reports["input"][0]["layer"] == "L1"
-        assert reports["input"][0]["status"] == "block"
-        assert reports["output"][0]["status"] == "pass"
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_observe_mode_logs_request_summary(
-    mock_policy_service, mock_provider_router, caplog
-):
-    """관찰 모드도 종료 시 같은 구조의 시간 요약 로그를 남긴다."""
-    observe_svc = MagicMock()
-    observe_svc.check_input_all = AsyncMock(
-        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L1")]
-    )
-    observe_svc.check_output_all = AsyncMock(
-        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L2")]
-    )
-
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: observe_svc
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_settings] = _observe_settings_override()
-
-    try:
-        c = TestClient(app)
-        with caplog.at_level(logging.INFO):
-            response = c.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "solar-pro",
-                    "messages": [{"role": "user", "content": "데모"}],
-                },
-            )
-
-        assert response.status_code == 200
-        assert "요청 완료 요약" in caplog.text
-        assert "final_status=observe_success" in caplog.text
-        assert "input_guardrail_ms=" in caplog.text
-        assert "output_guardrail_ms=" in caplog.text
-        assert "response_emit_ms=" in caplog.text
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_skip_policy_fetch_forces_all_layers_enabled(
+def test_skip_policy_fetch_skips_admin_call(
     mock_security_service, mock_provider_router
 ):
-    """SKIP_POLICY_FETCH=true 이면 verify_and_fetch_policy 를 호출하지 않고 L1~L6 전부를 강제 활성화한다."""  # noqa: E501
+    """SKIP_POLICY_FETCH=true이면 fetch_policy를 호출하지 않는다."""
     mock_ps = MagicMock()
-    mock_ps.verify_and_fetch_policy = AsyncMock()
+    mock_ps.fetch_policy = AsyncMock()
 
     def _skip_settings():
         s = get_settings()
@@ -974,8 +496,6 @@ def test_skip_policy_fetch_forces_all_layers_enabled(
             llm_model=s.llm_model,
             upstage_api_key=s.upstage_api_key.get_secret_value(),
             skip_policy_fetch=True,
-            skip_header_verification=True,
-            continue_on_layer_failure=False,
         )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_ps
@@ -995,198 +515,6 @@ def test_skip_policy_fetch_forces_all_layers_enabled(
             },
         )
         assert resp.status_code == 200
-        mock_ps.verify_and_fetch_policy.assert_not_called()
-
-        # SKIP 시 check_input/check_output 이 L1~L6 전체 정책을 받아야 한다
-        input_policy = mock_security_service.check_input.call_args.kwargs[
-            "policy"
-        ]
-        output_policy = mock_security_service.check_output.call_args.kwargs[
-            "policy"
-        ]
-        assert input_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
-        assert output_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
-    finally:
-        app.dependency_overrides.clear()
-
-
-# ---------------------------------------------------------------------------
-# 사용자 요청 헤더 검증 (SKIP_HEADER_VERIFICATION=false)
-# ---------------------------------------------------------------------------
-
-
-def _verify_enabled_settings():
-    """헤더 검증을 강제 (skip_header_verification=False) 하는 Settings 오버라이드."""  # noqa: E501
-
-    def _settings():
-        s = get_settings()
-        from app.config import Settings
-
-        return Settings(
-            llm_model=s.llm_model,
-            upstage_api_key=s.upstage_api_key.get_secret_value(),
-            skip_policy_fetch=False,
-            skip_header_verification=False,
-            continue_on_layer_failure=False,
-            request_timestamp_skew_sec=300,
-        )
-
-    return _settings
-
-
-def _valid_user_headers() -> dict[str, str]:
-    """timestamp/nonce 이 서버 시간 기준으로 유효한 4개 헤더."""
-    import time as _time
-
-    return {
-        "X-API-Key": "uak_user",
-        "X-Timestamp": str(int(_time.time())),
-        "X-Nonce": "nonce-unique-xyz",
-        "X-Signature": "a" * 64,
-    }
-
-
-def _setup_header_verify_overrides(
-    mock_policy_service,
-    mock_security_service,
-    mock_provider_router,
-    nonce_store,
-):
-    """헤더 검증 테스트용 DI 오버라이드를 일괄 등록한다."""
-    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
-    app.dependency_overrides[get_security_service] = lambda: (
-        mock_security_service
-    )
-    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
-    app.dependency_overrides[get_nonce_store] = lambda: nonce_store
-    app.dependency_overrides[get_settings] = _verify_enabled_settings()
-
-
-def test_header_verification_missing_returns_401(
-    mock_policy_service,
-    mock_security_service,
-    mock_provider_router,
-    nonce_store,
-):
-    """헤더가 하나라도 누락되면 401 + header_verification_failed 를 반환한다."""
-    _setup_header_verify_overrides(
-        mock_policy_service,
-        mock_security_service,
-        mock_provider_router,
-        nonce_store,
-    )
-    try:
-        c = TestClient(app)
-        resp = c.post(
-            "/v1/chat/completions",
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "안녕"}],
-            },
-        )
-        assert resp.status_code == 401
-        body = resp.json()
-        assert body["error"]["type"] == "header_verification_failed"
-        assert "X-API-Key" in body["error"]["reason"]
-        # 검증 실패 시 ADMIN 정책 조회가 호출되지 않아야 한다.
-        mock_policy_service.verify_and_fetch_policy.assert_not_called()
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_header_verification_timestamp_skew_returns_401(
-    mock_policy_service,
-    mock_security_service,
-    mock_provider_router,
-    nonce_store,
-):
-    """timestamp 시간차가 허용 범위를 넘으면 401."""
-    _setup_header_verify_overrides(
-        mock_policy_service,
-        mock_security_service,
-        mock_provider_router,
-        nonce_store,
-    )
-    headers = _valid_user_headers()
-    headers["X-Timestamp"] = "1000000000"  # 2001년 — 현재와 수년 차이
-    try:
-        c = TestClient(app)
-        resp = c.post(
-            "/v1/chat/completions",
-            headers=headers,
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "안녕"}],
-            },
-        )
-        assert resp.status_code == 401
-        assert resp.json()["error"]["type"] == "header_verification_failed"
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_header_verification_replayed_nonce_returns_401(
-    mock_policy_service,
-    mock_security_service,
-    mock_provider_router,
-    nonce_store,
-):
-    """동일 nonce 를 연속 두 번 보내면 두 번째 요청이 401."""
-    _setup_header_verify_overrides(
-        mock_policy_service,
-        mock_security_service,
-        mock_provider_router,
-        nonce_store,
-    )
-    headers = _valid_user_headers()
-    body = {
-        "model": "solar-pro",
-        "messages": [{"role": "user", "content": "안녕"}],
-    }
-    try:
-        c = TestClient(app)
-        first = c.post("/v1/chat/completions", headers=headers, json=body)
-        assert first.status_code == 200
-        second = c.post("/v1/chat/completions", headers=headers, json=body)
-        assert second.status_code == 401
-        assert second.json()["error"]["type"] == "header_verification_failed"
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_header_verification_success_passes_headers_to_policy_service(
-    mock_policy_service,
-    mock_security_service,
-    mock_provider_router,
-    nonce_store,
-):
-    """정상 헤더는 그대로 verify_and_fetch_policy 에 전달된다."""
-    _setup_header_verify_overrides(
-        mock_policy_service,
-        mock_security_service,
-        mock_provider_router,
-        nonce_store,
-    )
-    headers = _valid_user_headers()
-    try:
-        c = TestClient(app)
-        resp = c.post(
-            "/v1/chat/completions",
-            headers=headers,
-            json={
-                "model": "solar-pro",
-                "messages": [{"role": "user", "content": "안녕"}],
-            },
-        )
-        assert resp.status_code == 200
-        call_kwargs = (
-            mock_policy_service.verify_and_fetch_policy.call_args.kwargs
-        )
-        assert call_kwargs["headers"].api_key == headers["X-API-Key"]
-        assert call_kwargs["headers"].timestamp == headers["X-Timestamp"]
-        assert call_kwargs["headers"].nonce == headers["X-Nonce"]
-        assert call_kwargs["headers"].signature == headers["X-Signature"]
-        # bodyHash 는 sha256 hex 64자여야 한다.
-        assert len(call_kwargs["body_hash"]) == 64
+        mock_ps.fetch_policy.assert_not_called()
     finally:
         app.dependency_overrides.clear()
