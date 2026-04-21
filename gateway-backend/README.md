@@ -12,7 +12,8 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 ```
 
 - **Multi-provider 지원:** 모델명으로 provider를 자동 감지한다.
-  `gpt-*`, `o1-*`, `o3-*` → OpenAI / `ollama/모델명` → Ollama / 그 외 → Solar (기본값).
+  `gpt-*`, `o1-*`, `o3-*`, `ft:gpt-*`, `chatgpt-*` → OpenAI /
+  `ollama/모델명` → Ollama / 그 외 → Solar (기본값).
 - LLM 호출은 **항상 비스트리밍**이다. 전체 응답을 받은 뒤 출력 가드레일 검사를
   먼저 수행한 다음, 사용자 응답만 선택적으로 SSE로 재방출한다.
 - 입력/출력 가드레일이 BLOCK 하면 `stream` 플래그와 무관하게 **HTTP 200 +
@@ -187,8 +188,9 @@ admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전�
 | Method | Path | 설명 |
 |---|---|---|
 | POST | `/v1/chat/completions` | OpenAI/Solar 호환 채팅 완성 (stream 지원) |
+| GET | `/v1/models/default` | `.env` 의 `LLM_MODEL` 로 설정된 기본 모델명 반환 |
 | GET | `/health` | 헬스체크 |
-| GET | `/docs` | FastAPI 기본 Swagger UI |
+| GET | `/docs` | 커스텀 Swagger UI (상단 바 + `static/docs-overrides.css`) |
 | GET | `/openapi.json` | OpenAPI 스키마 |
 | GET | `/playground/` | 커스텀 API 설명 + 테스트 플레이그라운드 |
 
@@ -279,9 +281,10 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 
 ```
 app/
-├── main.py              # FastAPI 진입점 + StaticFiles 마운트
+├── main.py              # FastAPI 진입점 + 커스텀 /docs + StaticFiles 마운트
 ├── config.py            # pydantic-settings 기반 Settings
 ├── dependencies.py      # DI factory 함수
+├── errors.py            # 업스트림(Solar/admin/LangChain) 예외 → JSON 매퍼
 ├── models/              # Pydantic 모델 (chat, guardrail, policy)
 ├── routers/
 │   └── chat.py          # /v1/chat/completions 가드레일 파이프라인
@@ -295,7 +298,8 @@ app/
 │   ├── request_verifier.py    # 사용자 헤더·timestamp·nonce·bodyHash 검증
 │   └── policy_service.py      # ADMIN /api/v1/gateway/verify 위임 호출
 └── static/
-    └── index.html       # 플레이그라운드 페이지
+    ├── index.html       # 플레이그라운드 페이지
+    └── docs-overrides.css  # /docs 커스텀 Swagger UI 스타일
 tests/unit/              # pytest 단위 테스트
 ```
 
