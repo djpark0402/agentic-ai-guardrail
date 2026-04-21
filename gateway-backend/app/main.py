@@ -69,8 +69,8 @@ app = FastAPI(
         "1. 사용자 헤더 4종 검증 (`X-API-Key`, `X-Timestamp`, `X-Nonce`, "
         "`X-Signature`)\n"
         "2. admin-backend 정책 조회\n"
-        "3. 입력 가드레일 (L1~L6, `messages` **전체**가 검사 대상 — "
-        "멀티턴 공격 포함 전 대화 맥락을 본다)\n"
+        '3. 입력 가드레일 (L1~L6, `messages` 중 `role="user"` 메시지 '
+        "본문만 검사 대상 — system / assistant / tool content 는 제외)\n"
         "4. provider 자동 감지 후 LLM 호출\n"
         "5. 출력 가드레일 (L1~L6) — 사용자 전송 전에 선행\n"
         "6. 비스트리밍 JSON 또는 SSE 스트리밍 응답\n\n"

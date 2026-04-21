@@ -6,7 +6,7 @@ OpenAI `/v1/chat/completions` 호환 엔드포인트 하나를 제공한다. 요
 1. 사용자 헤더 검증
    (`X-API-Key` / `X-Timestamp` / `X-Nonce` / `X-Signature`)
 2. admin-backend 정책 조회
-3. 입력 가드레일 (L1~L6, `messages` 전체 대상 — 멀티턴 공격 포함)
+3. 입력 가드레일 (L1~L6, `messages` 중 `role="user"` 메시지 본문만 검사)
 4. provider 자동 감지 LLM 호출
 5. 출력 가드레일 (L1~L6)
 6. 비스트리밍 JSON 또는 SSE 스트리밍 응답
@@ -834,9 +834,10 @@ _CHAT_COMPLETIONS_DESCRIPTION = (
     "- 모든 요청은 **HMAC 서명된 4종 헤더**가 필요합니다"
     " (`X-API-Key`, `X-Timestamp`, `X-Nonce`, `X-Signature`). 헤더가"
     " 누락되면 HTTP 401 이 반환됩니다.\n"
-    "- `messages` **전체**가 가드레일 입력 검사 대상입니다 — 마지막 한"
-    " 메시지만 검사하지 않으므로 멀티턴 프롬프트 주입 시도가 함께"
-    " 검출됩니다.\n\n"
+    '- `messages` 중 **`role="user"` 메시지 본문만** 가드레일 입력 검사'
+    " 대상입니다. system / assistant / tool 메시지 content 는 검사하지"
+    " 않습니다. 여러 user 턴이 있으면 원래 순서대로 이어 붙여 한 번에"
+    " 전달됩니다.\n\n"
     "### 응답 형태\n"
     '- **정상**: OpenAI 스펙 그대로. `finish_reason="stop"` / `"length"`'
     ' / `"tool_calls"` 등.\n'
