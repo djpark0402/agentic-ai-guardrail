@@ -1,25 +1,30 @@
-"""L8 guardrail layer skeleton."""
+"""L8 가드레일 레이어 스켈레톤."""
 
-from typing import Any
-
-from core_secure_layer.layers.base import BaseLayer, LayerResult
+from core_secure_layer.layers.base import BaseLayer
+from core_secure_layer.layers.types import (
+    GuardrailRequest,
+    LayerResult,
+)
 
 
 class L8Layer(BaseLayer):
-    """Skeleton for guardrail layer L8."""
+    """가드레일 레이어 L8 스켈레톤."""
 
     name = "L8"
 
-    async def check(self, context: dict[str, Any]) -> LayerResult:
-        """Run the L8 check (not yet implemented).
+    async def _check(
+        self,
+        request: GuardrailRequest,
+    ) -> LayerResult:
+        """L8 검사 실행 (미구현).
 
         Args:
-            context: Request context shared across layers.
+            request: 가드레일 요청 객체.
 
         Returns:
-            The layer's decision as a :class:`LayerResult`.
+            레이어의 검사 결과.
 
         Raises:
-            NotImplementedError: Implementation is deferred.
+            NotImplementedError: 구현 대기 중.
         """
         raise NotImplementedError

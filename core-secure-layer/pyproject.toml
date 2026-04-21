@@ -4,8 +4,15 @@ version = "0.1.0"
 description = "Agentic AI Guardrail - Core Secure Layer"
 requires-python = ">=3.14"
 dependencies = [
+    "accelerate>=1.13.0",
+    "chromadb>=1.5.7",
     "langchain>=0.3.0",
     "langchain-core>=0.3.0",
+    "langchain-openai>=1.1.12",
+    "python-dotenv>=1.2.2",
+    "sentence-transformers>=5.4.1",
+    "torch>=2.11.0",
+    "transformers>=5.5.4",
 ]
 
 [dependency-groups]

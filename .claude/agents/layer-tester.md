@@ -17,8 +17,9 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 
 - 경로: `core-secure-layer/` (Python 3.14 + uv + LangChain + pytest + ruff)
 - 대상 레이어 `N`:
-  - 구현 파일 (읽기 전용): `core_secure_layer/layers/l{N}/l{N}.py` — `class L{N}Layer(BaseLayer)` 가 있고 `check()` 는 `raise NotImplementedError` 상태
-  - 베이스 타입 (읽기 전용): `core_secure_layer/layers/base.py` — `BaseLayer`, `LayerResult`
+  - 구현 파일 (읽기 전용): `core_secure_layer/layers/l{N}/l{N}.py` — `class L{N}Layer(BaseLayer)` 가 있고 `_check()` 는 `raise NotImplementedError` 상태
+  - 베이스 타입 (읽기 전용): `core_secure_layer/layers/base.py` — `BaseLayer` (`check()` 는 타이밍 자동 측정 래퍼, `_check()` 는 서브클래스 구현 대상)
+  - 데이터 모델 (읽기 전용): `core_secure_layer/layers/types.py` — `GuardrailRequest`, `LayerResult`, `GuardrailResponse`, `Severity`, `CheckPhase`
   - 테스트 파일 (네가 작성/수정): `tests/test_l{N}.py`
   - 테스트 인프라: `tests/conftest.py`, `tests/__init__.py`
 - 기존 스켈레톤은 전부 `NotImplementedError` 를 던지므로 네가 작성한 테스트는 이 시점에 **반드시 실패해야 정상**이다.
@@ -50,7 +51,7 @@ tools: Read, Edit, Write, Grep, Glob, Bash
    - `dependencies` — 이 레이어 이전에 반드시 실행돼야 하는 레이어 (보통 없음)
 2. **현재 상태 파악**:
    - `git status`, `git branch --show-current`
-   - `core_secure_layer/layers/base.py` 읽어서 `BaseLayer.check` 시그니처와 `LayerResult` 필드 확정 (이름은 `"L{N}"`, allowed / reason 필드)
+   - `core_secure_layer/layers/base.py` 와 `core_secure_layer/layers/types.py` 읽어서 `BaseLayer.check()` / `_check()` 시그니처, `GuardrailRequest` / `LayerResult` 필드 확정
    - `core_secure_layer/layers/l{N}/l{N}.py` 읽어서 현재 구현 상태 확인 (NotImplementedError 여부)
    - `tests/test_l{N}.py` 가 이미 있는지 확인 (있으면 기존 내용 읽기)
 3. **브랜치**:
@@ -61,8 +62,8 @@ tools: Read, Edit, Write, Grep, Glob, Bash
    ```
    이미 존재하고 네 이전 작업이 쌓여 있다면 `git checkout feature/core-secure-layer/layer-l{N}` 로 재개.
 4. **테스트 작성** — `tests/test_l{N}.py`:
-   - `import pytest`, `from core_secure_layer.layers.l{N}.l{N} import L{N}Layer`
-   - `pytest-asyncio` 로 `async def test_...` 작성. `check()` 가 async 이므로 전부 `await layer.check({...})`
+   - `import pytest`, `from core_secure_layer.layers.l{N}.l{N} import L{N}Layer`, `from core_secure_layer.layers.types import GuardrailRequest, LayerResult`
+   - `pytest-asyncio` 로 `async def test_...` 작성. `check()` 가 async 이므로 전부 `await layer.check(GuardrailRequest(user_input=...))` 형태로 호출
    - 네 스펙을 **최소 4개 테스트**로 나눠라:
      1. **허용 골든 패스** — 스펙이 "통과"로 판정하는 가장 평범한 입력
      2. **차단 골든 패스** — 스펙이 "차단"으로 판정하는 가장 명확한 입력

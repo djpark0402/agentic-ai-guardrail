@@ -29,13 +29,14 @@ tools: Read, Edit, Write, Grep, Glob, Bash
   - 구현 파일 (편집 대상): `core_secure_layer/layers/l{N}/l{N}.py`
   - 테스트 파일 (읽기 전용): `tests/test_l{N}.py`
   - 베이스 타입 (읽기 전용): `core_secure_layer/layers/base.py`
-- 기존 스켈레톤의 `check()` 는 `raise NotImplementedError`. 너는 이걸 실제 로직으로 교체한다.
+- 데이터 모델 (읽기 전용): `core_secure_layer/layers/types.py` — `GuardrailRequest`, `LayerResult`, `Severity`, `CheckPhase`
+- 기존 스켈레톤의 `_check()` 는 `raise NotImplementedError`. 너는 이걸 실제 로직으로 교체한다. (`check()` 는 BaseLayer 의 타이밍 래퍼이므로 건드리지 않는다.)
 
 ## 절대 규칙 (위반 시 hook 이 차단)
 
 1. **테스트 파일 불가침** — `tests/**/*.py` 는 단 한 줄도 수정 금지. 오직 읽기만.
 2. **커밋 단위**:
-   - `feat: L{N} check() 구현` — check() 의 최소 통과 구현
+   - `feat: L{N} _check() 구현` — _check() 의 최소 통과 구현
    - `refactor: L{N} ...` — (선택) 의미 있는 리팩터링이 있을 때만. 단순히 "코드 정리" 수준이면 생략하고 한 커밋으로 끝내라.
    - 한국어 conventional commits, `Co-Authored-By: Claude <noreply@anthropic.com>` 포함.
 3. **브랜치**: `feature/core-secure-layer/layer-l{N}` 에서만 작업. layer-tester 의 `test: ...` 커밋이 HEAD 에 이미 있어야 한다.
@@ -65,8 +66,9 @@ tools: Read, Edit, Write, Grep, Glob, Bash
    - `cat tests/test_l{N}.py` — **전체를 끝까지 읽어라**. 어떤 입력에 어떤 결과를 기대하는지 머릿속에 구성.
    - `uv run pytest tests/test_l{N}.py -x` 실행 → 실패 확인. 이미 통과하면 뭔가 이상하니 blocker.
 3. **구현**:
-   - `core_secure_layer/layers/l{N}/l{N}.py` 의 `L{N}Layer.check()` 를 최소 로직으로 구현
-   - 시그니처 고정: `async def check(self, context: dict[str, Any]) -> LayerResult`
+   - `core_secure_layer/layers/l{N}/l{N}.py` 의 `L{N}Layer._check()` 를 최소 로직으로 구현
+   - 시그니처 고정: `async def _check(self, request: GuardrailRequest) -> LayerResult`
+   - `check()` 는 BaseLayer 래퍼이므로 오버라이드하지 말 것
    - `name` 클래스 속성 유지 (`"L{N}"`)
    - 스펙과 테스트가 요구하지 않는 로직은 넣지 말 것. 추측성 기능 추가 금지
    - 상수나 토큰 리스트가 필요하면 모듈 상단에 `_FORBIDDEN_TOKENS: tuple[str, ...] = (...)` 형태로
@@ -87,7 +89,7 @@ tools: Read, Edit, Write, Grep, Glob, Bash
    - 둘 다 통과해야 함
 7. **커밋** (feat):
    ```
-   feat: L{N} check() 구현
+   feat: L{N} _check() 구현
    
    스펙: <한 줄 요약>
    
@@ -129,7 +131,7 @@ layer: L{N}
 branch: feature/core-secure-layer/layer-l{N}
 
 commits:
-  - {sha}  feat: L{N} check() 구현
+  - {sha}  feat: L{N} _check() 구현
   - {sha}  refactor: L{N} ...   (없으면 이 줄 생략)
 
 files_touched:
