@@ -44,6 +44,25 @@ class GuardrailPolicy(BaseModel):
             l6=False,
         )
 
+    @classmethod
+    def all_enabled(cls) -> GuardrailPolicy:
+        """L1~L6 전부가 활성인 정책을 반환한다.
+
+        `SKIP_POLICY_FETCH=true` 설정 시 admin-backend 조회를 생략하면서도
+        모든 가드레일 레이어를 강제로 실행하기 위해 사용한다.
+
+        Returns:
+            L1~L6 전부 True인 GuardrailPolicy 인스턴스.
+        """
+        return cls(
+            l1=True,
+            l2=True,
+            l3=True,
+            l4=True,
+            l5=True,
+            l6=True,
+        )
+
     def enabled_layers(self) -> list[int]:
         """활성화된 레이어 인덱스 목록을 반환한다.
 
