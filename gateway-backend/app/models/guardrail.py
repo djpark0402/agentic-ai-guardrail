@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CheckStatus(StrEnum):
@@ -31,6 +31,29 @@ class GuardrailResult(BaseModel):
             None.
         tags: 분류 태그 목록. 기본 빈 리스트.
     """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "status": "pass",
+                    "reason": None,
+                    "layer": "L1",
+                    "severity": None,
+                    "confidence": None,
+                    "tags": [],
+                },
+                {
+                    "status": "block",
+                    "reason": "prompt injection detected",
+                    "layer": "L2",
+                    "severity": "HIGH",
+                    "confidence": 0.95,
+                    "tags": ["injection"],
+                },
+            ]
+        }
+    )
 
     status: CheckStatus
     reason: str | None = None

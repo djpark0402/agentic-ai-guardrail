@@ -55,15 +55,46 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Agentic AI Guardrail Gateway",
     description=(
-        "LangChain 기반 Multi-provider LLM Gateway.\n\n"
-        "모델명으로 provider를 자동 감지하여 라우팅합니다:\n"
+        "LangChain 기반 Multi-provider LLM Gateway. **OpenAI "
+        "`/v1/chat/completions` 호환** 엔드포인트를 제공하며, 요청/응답이 모두 "
+        "OpenAI 스펙을 따르므로 `openai` SDK·LiteLLM·LangChain 클라이언트에서 "
+        "base_url 만 바꿔 바로 사용할 수 있습니다.\n\n"
+        "### Provider 라우팅\n"
+        "모델명으로 자동 감지합니다:\n"
         "- **Solar**: `solar-pro` 등 (기본값)\n"
         "- **OpenAI**: `gpt-4o`, `o1-preview` 등 (자동 감지)\n"
         "- **Ollama**: `ollama/llama3` 등 (접두사 명시)\n\n"
-        "모든 요청은 5단계 가드레일 파이프라인을 거칩니다:\n"
-        "정책 조회 → 입력 검사 → LLM 호출 → 출력 검사 → 응답"
+        "### 가드레일 파이프라인\n"
+        "모든 요청은 다음 순서로 검증됩니다:\n"
+        "1. 사용자 헤더 4종 검증 (`X-API-Key`, `X-Timestamp`, `X-Nonce`, "
+        "`X-Signature`)\n"
+        "2. admin-backend 정책 조회\n"
+        "3. 입력 가드레일 (L1~L6, `messages` **전체**가 검사 대상 — "
+        "멀티턴 공격 포함 전 대화 맥락을 본다)\n"
+        "4. provider 자동 감지 후 LLM 호출\n"
+        "5. 출력 가드레일 (L1~L6) — 사용자 전송 전에 선행\n"
+        "6. 비스트리밍 JSON 또는 SSE 스트리밍 응답\n\n"
+        "### OpenAI 스펙 외 확장 필드\n"
+        "표준 OpenAI 필드 외에 두 개의 비표준 필드가 섞일 수 있습니다. "
+        "OpenAI 공식 SDK 는 이들을 무시하므로 호환성에는 영향이 없습니다.\n"
+        "- `error`: 가드레일 차단 시 HTTP 200 + "
+        "`finish_reason=content_filter` 로 응답하면서 차단 레이어·사유·"
+        "심각도·신뢰도·태그를 담은 블록을 함께 반환합니다. (LiteLLM 호환)\n"
+        "- `guardrail_reports`: `CONTINUE_ON_LAYER_FAILURE=true` "
+        "(관찰 모드)에서만 채워지며, 레이어별 PASS/BLOCK 판정 내역을 "
+        "배열로 반환합니다."
     ),
     version="0.2.0",
+    openapi_tags=[
+        {
+            "name": "chat",
+            "description": "OpenAI 호환 Chat Completions 엔드포인트.",
+        },
+        {
+            "name": "meta",
+            "description": "헬스체크와 기본값 조회용 보조 엔드포인트.",
+        },
+    ],
     lifespan=lifespan,
 )
 
@@ -116,7 +147,7 @@ app.mount(
 )
 
 
-@app.get("/health")
+@app.get("/health", tags=["meta"], summary="헬스체크")
 async def health_check() -> dict[str, str]:
     """서비스 헬스체크 엔드포인트.
 
@@ -126,7 +157,11 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/v1/models/default")
+@app.get(
+    "/v1/models/default",
+    tags=["meta"],
+    summary="환경 기본 모델명 조회",
+)
 async def default_model() -> dict[str, str]:
     """환경 변수에 설정된 기본 모델명을 반환한다.
 

@@ -1,4 +1,21 @@
-"""Chat 완성 라우터 — 핵심 가드레일 파이프라인."""
+"""Chat 완성 라우터 — 핵심 가드레일 파이프라인.
+
+OpenAI `/v1/chat/completions` 호환 엔드포인트 하나를 제공한다. 요청 처리
+순서는 다음과 같다:
+
+1. 사용자 헤더 검증
+   (`X-API-Key` / `X-Timestamp` / `X-Nonce` / `X-Signature`)
+2. admin-backend 정책 조회
+3. 입력 가드레일 (L1~L6, `messages` 전체 대상 — 멀티턴 공격 포함)
+4. provider 자동 감지 LLM 호출
+5. 출력 가드레일 (L1~L6)
+6. 비스트리밍 JSON 또는 SSE 스트리밍 응답
+
+차단 시에는 HTTP 200 + `finish_reason="content_filter"` + 비표준 `error`
+블록 형태로 반환한다 (LiteLLM 호환). 관찰 모드
+(`CONTINUE_ON_LAYER_FAILURE=true`) 에서는 파이프라인을 끝까지 실행한 뒤
+응답에 `guardrail_reports` 블록을 첨부한다.
+"""
 
 import json
 import logging
@@ -482,9 +499,7 @@ async def _run_observe_mode_pipeline(
         messages=request.messages,
         policy=policy,
     )
-    input_guardrail_ms = _record_timing(
-        timings, "input_guardrail", t0
-    )
+    input_guardrail_ms = _record_timing(timings, "input_guardrail", t0)
     logger.info(
         "[%s] (관찰) 2단계 입력 검사 완료: %.1fms 결과=%s",
         session_id,
@@ -528,9 +543,7 @@ async def _run_observe_mode_pipeline(
         content=content,
         policy=policy,
     )
-    output_guardrail_ms = _record_timing(
-        timings, "output_guardrail", t0
-    )
+    output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
     logger.info(
         "[%s] (관찰) 4단계 출력 검사 완료: %.1fms 결과=%s",
         session_id,
@@ -673,7 +686,213 @@ def _verify_user_headers(
     return verified
 
 
-@router.post("/chat/completions", response_model=None)
+_SECURITY_HEADER_PARAMS: list[dict[str, Any]] = [
+    {
+        "in": "header",
+        "name": "X-API-Key",
+        "required": True,
+        "schema": {"type": "string"},
+        "description": "사용자 발급 API 키.",
+    },
+    {
+        "in": "header",
+        "name": "X-Timestamp",
+        "required": True,
+        "schema": {"type": "string"},
+        "description": (
+            "요청 생성 시각 Unix epoch 초(문자열). 기본 허용 오차 300 초를"
+            " 초과하면 401."
+        ),
+    },
+    {
+        "in": "header",
+        "name": "X-Nonce",
+        "required": True,
+        "schema": {"type": "string"},
+        "description": "요청 고유 nonce. 재연(replay) 방지용.",
+    },
+    {
+        "in": "header",
+        "name": "X-Signature",
+        "required": True,
+        "schema": {"type": "string"},
+        "description": (
+            "HMAC-SHA256 hex 서명. (`API_KEY` + `timestamp` + `nonce` +"
+            " sha256(body)) 에 대해 계산."
+        ),
+    },
+]
+
+
+_RESPONSE_EXAMPLES_SUCCESS: dict[str, Any] = {
+    "summary": "정상 응답 (OpenAI 호환)",
+    "value": {
+        "id": "chatcmpl-c62d8c5e",
+        "object": "chat.completion",
+        "created": 1713600000,
+        "model": "solar-pro",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        "sorted() 함수나 list.sort() 메서드를 사용합니다."
+                    ),
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 32,
+            "completion_tokens": 20,
+            "total_tokens": 52,
+        },
+    },
+}
+
+
+_RESPONSE_EXAMPLES_BLOCKED: dict[str, Any] = {
+    "summary": "가드레일 차단 (HTTP 200 + error 블록)",
+    "value": {
+        "id": "chatcmpl-c62d8c5e",
+        "object": "chat.completion",
+        "created": 1713600000,
+        "model": "solar-pro",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "content_filter",
+            }
+        ],
+        "usage": None,
+        "error": {
+            "type": "guardrail_block",
+            "stage": "input",
+            "message": ("입력 보안 검사 실패: prompt injection detected"),
+            "layer": "L2",
+            "reason": "prompt injection detected",
+            "severity": "HIGH",
+            "confidence": 0.95,
+            "tags": ["injection"],
+        },
+    },
+}
+
+
+_RESPONSE_EXAMPLES_OBSERVE: dict[str, Any] = {
+    "summary": "관찰 모드 (guardrail_reports 첨부)",
+    "value": {
+        "id": "chatcmpl-c62d8c5e",
+        "object": "chat.completion",
+        "created": 1713600000,
+        "model": "solar-pro",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "정렬은 sorted() 로 합니다.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 32,
+            "completion_tokens": 20,
+            "total_tokens": 52,
+        },
+        "guardrail_reports": {
+            "mode": "observe",
+            "input": [
+                {"layer": "L1", "status": "pass"},
+                {
+                    "layer": "L2",
+                    "status": "block",
+                    "reason": "prompt injection detected",
+                    "severity": "HIGH",
+                    "confidence": 0.95,
+                    "tags": ["injection"],
+                },
+            ],
+            "output": [
+                {"layer": "L4", "status": "pass"},
+                {"layer": "L5", "status": "pass"},
+            ],
+        },
+    },
+}
+
+
+_CHAT_COMPLETIONS_DESCRIPTION = (
+    "OpenAI `/v1/chat/completions` 호환 엔드포인트. 요청과 응답 스키마는"
+    " OpenAI 스펙을 그대로 따르므로 `openai` Python SDK, LiteLLM,"
+    " LangChain 의 `ChatOpenAI` 등에서 base_url 만 바꿔 사용할 수"
+    " 있습니다.\n\n"
+    "### 호출 규칙\n"
+    "- 모든 요청은 **HMAC 서명된 4종 헤더**가 필요합니다"
+    " (`X-API-Key`, `X-Timestamp`, `X-Nonce`, `X-Signature`). 헤더가"
+    " 누락되면 HTTP 401 이 반환됩니다.\n"
+    "- `messages` **전체**가 가드레일 입력 검사 대상입니다 — 마지막 한"
+    " 메시지만 검사하지 않으므로 멀티턴 프롬프트 주입 시도가 함께"
+    " 검출됩니다.\n\n"
+    "### 응답 형태\n"
+    '- **정상**: OpenAI 스펙 그대로. `finish_reason="stop"` / `"length"`'
+    ' / `"tool_calls"` 등.\n'
+    '- **가드레일 차단**: HTTP 200 + `finish_reason="content_filter"` +'
+    " 비표준 `error` 블록 (LiteLLM 호환). OpenAI 공식 SDK 는 이 필드를"
+    " 조용히 무시합니다.\n"
+    "- **관찰 모드**(`CONTINUE_ON_LAYER_FAILURE=true`): 파이프라인을 끝까지"
+    " 실행한 뒤 응답에 `guardrail_reports` 블록을 첨부합니다.\n\n"
+    "### 스트리밍\n"
+    "`stream=true` 일 때는 `text/event-stream` SSE 로 반환되며, 각 프레임은"
+    " OpenAI 스펙의 delta 포맷(`data: {...}\\n\\n`) 을 따르고 마지막에"
+    " `data: [DONE]` 으로 종료됩니다. 가드레일 차단이 일어나면 최종 SSE"
+    " 프레임에 `error` 블록이 실립니다."
+)
+
+
+@router.post(
+    "/chat/completions",
+    response_model=None,
+    summary="OpenAI 호환 Chat Completions (가드레일 적용)",
+    description=_CHAT_COMPLETIONS_DESCRIPTION,
+    tags=["chat"],
+    responses={
+        200: {
+            "model": ChatResponse,
+            "description": (
+                "정상 응답 또는 가드레일 차단. 차단 시에도 HTTP 200 을"
+                ' 사용하며 `finish_reason="content_filter"` 와 비표준'
+                " `error` 블록으로 사유를 전달한다. 관찰 모드에서는"
+                " `guardrail_reports` 가 함께 실린다."
+            ),
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "success": _RESPONSE_EXAMPLES_SUCCESS,
+                        "blocked": _RESPONSE_EXAMPLES_BLOCKED,
+                        "observe": _RESPONSE_EXAMPLES_OBSERVE,
+                    }
+                }
+            },
+        },
+        401: {
+            "description": (
+                "헤더 누락·형식 오류·HMAC 서명 불일치·timestamp skew 초과·"
+                "nonce 재사용 등 인증 실패."
+            ),
+        },
+        502: {
+            "description": (
+                "업스트림 LLM provider 또는 admin-backend 에서 오류"
+                " 응답이 전파됨."
+            ),
+        },
+    },
+    openapi_extra={"parameters": _SECURITY_HEADER_PARAMS},
+)
 async def chat_completions(
     http_request: Request,
     request: ChatRequest,
@@ -787,9 +1006,7 @@ async def chat_completions(
         messages=request.messages,
         policy=policy,
     )
-    input_guardrail_ms = _record_timing(
-        timings, "input_guardrail", t0
-    )
+    input_guardrail_ms = _record_timing(timings, "input_guardrail", t0)
     logger.info(
         "[%s] 2단계 입력 검사 완료: %.1fms result=%s",
         session_id,
@@ -870,9 +1087,7 @@ async def chat_completions(
         content=content,
         policy=policy,
     )
-    output_guardrail_ms = _record_timing(
-        timings, "output_guardrail", t0
-    )
+    output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
     logger.info(
         "[%s] 4단계 출력 검사 완료: %.1fms result=%s",
         session_id,
