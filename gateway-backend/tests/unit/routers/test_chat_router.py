@@ -58,7 +58,29 @@ def _make_completion(
 
 def _all_enabled_policy():
     """테스트용 전체 활성화 정책을 반환한다."""
-    return GuardrailPolicy(l1=True, l2=True, l3=True, l4=True, l5=True, l6=True)
+    return GuardrailPolicy(
+        l1=True,
+        l2=True,
+        l3=True,
+        l4=True,
+        l5=True,
+        l6=True,
+        outbound=True,
+    )
+
+
+def _outbound_disabled_policy():
+    """L1~L6 은 전부 활성화되어 있지만 `outbound=False` 인 정책 —
+    출력 파이프라인만 스킵되는 시나리오 재현용."""
+    return GuardrailPolicy(
+        l1=True,
+        l2=True,
+        l3=True,
+        l4=True,
+        l5=True,
+        l6=True,
+        outbound=False,
+    )
 
 
 def _make_mock_llm_service(completion=None):
@@ -841,6 +863,101 @@ def test_all_enabled_policy_has_all_layers():
     assert policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
     assert policy.l1 is True
     assert policy.l6 is True
+
+
+# ── outboundEnabled 정책 플래그 테스트 ──────────────────────────
+
+
+def test_outbound_disabled_skips_output_guardrail(mock_provider_router):
+    """`policy.outbound=False` 이면 check_output 은 호출되지 않고, LLM 원본
+    응답이 그대로 전달된다. 출력 레이어가 BLOCK 을 내도록 세팅해도 스킵 경로가
+    먼저 타기 때문에 BLOCK 안내문이 섞이지 않는다."""
+    outbound_off_ps = MagicMock()
+    outbound_off_ps.verify_and_fetch_policy = AsyncMock(
+        return_value=_outbound_disabled_policy()
+    )
+    security_svc = MagicMock()
+    security_svc.check_input = AsyncMock(
+        return_value=GuardrailResult(status=CheckStatus.PASS)
+    )
+    # 스킵 경로가 먼저 타지 않으면 아래 BLOCK 이 응답에 반영된다 — 실수로
+    # 가드레일을 돌린 경우를 확실히 잡아내기 위한 함정.
+    security_svc.check_output = AsyncMock(
+        return_value=GuardrailResult(
+            status=CheckStatus.BLOCK,
+            reason="호출되면 안 됨",
+            layer="L3",
+        )
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: outbound_off_ps
+    app.dependency_overrides[get_security_service] = lambda: security_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
+
+    try:
+        c = TestClient(app)
+        response = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "안녕"}],
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # LLM 원본 응답이 그대로 전달되어야 한다.
+        assert data["choices"][0]["message"]["content"] == (
+            "안녕하세요! 무엇을 도와드릴까요?"
+        )
+        # check_output 은 호출조차 되지 않아야 한다.
+        security_svc.check_output.assert_not_awaited()
+        # 입력 검사는 정상적으로 호출된다 — 스킵은 출력에만 국한.
+        security_svc.check_input.assert_awaited_once()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_outbound_disabled_observe_mode_skips_output_checks(
+    mock_provider_router,
+):
+    """관찰 모드에서도 `policy.outbound=False` 이면 check_output_all 이
+    호출되지 않고, 응답의 `guardrail_reports.output` 이 빈 배열로 첨부된다."""
+    outbound_off_ps = MagicMock()
+    outbound_off_ps.verify_and_fetch_policy = AsyncMock(
+        return_value=_outbound_disabled_policy()
+    )
+    observe_svc = MagicMock()
+    observe_svc.check_input_all = AsyncMock(
+        return_value=[GuardrailResult(status=CheckStatus.PASS, layer="L1")]
+    )
+    observe_svc.check_output_all = AsyncMock(return_value=[])
+
+    app.dependency_overrides[get_policy_service] = lambda: outbound_off_ps
+    app.dependency_overrides[get_security_service] = lambda: observe_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _observe_settings_override()
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "데모"}],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # 관찰 모드에서도 출력 검사는 완전히 건너뛰어야 한다.
+        observe_svc.check_output_all.assert_not_awaited()
+        # input reports 는 유지, output 은 빈 배열.
+        reports = data["guardrail_reports"]
+        assert reports["mode"] == "observe"
+        assert [r["layer"] for r in reports["input"]] == ["L1"]
+        assert reports["output"] == []
+    finally:
+        app.dependency_overrides.clear()
 
 
 def _observe_settings_override():

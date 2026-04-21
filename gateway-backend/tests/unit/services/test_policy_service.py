@@ -25,6 +25,7 @@ _SAMPLE_RESPONSE = {
     "l2Enabled": True,
     "l5Enabled": True,
     "l6Enabled": True,
+    "outboundEnabled": True,
     "updatedAt": "2026-04-15T07:43:48.397550Z",
 }
 

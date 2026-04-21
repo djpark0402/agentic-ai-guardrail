@@ -545,12 +545,21 @@ async def _run_observe_mode_pipeline(
         resolved_model,
     )
 
-    # 4단계: 출력 레이어 전체 실행
+    # 4단계: 출력 레이어 전체 실행.
+    # outbound 스위치가 꺼져 있으면 관찰 모드에서도 출력 파이프라인을 생략한다.
+    # 이 경우 `guardrail_reports.output` 은 빈 배열로 응답에 실린다.
     t0 = time.perf_counter()
-    output_results = await security_service.check_output_all(
-        content=content,
-        policy=policy,
-    )
+    if not policy.outbound:
+        output_results: list[GuardrailResult] = []
+        logger.info(
+            "[%s] (관찰) 4단계 출력 검사 생략: outboundEnabled=false",
+            session_id,
+        )
+    else:
+        output_results = await security_service.check_output_all(
+            content=content,
+            policy=policy,
+        )
     output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
     logger.info(
         "[%s] (관찰) 4단계 출력 검사 완료: %.1fms 결과=%s",
@@ -1097,12 +1106,21 @@ async def chat_completions(
         resolved_model,
     )
 
-    # 4단계: 출력 결과 보안 검사 — 사용자 전송 이전에 선행하여 유출 방지
+    # 4단계: 출력 결과 보안 검사 — 사용자 전송 이전에 선행하여 유출 방지.
+    # `policy.outbound=False` 면 L1~L6 활성 레이어와 무관하게 출력 파이프라인을
+    # 통째로 생략하고 LLM 응답을 그대로 통과시킨다.
     t0 = time.perf_counter()
-    output_result = await security_service.check_output(
-        content=content,
-        policy=policy,
-    )
+    if not policy.outbound:
+        output_result = GuardrailResult(status=CheckStatus.PASS)
+        logger.info(
+            "[%s] 4단계 출력 검사 생략: outboundEnabled=false",
+            session_id,
+        )
+    else:
+        output_result = await security_service.check_output(
+            content=content,
+            policy=policy,
+        )
     output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
     logger.info(
         "[%s] 4단계 출력 검사 완료: %.1fms result=%s",

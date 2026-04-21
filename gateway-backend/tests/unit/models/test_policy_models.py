@@ -41,3 +41,60 @@ def test_guardrail_policy_parses_admin_api_payload():
     }
     policy = GuardrailPolicy.model_validate(payload)
     assert policy.enabled_layers() == [1, 2, 3, 5]
+
+
+def test_guardrail_policy_parses_outbound_enabled_true():
+    """`outboundEnabled=true` 가 `policy.outbound=True` 로 매핑된다."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+        "outboundEnabled": True,
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.outbound is True
+
+
+def test_guardrail_policy_parses_outbound_enabled_false():
+    """`outboundEnabled=false` 가 `policy.outbound=False` 로 매핑된다."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+        "outboundEnabled": False,
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.outbound is False
+
+
+def test_guardrail_policy_defaults_outbound_to_true_when_missing():
+    """ADMIN 응답에 `outboundEnabled` 키가 없으면 기본값 True 를 적용해
+    기존 동작(출력 가드레일 수행)을 유지한다 — 하위 호환성 보장."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.outbound is True
+
+
+def test_all_enabled_sets_outbound_true():
+    """`all_enabled()` 헬퍼는 outbound 까지 True 로 세팅한다."""
+    policy = GuardrailPolicy.all_enabled()
+    assert policy.outbound is True
+
+
+def test_all_disabled_sets_outbound_false():
+    """`all_disabled()` 헬퍼는 outbound 까지 False 로 세팅한다."""
+    policy = GuardrailPolicy.all_disabled()
+    assert policy.outbound is False
