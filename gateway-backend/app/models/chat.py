@@ -20,7 +20,44 @@ class Message(BaseModel):
         tool_calls: assistant 메시지가 요청한 tool call 목록.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
+            "examples": [
+                {
+                    "role": "system",
+                    "content": "당신은 한국어로 답하는 친절한 조수입니다.",
+                },
+                {
+                    "role": "user",
+                    "content": "파이썬에서 리스트를 정렬하려면?",
+                },
+                {
+                    "role": "assistant",
+                    "content": "sorted() 함수를 쓰거나 list.sort() 를 씁니다.",
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"Seoul"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_abc123",
+                    "content": '{"temperature":18,"unit":"C"}',
+                },
+            ]
+        },
+    )
 
     role: str
     content: str | list[dict[str, Any]] | None = None
@@ -56,7 +93,84 @@ class ChatRequest(BaseModel):
         user: 최종 사용자 식별자.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
+            "examples": [
+                {
+                    "model": "solar-pro",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "파이썬에서 리스트를 정렬하는 방법을 알려줘."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "model": "solar-pro",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "당신은 한국어로 답하는 친절한 조수입니다."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "가장 유명한 파이썬 웹 프레임워크는?",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": (
+                                "Django 와 FastAPI 가 가장 널리 쓰입니다."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "그 중 비동기에 유리한 쪽은?",
+                        },
+                    ],
+                    "temperature": 0.3,
+                },
+                {
+                    "model": "solar-pro",
+                    "stream": True,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "RAG 파이프라인을 3문장으로 설명해줘.",
+                        }
+                    ],
+                },
+                {
+                    "model": "solar-pro",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "서울 지금 날씨 알려줘.",
+                        }
+                    ],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "description": "현재 날씨를 조회합니다.",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"city": {"type": "string"}},
+                                    "required": ["city"],
+                                },
+                            },
+                        }
+                    ],
+                    "tool_choice": "auto",
+                },
+            ]
+        },
+    )
 
     model: str
     messages: list[Message]
@@ -86,6 +200,33 @@ class ChatResponseMessage(BaseModel):
         tool_calls: assistant 가 요청한 tool call 목록.
     """
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "role": "assistant",
+                    "content": (
+                        "sorted() 함수나 list.sort() 메서드를 사용합니다."
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"Seoul"}',
+                            },
+                        }
+                    ],
+                },
+            ]
+        }
+    )
+
     role: str
     content: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
@@ -99,6 +240,28 @@ class ChatResponseChoice(BaseModel):
         message: 응답 메시지.
         finish_reason: 완료 이유.
     """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "sorted() 함수나 list.sort() 메서드를 사용합니다."
+                        ),
+                    },
+                    "finish_reason": "stop",
+                },
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": "content_filter",
+                },
+            ]
+        }
+    )
 
     index: int
     message: ChatResponseMessage
@@ -115,7 +278,111 @@ class ChatResponse(BaseModel):
         model: 사용된 모델 이름.
         choices: 응답 선택지 목록.
         usage: 토큰 사용량 통계 (Solar 가 제공할 경우).
+        error: 가드레일 차단 시 첨부되는 비표준 error 블록. 정상 응답에서는
+            None 으로 두고, 직렬화 시 존재할 때만 노출된다.
+        guardrail_reports: 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`)에서
+            레이어별 판정 내역을 담는 비표준 메타데이터 블록. 일반 모드에서는
+            None.
     """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "chatcmpl-c62d8c5e",
+                    "object": "chat.completion",
+                    "created": 1713600000,
+                    "model": "solar-pro",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": (
+                                    "sorted() 함수나 list.sort() 메서드를"
+                                    " 사용합니다."
+                                ),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 32,
+                        "completion_tokens": 20,
+                        "total_tokens": 52,
+                    },
+                },
+                {
+                    "id": "chatcmpl-c62d8c5e",
+                    "object": "chat.completion",
+                    "created": 1713600000,
+                    "model": "solar-pro",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                            },
+                            "finish_reason": "content_filter",
+                        }
+                    ],
+                    "usage": None,
+                    "error": {
+                        "type": "guardrail_block",
+                        "stage": "input",
+                        "message": (
+                            "입력 보안 검사 실패: prompt injection detected"
+                        ),
+                        "layer": "L2",
+                        "reason": "prompt injection detected",
+                        "severity": "HIGH",
+                        "confidence": 0.95,
+                        "tags": ["injection"],
+                    },
+                },
+                {
+                    "id": "chatcmpl-c62d8c5e",
+                    "object": "chat.completion",
+                    "created": 1713600000,
+                    "model": "solar-pro",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "정렬은 sorted() 로 합니다.",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 32,
+                        "completion_tokens": 20,
+                        "total_tokens": 52,
+                    },
+                    "guardrail_reports": {
+                        "mode": "observe",
+                        "input": [
+                            {"layer": "L1", "status": "pass"},
+                            {
+                                "layer": "L2",
+                                "status": "block",
+                                "reason": "prompt injection detected",
+                                "severity": "HIGH",
+                                "confidence": 0.95,
+                                "tags": ["injection"],
+                            },
+                        ],
+                        "output": [
+                            {"layer": "L4", "status": "pass"},
+                            {"layer": "L5", "status": "pass"},
+                        ],
+                    },
+                },
+            ]
+        }
+    )
 
     id: str
     object: str
@@ -123,3 +390,5 @@ class ChatResponse(BaseModel):
     model: str
     choices: list[ChatResponseChoice]
     usage: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    guardrail_reports: dict[str, Any] | None = None
