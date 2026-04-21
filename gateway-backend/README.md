@@ -286,7 +286,7 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 
 | 파일 | 역할 |
 |---|---|
-| `Dockerfile` | Python 3.14-slim-bookworm 기반 multi-stage 빌드. `uv` 로 `.venv` 구성, `core-secure-layer` 는 editable path-dep 으로 설치되어 `layers/l*/model/*` 의 모델 파일 (~7.2GB) 을 source 트리에서 그대로 로드한다. 비-root `appuser` 로 기동. |
+| `Dockerfile` | Python 3.14-slim-bookworm 기반 multi-stage 빌드. `uv export --frozen --prune torch` 로 `uv.lock` 에서 torch·nvidia-\*/triton 을 dep graph 기준으로 제거한 `requirements.txt` 를 만들어 non-torch 의존성을 설치하고, `torch` 는 PyTorch 공식 CPU 인덱스에서 별도 설치한다 (CUDA 바이너리·nvidia-\* 이미지 미포함). `core-secure-layer` 는 editable path-dep 으로 설치되어 `layers/l*/model/*` 의 모델 파일 (~7.2GB) 을 source 트리에서 그대로 로드한다. 비-root `appuser` 로 기동. |
 | `Dockerfile.dockerignore` | BuildKit 의 Dockerfile 전용 ignore. 빌드 컨텍스트(monorepo 루트) 에서 `admin-backend/`, `admin-frontend/`, `docs/`, `.venv/`, `.git`, `.env`, `tests/`, `*.egg-info` 등을 제외한다. |
 | `docker-compose.yml` | `context: ..` 로 monorepo 루트를 빌드 컨텍스트로 잡고, `platform: linux/amd64` 고정. `env_file: .env`, `extra_hosts: host.docker.internal:host-gateway`, `start_period: 300s` (모델 로드 유예). |
 
@@ -298,9 +298,13 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
   resolve 된다.
 - **플랫폼**: 맥북 Apple Silicon 에서 빌드해도 `linux/amd64` 이미지가 나오도록
   compose 에 플랫폼을 고정. 개발 서버(x86) 에서는 native 빌드가 수행된다.
-- **CPU / GPU**: 별도 설정 없음. PyTorch / transformers / sentence-transformers
-  는 런타임에 CUDA → MPS → CPU 순으로 device 를 자동 선택하므로, 컨테이너에
-  GPU 를 연결하지 않으면 자동으로 CPU 추론으로 동작한다.
+- **CPU / GPU**: 빌드 단계에서 `torch` 를 PyTorch 공식 CPU 인덱스
+  (`https://download.pytorch.org/whl/cpu`) 에서만 설치하고, `uv export
+  --prune torch` 로 `uv.lock` 의 nvidia-\*/triton 런타임 의존성을 dep graph
+  기준으로 제거한다. 결과적으로 이미지에 CUDA 바이너리가 포함되지 않는다.
+  `pyproject.toml` / `uv.lock` 은 수정하지 않아 로컬 macOS 개발 환경과 완전히
+  분리되어 있다 (배포 전용 오버라이드는 Dockerfile 안에만 존재). 런타임에는
+  transformers / sentence-transformers 가 device 자동 선택으로 CPU 추론.
 - **모델 로드 시점**: `app/services/layer_registry.py` 가 import 될 때 L1~L6
   싱글턴이 즉시 인스턴스화된다 → uvicorn 이 `"Application startup complete"`
   를 찍는 시점에는 이미 모델 로드가 끝난 상태. 초기 로드는 1~3분 소요.
@@ -372,7 +376,7 @@ docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지
 | `모델 로드 실패` 워닝만 나오고 요청은 동작 | fail-open 설계 동작. 해당 레이어만 비활성. 로그에서 구체적인 레이어·경로 확인 후 이미지에 모델 파일이 복사됐는지 (`docker exec gateway-backend ls /app/core-secure-layer/core_secure_layer/layers/l4/model`) 점검. |
 | 컨테이너가 healthcheck 로 `unhealthy` 되어 재시작 반복 | 모델 로드가 `start_period` 를 초과. `docker compose logs` 로 실제 로드 시간 확인 후 `start_period` 상향. |
 | admin-backend 연결 실패 (`policy_service` 로그) | `ADMIN_BACKEND_URL` 값 확인. `docker exec gateway-backend python -c "import urllib.request; print(urllib.request.urlopen('$ADMIN_BACKEND_URL/health').status)"` 로 도달성 점검. 호스트 프로세스인 경우 admin-backend 가 `0.0.0.0` 에 바인딩돼 있어야 한다. |
-| `CUDA` 관련 워닝 | GPU 없는 환경의 정상 로그. PyTorch 가 자동으로 CPU 로 fallback. 무시 가능. |
+| CUDA / `libcu*` / `nvidia-*` 관련 경고 또는 오류 | CPU-only `torch` wheel 만 설치되어 CUDA 런타임 로드 경로 자체가 없어야 정상. 만약 빌드 로그에서 `Downloading nvidia-*` / `Downloading triton` 이 다시 보이면 이미지 캐시에 이전 빌드가 재사용됐을 가능성 → `docker builder prune -f --filter "label=com.docker.compose.project=gateway-backend"` 후 재빌드. transformers 가 단순 probe 차원에서 찍는 CUDA 관련 info 메시지는 무해. |
 
 ## 프로젝트 구조
 
