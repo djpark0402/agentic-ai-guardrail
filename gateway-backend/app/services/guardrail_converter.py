@@ -32,24 +32,25 @@ def _extract_text(content: object) -> str:
 
 
 def messages_to_request(messages: list[Message]) -> GuardrailRequest:
-    r"""`role='user'` 메시지만 골라 `\n\n` 으로 연결한 문자열로 직렬화한다.
+    """가장 최근 `role='user'` 메시지 하나만 골라 검사 대상으로 직렬화한다.
 
-    사용자가 직접 입력한 프롬프트만 가드레일 검사 대상에 포함한다.
-    system / assistant / tool 메시지 content 는 제외한다. 여러 user
-    턴이 존재하면 원래 순서를 유지해 모두 이어 붙인다. user 메시지가
-    하나도 없으면 빈 문자열을 전달한다.
+    사용자가 이번 턴에 새로 입력한 프롬프트만 가드레일 검사 대상에 포함한다.
+    과거 user 턴은 이미 그 시점에 한 번 검사되어 통과된 이력이므로, 히스토리
+    누적으로 인해 중복 차단이 발생하지 않도록 이번 턴의 마지막 user 메시지만
+    추출한다. system / assistant / tool 메시지 content 는 모두 제외한다.
+    user 메시지가 하나도 없으면 빈 문자열을 전달한다.
 
     Args:
         messages: 요청 바디의 ``messages`` 배열.
 
     Returns:
-        user 메시지 텍스트 본문이 ``\n\n`` 으로 연결된 단일 문자열을
-        ``user_input`` 에 담은 GuardrailRequest.
+        가장 최근 user 메시지의 텍스트 본문을 ``user_input`` 에 담은
+        GuardrailRequest. user 메시지가 없으면 빈 문자열.
     """
-    texts = [
-        _extract_text(msg.content) for msg in messages if msg.role == "user"
-    ]
-    return GuardrailRequest(user_input="\n\n".join(texts))
+    for msg in reversed(messages):
+        if msg.role == "user":
+            return GuardrailRequest(user_input=_extract_text(msg.content))
+    return GuardrailRequest(user_input="")
 
 
 def content_to_request(content: str) -> GuardrailRequest:

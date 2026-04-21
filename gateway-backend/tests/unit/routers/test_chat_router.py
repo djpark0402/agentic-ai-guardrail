@@ -777,6 +777,45 @@ def test_input_check_called_with_messages(client, mock_security_service):
     mock_security_service.check_input.assert_called_once()
 
 
+def test_input_guardrail_checks_only_latest_user_message(
+    client, mock_security_service
+):
+    """히스토리에 과거 user 턴이 남아 있어도, 이번 턴에 새로 보낸 user
+    입력만 가드레일이 본다.
+
+    회귀 방지: `messages_to_request` 가 `messages` 전체를 연결하던 시절에는
+    과거 턴이 계속 검사 대상에 포함되어 '한 번 차단되면 이후 요청도 계속
+    차단' 되는 버그가 있었다. 이 테스트는 라우터가 messages 를 있는 그대로
+    넘기고, 가드레일 직렬화 단계에서 마지막 user 메시지만 추출되는지를
+    잠근다.
+    """
+    from app.services.guardrail_converter import messages_to_request
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "solar-pro",
+            "messages": [
+                {"role": "user", "content": "주민번호 123456-1234567"},
+                {"role": "assistant", "content": "차단 안내"},
+                {"role": "user", "content": "안녕하세요"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+
+    mock_security_service.check_input.assert_awaited_once()
+    call = mock_security_service.check_input.await_args
+    passed_messages = call.kwargs["messages"]
+    # 라우터는 messages 를 손대지 않고 그대로 서비스에 전달한다.
+    assert len(passed_messages) == 3
+
+    # 가드레일 직렬화는 가장 최근 user 턴만 검사 대상으로 삼는다.
+    guardrail_req = messages_to_request(passed_messages)
+    assert guardrail_req.user_input == "안녕하세요"
+    assert "주민번호" not in guardrail_req.user_input
+
+
 def test_output_check_called_after_llm(client, mock_security_service):
     """LLM API 응답 후 check_output이 호출된다."""
     client.post(

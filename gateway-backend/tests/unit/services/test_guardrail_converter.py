@@ -11,16 +11,20 @@ from app.services.guardrail_converter import (
 )
 
 
-def test_messages_to_request_concatenates_user_turns_only():
-    """멀티턴의 user 메시지만 user_input 에 이어 붙고, assistant 는 제외된다."""
+def test_messages_to_request_returns_last_user_message():
+    """멀티턴 대화에서도 가장 최근 user 메시지 하나만 user_input 으로 전달된다.
+
+    과거 user 턴은 이미 그 시점에 한 번 검사된 이력이므로, 히스토리 누적 때문에
+    다시 검사되어 중복 차단이 발생하지 않도록 한다.
+    """
     messages = [
         Message(role="user", content="첫 번째"),
         Message(role="assistant", content="응답"),
         Message(role="user", content="두 번째"),
     ]
     req = messages_to_request(messages)
-    assert "첫 번째" in req.user_input
-    assert "두 번째" in req.user_input
+    assert req.user_input == "두 번째"
+    assert "첫 번째" not in req.user_input
     assert "응답" not in req.user_input
 
 
@@ -53,21 +57,22 @@ def test_messages_to_request_excludes_system_and_assistant():
     assert req.user_input == ""
 
 
-def test_messages_to_request_preserves_user_turn_order():
-    """user1 → user2 순서가 직렬화에서도 유지된다(비-user 는 건너뛴다)."""
+def test_messages_to_request_ignores_previous_blocked_user_turn():
+    """과거 user 턴에 차단 키워드가 남아 있어도, 가장 최근 user 메시지만 검사
+    대상으로 전달되어 '한 번 차단되면 이후 요청이 계속 차단' 되는 회귀가
+    재발하지 않도록 잠근다.
+    """
     messages = [
         Message(role="system", content="시스템"),
-        Message(role="user", content="사용자1"),
-        Message(role="assistant", content="응답1"),
-        Message(role="user", content="사용자2"),
+        Message(role="user", content="주민번호 123456-1234567"),
+        Message(role="assistant", content="차단 안내"),
+        Message(role="user", content="안녕하세요"),
     ]
     req = messages_to_request(messages)
-    text = req.user_input
-    assert "시스템" not in text
-    assert "응답1" not in text
-    idx_user1 = text.index("사용자1")
-    idx_user2 = text.index("사용자2")
-    assert idx_user1 < idx_user2
+    assert req.user_input == "안녕하세요"
+    assert "주민번호" not in req.user_input
+    assert "시스템" not in req.user_input
+    assert "차단 안내" not in req.user_input
 
 
 def test_messages_to_request_drops_non_user_content():
