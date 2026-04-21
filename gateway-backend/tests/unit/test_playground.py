@@ -22,11 +22,3 @@ def test_playground_page_is_served_with_core_sections() -> None:
     assert "API Surface" in response.text
     assert "응답" in response.text
     assert interactive_index < api_surface_index
-
-
-def test_playground_helper_copy_uses_body_text_style() -> None:
-    """긴 보조 설명은 배지 스타일이 아닌 본문 스타일로 렌더링해야 한다."""
-    response = client.get("/playground/")
-
-    assert '<p class="helper-text">' in response.text
-    assert '<p class="card-kicker" style="margin-top:6px">' not in response.text

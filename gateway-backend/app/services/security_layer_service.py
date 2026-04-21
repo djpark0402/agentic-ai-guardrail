@@ -15,67 +15,6 @@ from app.services.layer_registry import get_layer
 logger = logging.getLogger(__name__)
 
 
-def _stage_label(stage: str) -> str:
-    """로그 표시에 사용할 단계 한글명을 반환한다."""
-    return "입력" if stage == "input" else "출력"
-
-
-def _log_layer_result(
-    stage: str,
-    result: GuardrailResult,
-    *,
-    layer_name: str,
-    note: str | None = None,
-) -> None:
-    """레이어 실행 결과를 구조화된 한 줄 로그로 남긴다.
-
-    Args:
-        stage: 입력/출력 구분값.
-        result: 레이어 실행 결과.
-        layer_name: 로그에 강제로 표시할 레이어 이름.
-        note: PASS 처리 사유 같은 보조 설명.
-    """
-    fields = [
-        f"layer={layer_name}",
-        f"status={result.status.value}",
-    ]
-    if result.reason:
-        fields.append(f"reason={result.reason}")
-    if note:
-        fields.append(f"note={note}")
-    if result.severity:
-        fields.append(f"severity={result.severity}")
-    if result.confidence is not None:
-        fields.append(f"confidence={result.confidence:.2f}")
-    if result.tags:
-        fields.append(f"tags={list(result.tags)}")
-
-    log_fn = (
-        logger.warning
-        if result.status is CheckStatus.BLOCK
-        else logger.info
-    )
-    log_fn(
-        "%s 레이어 결과: %s",
-        _stage_label(stage),
-        " ".join(fields),
-    )
-
-
-def _with_layer_name(
-    result: GuardrailResult,
-    layer_idx: int,
-) -> GuardrailResult:
-    """결과에 `layer` 가 비어 있으면 `L{idx}` 로 보강한 사본을 돌려준다.
-
-    관찰 모드 응답에서 레이어별 판정을 순서대로 식별하기 위해 필요하다.
-    PASS/미구현/미매핑 레이어는 `layer` 가 비어 있을 수 있으므로 여기서 메운다.
-    """
-    if result.layer:
-        return result
-    return result.model_copy(update={"layer": f"L{layer_idx}"})
-
-
 class SecurityLayerService:
     """core-secure-layer 를 통한 L1~L6 보안 검사 서비스.
 
@@ -136,66 +75,6 @@ class SecurityLayerService:
                 return result
         return GuardrailResult(status=CheckStatus.PASS)
 
-    async def check_input_all(
-        self,
-        messages: list[Message],
-        policy: GuardrailPolicy,
-    ) -> list[GuardrailResult]:
-        """활성 레이어 전부를 순차 실행하고 각 결과를 수집한다.
-
-        관찰(데모) 모드 전용 경로로, BLOCK 판정이 나와도 후속 레이어 실행을
-        중단하지 않는다. 각 결과에는 `layer` 필드가 `"L{idx}"` 형식으로
-        보강되어, 정책 순서에 따른 레이어별 판정 내역을 클라이언트에 그대로
-        노출할 수 있다.
-
-        Args:
-            messages: 사용자 입력 메시지 목록.
-            policy: 적용할 보안 정책.
-
-        Returns:
-            활성 레이어 개수만큼의 `GuardrailResult` 리스트. 순서는
-            `policy.enabled_layers()` 와 일치한다.
-        """
-        enabled = policy.enabled_layers()
-        logger.info(
-            "입력 보안 검사(관찰 모드) 시작: 메시지 수=%d enabled_layers=%s",
-            len(messages),
-            enabled,
-        )
-        results: list[GuardrailResult] = []
-        for layer_idx in enabled:
-            result = await self._run_layer_input(layer_idx, messages)
-            results.append(_with_layer_name(result, layer_idx))
-        return results
-
-    async def check_output_all(
-        self,
-        content: str,
-        policy: GuardrailPolicy,
-    ) -> list[GuardrailResult]:
-        """활성 레이어 전부를 순차 실행하고 각 출력 결과를 수집한다.
-
-        관찰(데모) 모드 전용 경로. `check_input_all` 과 대칭.
-
-        Args:
-            content: LLM 응답 텍스트.
-            policy: 적용할 보안 정책.
-
-        Returns:
-            활성 레이어 개수만큼의 `GuardrailResult` 리스트.
-        """
-        enabled = policy.enabled_layers()
-        logger.info(
-            "출력 보안 검사(관찰 모드) 시작: content_len=%d enabled_layers=%s",
-            len(content),
-            enabled,
-        )
-        results: list[GuardrailResult] = []
-        for layer_idx in enabled:
-            result = await self._run_layer_output(layer_idx, content)
-            results.append(_with_layer_name(result, layer_idx))
-        return results
-
     async def _run_layer_input(
         self,
         layer_idx: int,
@@ -212,44 +91,17 @@ class SecurityLayerService:
         """
         layer = get_layer(layer_idx)
         if layer is None:
-            result = GuardrailResult(
-                status=CheckStatus.PASS,
-                layer=f"L{layer_idx}",
-            )
-            _log_layer_result(
-                "input",
-                result,
-                layer_name=f"L{layer_idx}",
-                note="매핑 없음",
-            )
-            return result
+            logger.debug("레이어 L%d: 매핑 없음, PASS", layer_idx)
+            return GuardrailResult(status=CheckStatus.PASS)
 
         request = messages_to_request(messages)
         try:
-            core_result = await layer.check(request)
+            result = await layer.check(request)
         except NotImplementedError:
-            result = GuardrailResult(
-                status=CheckStatus.PASS,
-                layer=layer.name,
-            )
-            _log_layer_result(
-                "input",
-                result,
-                layer_name=layer.name,
-                note="미구현",
-            )
-            return result
+            logger.debug("레이어 %s: 미구현, PASS", layer.name)
+            return GuardrailResult(status=CheckStatus.PASS)
 
-        result = _with_layer_name(
-            layer_result_to_guardrail_result(core_result),
-            layer_idx,
-        )
-        _log_layer_result(
-            "input",
-            result,
-            layer_name=result.layer or f"L{layer_idx}",
-        )
-        return result
+        return layer_result_to_guardrail_result(result)
 
     async def _run_layer_output(
         self,
@@ -267,41 +119,14 @@ class SecurityLayerService:
         """
         layer = get_layer(layer_idx)
         if layer is None:
-            result = GuardrailResult(
-                status=CheckStatus.PASS,
-                layer=f"L{layer_idx}",
-            )
-            _log_layer_result(
-                "output",
-                result,
-                layer_name=f"L{layer_idx}",
-                note="매핑 없음",
-            )
-            return result
+            logger.debug("레이어 L%d: 매핑 없음, PASS", layer_idx)
+            return GuardrailResult(status=CheckStatus.PASS)
 
         request = content_to_request(content)
         try:
-            core_result = await layer.check(request)
+            result = await layer.check(request)
         except NotImplementedError:
-            result = GuardrailResult(
-                status=CheckStatus.PASS,
-                layer=layer.name,
-            )
-            _log_layer_result(
-                "output",
-                result,
-                layer_name=layer.name,
-                note="미구현",
-            )
-            return result
+            logger.debug("레이어 %s: 미구현, PASS", layer.name)
+            return GuardrailResult(status=CheckStatus.PASS)
 
-        result = _with_layer_name(
-            layer_result_to_guardrail_result(core_result),
-            layer_idx,
-        )
-        _log_layer_result(
-            "output",
-            result,
-            layer_name=result.layer or f"L{layer_idx}",
-        )
-        return result
+        return layer_result_to_guardrail_result(result)

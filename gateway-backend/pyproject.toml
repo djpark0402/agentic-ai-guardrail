@@ -16,10 +16,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# editable 설치로 지정해, 패키지 빌드 시 wheel 에 포함되지 않는
-# 모델 가중치(.safetensors 등)와 VectorDB 리소스를 source 트리에서
-# 직접 참조한다. (../core-secure-layer 내부는 수정하지 않는다.)
-core-secure-layer = { path = "../core-secure-layer", editable = true }
+core-secure-layer = { path = "../core-secure-layer" }
 
 [dependency-groups]
 dev = [

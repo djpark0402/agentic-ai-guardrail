@@ -1,6 +1,5 @@
 """Gateway Backend FastAPI 애플리케이션 진입점."""
 
-import html as html_lib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -11,8 +10,7 @@ import httpx
 import openai
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.exceptions import LangChainException
 
@@ -34,20 +32,6 @@ logger = logging.getLogger(__name__)
 
 # 미들웨어 로깅에서 제외할 경로.
 _SKIP_LOG_PATHS: frozenset[str] = frozenset({"/health", "/openapi.json"})
-_STATIC_DIR = Path(__file__).parent / "static"
-_DOCS_CSS_PATH = _STATIC_DIR / "docs-overrides.css"
-_DOCS_TITLE = "Agentic AI Guardrail Gateway - Swagger UI"
-_SWAGGER_UI_PARAMETERS: dict[str, object] = {
-    "defaultModelsExpandDepth": -1,
-    "displayRequestDuration": True,
-    "docExpansion": "list",
-    "filter": True,
-    "operationsSorter": "alpha",
-    "persistAuthorization": True,
-    "syntaxHighlight.theme": "nord",
-    "tagsSorter": "alpha",
-    "tryItOutEnabled": True,
-}
 
 
 @asynccontextmanager
@@ -71,47 +55,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Agentic AI Guardrail Gateway",
     description=(
-        "LangChain 기반 Multi-provider LLM Gateway. **OpenAI "
-        "`/v1/chat/completions` 호환** 엔드포인트를 제공하며, 요청/응답이 모두 "
-        "OpenAI 스펙을 따르므로 `openai` SDK·LiteLLM·LangChain 클라이언트에서 "
-        "base_url 만 바꿔 바로 사용할 수 있습니다.\n\n"
-        "### Provider 라우팅\n"
-        "모델명으로 자동 감지합니다:\n"
+        "LangChain 기반 Multi-provider LLM Gateway.\n\n"
+        "모델명으로 provider를 자동 감지하여 라우팅합니다:\n"
         "- **Solar**: `solar-pro` 등 (기본값)\n"
         "- **OpenAI**: `gpt-4o`, `o1-preview` 등 (자동 감지)\n"
         "- **Ollama**: `ollama/llama3` 등 (접두사 명시)\n\n"
-        "### 가드레일 파이프라인\n"
-        "모든 요청은 다음 순서로 검증됩니다:\n"
-        "1. 사용자 헤더 4종 검증 (`X-API-Key`, `X-Timestamp`, `X-Nonce`, "
-        "`X-Signature`)\n"
-        "2. admin-backend 정책 조회\n"
-        '3. 입력 가드레일 (L1~L6, `messages` 중 `role="user"` 메시지 '
-        "본문만 검사 대상 — system / assistant / tool content 는 제외)\n"
-        "4. provider 자동 감지 후 LLM 호출\n"
-        "5. 출력 가드레일 (L1~L6) — 사용자 전송 전에 선행\n"
-        "6. 비스트리밍 JSON 또는 SSE 스트리밍 응답\n\n"
-        "### OpenAI 스펙 외 확장 필드\n"
-        "표준 OpenAI 필드 외에 두 개의 비표준 필드가 섞일 수 있습니다. "
-        "OpenAI 공식 SDK 는 이들을 무시하므로 호환성에는 영향이 없습니다.\n"
-        "- `error`: 가드레일 차단 시 HTTP 200 + "
-        "`finish_reason=content_filter` 로 응답하면서 차단 레이어·사유·"
-        "심각도·신뢰도·태그를 담은 블록을 함께 반환합니다. (LiteLLM 호환)\n"
-        "- `guardrail_reports`: `CONTINUE_ON_LAYER_FAILURE=true` "
-        "(관찰 모드)에서만 채워지며, 레이어별 PASS/BLOCK 판정 내역을 "
-        "배열로 반환합니다."
+        "모든 요청은 5단계 가드레일 파이프라인을 거칩니다:\n"
+        "정책 조회 → 입력 검사 → LLM 호출 → 출력 검사 → 응답"
     ),
     version="0.2.0",
-    openapi_tags=[
-        {
-            "name": "chat",
-            "description": "OpenAI 호환 Chat Completions 엔드포인트.",
-        },
-        {
-            "name": "meta",
-            "description": "헬스체크와 기본값 조회용 보조 엔드포인트.",
-        },
-    ],
-    docs_url=None,
     lifespan=lifespan,
 )
 
@@ -156,6 +108,7 @@ async def log_request(request: Request, call_next) -> Response:  # noqa: ANN001
 app.include_router(chat.router, prefix="/v1")
 
 # 플레이그라운드 정적 페이지 마운트 (/playground/)
+_STATIC_DIR = Path(__file__).parent / "static"
 app.mount(
     "/playground",
     StaticFiles(directory=_STATIC_DIR, html=True),
@@ -163,49 +116,7 @@ app.mount(
 )
 
 
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_docs(url: str | None = None) -> HTMLResponse:
-    """기본 Swagger UI 에 개발 편의 설정만 적용한 문서를 반환한다."""
-    docs_url = url or app.openapi_url
-    swagger_html = get_swagger_ui_html(
-        openapi_url=docs_url,
-        title=_DOCS_TITLE,
-        swagger_ui_parameters=_SWAGGER_UI_PARAMETERS,
-    )
-    html = swagger_html.body.decode("utf-8")
-    css = _DOCS_CSS_PATH.read_text(encoding="utf-8")
-    topbar = f"""
-    <div class="gateway-swagger-topbar">
-      <div class="gateway-swagger-topbar__brand">
-        <span class="gateway-swagger-topbar__mark">{{}}</span>
-        <div>
-          <strong class="gateway-swagger-topbar__title">Swagger</strong>
-          <span class="gateway-swagger-topbar__subtitle">
-            Supported by SmartBear
-          </span>
-        </div>
-      </div>
-      <form
-        class="gateway-swagger-topbar__controls"
-        method="get"
-        action="/docs"
-      >
-        <input
-          type="text"
-          name="url"
-          aria-label="OpenAPI URL"
-          value="{html_lib.escape(docs_url, quote=True)}"
-        />
-        <button type="submit">Explore</button>
-      </form>
-    </div>
-    """
-    html = html.replace("<body>", f"<body>{topbar}", 1)
-    html = html.replace("</head>", f"<style>{css}</style></head>")
-    return HTMLResponse(content=html, status_code=swagger_html.status_code)
-
-
-@app.get("/health", tags=["meta"], summary="헬스체크")
+@app.get("/health")
 async def health_check() -> dict[str, str]:
     """서비스 헬스체크 엔드포인트.
 
@@ -215,11 +126,7 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get(
-    "/v1/models/default",
-    tags=["meta"],
-    summary="환경 기본 모델명 조회",
-)
+@app.get("/v1/models/default")
 async def default_model() -> dict[str, str]:
     """환경 변수에 설정된 기본 모델명을 반환한다.
 

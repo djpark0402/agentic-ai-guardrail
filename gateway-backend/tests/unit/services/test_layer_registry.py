@@ -1,9 +1,8 @@
 """layer_registry 모듈 테스트."""
 
+from app.services.layer_registry import get_layer
 from core_secure_layer.layers.l1.l1 import L1Layer
 from core_secure_layer.layers.l6.l6 import L6Layer
-
-from app.services.layer_registry import get_layer
 
 
 def test_get_layer_returns_l1_for_index_1():

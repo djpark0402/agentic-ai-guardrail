@@ -6,34 +6,26 @@
     <title>Gateway Backend · Playground</title>
     <style>
       :root {
-        --bg: #fff9fb;
-        --bg-soft: #fff3f7;
-        --sky: #eef7ff;
-        --sun: #fff4cf;
-        --surface: rgba(255, 255, 255, 0.84);
+        --bg: #fff8fb;
+        --bg-soft: #fff1f5;
+        --surface: rgba(255, 255, 255, 0.88);
         --surface-strong: #ffffff;
-        --surface-alt: #fff7fb;
-        --border: #efd0dc;
-        --border-strong: #d8adc1;
-        --text: #5d4251;
-        --muted: #7b6474;
-        --accent: #f2a0bc;
-        --accent-strong: #c86089;
-        --accent-deep: #a44a74;
-        --accent-soft: #ffe6f0;
-        --highlight: #fff1c2;
+        --surface-alt: #fff4f7;
+        --border: #f0ccd8;
+        --border-strong: #e6b4c7;
+        --text: #5b3448;
+        --muted: #8a6676;
+        --accent: #f39ab6;
+        --accent-strong: #d85b8d;
+        --accent-soft: #ffe1ea;
+        --highlight: #fff7d9;
         --danger: #c95673;
         --ok: #2d8a69;
-        --branch: #7a525f;
-        --branch-soft: rgba(122, 82, 95, 0.14);
-        --petal: rgba(242, 160, 188, 0.78);
-        --petal-soft: rgba(255, 233, 241, 0.88);
-        --shadow: 0 28px 80px rgba(196, 121, 152, 0.14);
-        --shadow-soft: 0 16px 36px rgba(196, 121, 152, 0.1);
+        --shadow: 0 24px 60px rgba(211, 109, 150, 0.12);
+        --shadow-soft: 0 12px 30px rgba(211, 109, 150, 0.08);
         --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        --serif: "Iowan Old Style", "Cormorant Garamond", "Times New Roman", serif;
-        --sans: "Pretendard", "SUIT", "Apple SD Gothic Neo", -apple-system,
-          BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --sans: "Pretendard", "Iowan Old Style", "Apple SD Gothic Neo",
+          -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
 
       * {
@@ -50,11 +42,9 @@
       body {
         position: relative;
         background:
-          radial-gradient(circle at 12% 14%, rgba(228, 240, 255, 0.9), transparent 22%),
-          radial-gradient(circle at 84% 12%, rgba(255, 226, 236, 0.76), transparent 20%),
-          radial-gradient(circle at 18% 92%, rgba(255, 236, 244, 0.72), transparent 16%),
-          radial-gradient(circle at 72% 78%, rgba(255, 243, 204, 0.58), transparent 22%),
-          linear-gradient(180deg, #fdfcff 0%, #fff6f8 44%, #fff8f1 100%);
+          radial-gradient(circle at top left, rgba(255, 219, 232, 0.95), transparent 28%),
+          radial-gradient(circle at top right, rgba(255, 239, 213, 0.88), transparent 22%),
+          linear-gradient(180deg, #fffafc 0%, #fff5f7 45%, #fffdf7 100%);
         color: var(--text);
         font-family: var(--sans);
         line-height: 1.6;
@@ -65,34 +55,24 @@
       body::after {
         content: "";
         position: fixed;
-        width: 460px;
-        height: 360px;
+        inset: auto auto 12% -90px;
+        width: 260px;
+        height: 260px;
         pointer-events: none;
         background:
-          radial-gradient(ellipse 32px 18px at 14% 20%, rgba(255, 211, 225, 0.62) 0 66%, transparent 70%),
-          radial-gradient(ellipse 26px 15px at 28% 13%, rgba(255, 236, 244, 0.96) 0 66%, transparent 70%),
-          radial-gradient(ellipse 30px 16px at 38% 29%, rgba(245, 190, 210, 0.54) 0 66%, transparent 70%),
-          radial-gradient(ellipse 26px 15px at 52% 19%, rgba(255, 224, 236, 0.84) 0 66%, transparent 70%),
-          radial-gradient(ellipse 24px 14px at 62% 35%, rgba(245, 190, 210, 0.5) 0 66%, transparent 70%),
-          radial-gradient(ellipse 30px 17px at 78% 18%, rgba(255, 236, 244, 0.82) 0 66%, transparent 70%),
-          radial-gradient(ellipse 34px 20px at 84% 46%, rgba(245, 190, 210, 0.42) 0 66%, transparent 70%),
-          radial-gradient(ellipse 18px 10px at 44% 58%, rgba(255, 249, 251, 0.96) 0 66%, transparent 70%);
-        filter: blur(1.5px);
-        opacity: 0.92;
-        animation: blossomFloatLeft 20s ease-in-out infinite alternate;
-      }
-
-      body::before {
-        inset: auto auto 8% -128px;
+          radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.86) 0 16%, transparent 17%),
+          radial-gradient(circle at 50% 50%, rgba(244, 172, 196, 0.3) 0 52%, transparent 53%);
+        filter: blur(2px);
+        opacity: 0.85;
         transform: rotate(-12deg);
       }
 
       body::after {
-        inset: 58px -152px auto auto;
-        opacity: 0.78;
-        transform: rotate(11deg) scale(0.94);
-        animation-name: blossomFloatRight;
-        animation-duration: 24s;
+        inset: 72px -100px auto auto;
+        width: 300px;
+        height: 300px;
+        opacity: 0.5;
+        transform: rotate(16deg);
       }
 
       a {
@@ -108,47 +88,29 @@
         font-family: var(--mono);
         font-size: 0.92em;
         background: rgba(255, 255, 255, 0.76);
-        border: 1px solid rgba(221, 191, 207, 0.8);
+        border: 1px solid rgba(230, 180, 199, 0.8);
         border-radius: 999px;
         padding: 0.12rem 0.48rem;
       }
 
       main {
         position: relative;
-        max-width: 1240px;
+        max-width: 1180px;
         margin: 0 auto;
         padding: 40px 20px 88px;
-      }
-
-      main::before {
-        content: "";
-        position: absolute;
-        inset: 14px 10px auto;
-        height: 220px;
-        border-radius: 40px;
-        background:
-          linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.4) 20%, transparent 46%),
-          radial-gradient(circle at 22% 58%, rgba(255, 239, 209, 0.64), transparent 18%),
-          radial-gradient(circle at 78% 34%, rgba(255, 233, 241, 0.58), transparent 22%);
-        filter: blur(14px);
-        pointer-events: none;
-        z-index: 0;
       }
 
       .hero {
         position: relative;
         overflow: hidden;
         background:
-          linear-gradient(135deg, rgba(255, 255, 255, 0.97), rgba(255, 247, 251, 0.9)),
-          radial-gradient(circle at 16% 88%, rgba(255, 241, 199, 0.8), transparent 28%),
-          radial-gradient(circle at 88% 14%, rgba(232, 243, 255, 0.82), transparent 34%),
-          radial-gradient(circle at 94% 16%, rgba(255, 225, 236, 0.8), transparent 22%);
-        border: 1px solid rgba(221, 191, 207, 0.9);
-        border-radius: 36px;
+          linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 243, 247, 0.9)),
+          radial-gradient(circle at top right, rgba(255, 232, 240, 0.95), transparent 40%);
+        border: 1px solid rgba(230, 180, 199, 0.8);
+        border-radius: 32px;
         box-shadow: var(--shadow);
-        padding: 38px;
+        padding: 34px;
         margin-bottom: 26px;
-        isolation: isolate;
       }
 
       .hero::before {
@@ -156,23 +118,10 @@
         position: absolute;
         inset: 0;
         background:
-          radial-gradient(ellipse 38px 20px at 78% 18%, rgba(245, 189, 209, 0.34) 0 66%, transparent 70%),
-          radial-gradient(ellipse 28px 16px at 83% 12%, rgba(255, 244, 248, 0.92) 0 66%, transparent 70%),
-          radial-gradient(ellipse 24px 14px at 88% 27%, rgba(245, 189, 209, 0.24) 0 66%, transparent 70%),
-          radial-gradient(circle at 14% 100%, rgba(255, 239, 193, 0.92) 0 18%, transparent 19%),
-          linear-gradient(120deg, transparent 52%, rgba(255, 244, 248, 0.58) 74%, transparent 88%);
-        pointer-events: none;
-      }
-
-      .hero::after {
-        content: "";
-        position: absolute;
-        inset: 10% 44% auto -2%;
-        height: 160px;
-        background:
-          radial-gradient(circle at 22% 72%, rgba(122, 82, 95, 0.16), transparent 18%),
-          linear-gradient(105deg, transparent 0 14%, rgba(122, 82, 95, 0.12) 15% 18%, transparent 19% 100%);
-        transform: rotate(-10deg);
+          radial-gradient(circle at 82% 18%, rgba(244, 170, 196, 0.28) 0 10%, transparent 11%),
+          radial-gradient(circle at 88% 28%, rgba(255, 255, 255, 0.95) 0 4%, transparent 5%),
+          radial-gradient(circle at 76% 30%, rgba(244, 170, 196, 0.16) 0 7%, transparent 8%),
+          radial-gradient(circle at 18% 100%, rgba(255, 247, 217, 0.95) 0 22%, transparent 23%);
         pointer-events: none;
       }
 
@@ -180,8 +129,7 @@
         position: relative;
         display: grid;
         grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
-        gap: 28px;
-        z-index: 1;
+        gap: 24px;
       }
 
       .eyebrow {
@@ -191,7 +139,7 @@
         padding: 8px 14px;
         border-radius: 999px;
         background: rgba(255, 245, 248, 0.9);
-        border: 1px solid rgba(221, 191, 207, 0.72);
+        border: 1px solid rgba(230, 180, 199, 0.72);
         color: var(--accent-strong);
         font-size: 0.8rem;
         font-weight: 700;
@@ -201,7 +149,6 @@
       }
 
       h1 {
-        font-family: var(--serif);
         font-size: clamp(2.2rem, 1.5rem + 2vw, 3.6rem);
         line-height: 1.05;
         letter-spacing: -0.04em;
@@ -214,23 +161,17 @@
 
       .subtitle {
         color: var(--muted);
-        margin: 0 0 18px;
+        margin: 0;
         max-width: 40rem;
         font-size: 1.06rem;
       }
 
-      .hero-copy {
-        position: relative;
-      }
-
       .hero-note {
         position: relative;
-        background:
-          linear-gradient(180deg, rgba(255, 251, 246, 0.92), rgba(255, 248, 252, 0.86)),
-          radial-gradient(circle at 92% 18%, rgba(255, 229, 238, 0.48), transparent 22%);
-        border: 1px solid rgba(241, 221, 184, 0.9);
-        border-radius: 28px;
-        padding: 24px;
+        background: rgba(255, 251, 244, 0.85);
+        border: 1px solid rgba(240, 221, 182, 0.92);
+        border-radius: 24px;
+        padding: 22px 24px;
         box-shadow: var(--shadow-soft);
       }
 
@@ -267,17 +208,17 @@
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
-        margin-top: 0;
+        margin-top: 26px;
       }
 
       .pipeline span {
         padding: 9px 14px;
         font-family: var(--mono);
         font-size: 0.84rem;
-        background: rgba(255, 255, 255, 0.9);
-        border: 1px solid rgba(221, 191, 207, 0.86);
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(230, 180, 199, 0.8);
         border-radius: 999px;
-        box-shadow: 0 10px 24px rgba(190, 132, 155, 0.08);
+        box-shadow: 0 8px 20px rgba(211, 109, 150, 0.06);
       }
 
       .pipeline .arrow {
@@ -302,24 +243,12 @@
       }
 
       section.card {
-        position: relative;
         background: var(--surface);
         backdrop-filter: blur(8px);
-        border: 1px solid rgba(221, 191, 207, 0.8);
-        border-radius: 30px;
+        border: 1px solid rgba(230, 180, 199, 0.74);
+        border-radius: 28px;
         box-shadow: var(--shadow-soft);
-        padding: 30px;
-        overflow: hidden;
-      }
-
-      section.card::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.22), transparent 28%),
-          radial-gradient(circle at 100% 0%, rgba(255, 232, 239, 0.24), transparent 22%);
-        pointer-events: none;
+        padding: 28px;
       }
 
       section.card h2 {
@@ -344,21 +273,6 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         margin-bottom: 14px;
-      }
-
-      .card-kicker::before {
-        content: "✿";
-        font-size: 0.86rem;
-      }
-
-      .helper-text {
-        margin: 8px 0 0;
-        color: var(--muted);
-        font-size: 0.9rem;
-      }
-
-      .helper-text code {
-        white-space: nowrap;
       }
 
       .split-header {
@@ -392,11 +306,9 @@
         gap: 12px;
         font-family: var(--mono);
         font-size: 0.95rem;
-        background:
-          linear-gradient(180deg, #fffafd, #fff5f8),
-          radial-gradient(circle at 100% 50%, rgba(255, 231, 240, 0.34), transparent 22%);
+        background: linear-gradient(180deg, #fff8fb, #fff2f6);
         border: 1px solid var(--border);
-        border-radius: 20px;
+        border-radius: 18px;
         padding: 14px 16px;
         margin-bottom: 18px;
       }
@@ -430,17 +342,14 @@
 
       pre,
       input[type="text"],
-      input[type="password"],
       textarea,
       select {
         width: 100%;
-        background: rgba(255, 255, 255, 0.92);
-        border: 1px solid rgba(221, 191, 207, 0.84);
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(230, 180, 199, 0.84);
         border-radius: 18px;
         color: var(--text);
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.95),
-          0 8px 22px rgba(196, 121, 152, 0.04);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
       }
 
       pre {
@@ -453,11 +362,10 @@
         word-break: break-word;
         min-height: 220px;
         background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(255, 248, 245, 0.92));
+          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 247, 250, 0.92));
       }
 
       input[type="text"],
-      input[type="password"],
       textarea,
       select {
         padding: 12px 14px;
@@ -487,11 +395,11 @@
       }
 
       .form-shell {
-        padding: 20px;
-        border-radius: 24px;
+        padding: 18px;
+        border-radius: 22px;
         background:
-          linear-gradient(180deg, rgba(255, 249, 246, 0.94), rgba(255, 244, 248, 0.82));
-        border: 1px solid rgba(239, 215, 223, 0.84);
+          linear-gradient(180deg, rgba(255, 248, 251, 0.9), rgba(255, 243, 247, 0.76));
+        border: 1px solid rgba(240, 204, 216, 0.84);
       }
 
       .spacer {
@@ -537,14 +445,14 @@
       #send {
         background: linear-gradient(135deg, var(--accent), var(--accent-strong));
         color: #fffafc;
-        box-shadow: 0 16px 30px rgba(207, 112, 147, 0.28);
+        box-shadow: 0 14px 24px rgba(216, 91, 141, 0.24);
       }
 
       button.ghost {
-        background: rgba(255, 255, 255, 0.88);
+        background: rgba(255, 255, 255, 0.82);
         color: var(--muted);
-        border: 1px solid rgba(221, 191, 207, 0.9);
-        box-shadow: 0 8px 18px rgba(196, 121, 152, 0.05);
+        border: 1px solid rgba(230, 180, 199, 0.9);
+        box-shadow: none;
       }
 
       button.ghost:hover {
@@ -565,8 +473,8 @@
         gap: 8px;
         padding: 10px 14px;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.84);
-        border: 1px solid rgba(221, 191, 207, 0.84);
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid rgba(230, 180, 199, 0.84);
         color: var(--muted);
         font-size: 0.92rem;
       }
@@ -587,18 +495,18 @@
         padding: 8px 12px;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.82);
-        border: 1px solid rgba(221, 191, 207, 0.84);
+        border: 1px solid rgba(230, 180, 199, 0.84);
         color: var(--muted);
       }
 
       .response-shell {
         display: grid;
         gap: 14px;
-        padding: 20px;
-        border-radius: 24px;
+        padding: 18px;
+        border-radius: 22px;
         background:
-          linear-gradient(180deg, rgba(255, 252, 246, 0.94), rgba(255, 246, 249, 0.86));
-        border: 1px solid rgba(239, 215, 223, 0.84);
+          linear-gradient(180deg, rgba(255, 251, 244, 0.92), rgba(255, 246, 249, 0.82));
+        border: 1px solid rgba(240, 204, 216, 0.84);
       }
 
       .response-shell pre {
@@ -631,28 +539,7 @@
         color: var(--muted);
         font-size: 0.82rem;
         text-align: center;
-        margin-top: 24px;
-        padding-bottom: 18px;
-      }
-
-      @keyframes blossomFloatLeft {
-        from {
-          transform: rotate(-12deg) translate3d(0, 0, 0);
-        }
-
-        to {
-          transform: rotate(-6deg) translate3d(18px, -16px, 0);
-        }
-      }
-
-      @keyframes blossomFloatRight {
-        from {
-          transform: rotate(11deg) scale(0.94) translate3d(0, 0, 0);
-        }
-
-        to {
-          transform: rotate(17deg) scale(0.98) translate3d(-18px, 16px, 0);
-        }
+        margin-top: 20px;
       }
 
       @media (max-width: 980px) {
@@ -660,17 +547,6 @@
         .test-grid,
         .field-grid {
           grid-template-columns: 1fr;
-        }
-
-        .hero {
-          padding: 28px;
-        }
-
-        body::before,
-        body::after {
-          width: 300px;
-          height: 240px;
-          opacity: 0.56;
         }
       }
 
@@ -705,22 +581,6 @@
         .pipeline .arrow {
           display: none;
         }
-
-        body::before,
-        body::after {
-          width: 220px;
-          height: 180px;
-          filter: none;
-          opacity: 0.42;
-        }
-
-        body::before {
-          inset: auto auto 8% -88px;
-        }
-
-        body::after {
-          inset: 54px -92px auto auto;
-        }
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -738,7 +598,7 @@
     <main>
       <header class="hero">
         <div class="hero-grid">
-          <div class="hero-copy">
+          <div>
             <div class="eyebrow">Agentic AI Guardrail</div>
             <h1>Gateway<span class="dot">.</span> Playground</h1>
             <p class="subtitle">
@@ -788,20 +648,6 @@
 
           <div class="test-grid">
             <div class="form-shell">
-              <label>X-API-Key (사용자 API 키)</label>
-              <input id="f-api-key" type="text" placeholder="uak_..." autocomplete="off" />
-
-              <div class="spacer"></div>
-
-              <label>HMAC SECRET <span style="opacity:.7">— X-Signature 계산용 (데모 전용)</span></label>
-              <input id="f-secret" type="password" placeholder="ADMIN 이 사용자에게 발급한 서명 시크릿" autocomplete="off" />
-              <p class="helper-text">
-                두 값을 모두 채우면 전송 시 <code>X-Timestamp</code> / <code>X-Nonce</code> / <code>X-Signature</code> 를 브라우저에서 자동 계산해 함께 전송합니다. 서명은 <code>HMAC-SHA256(SECRET, "{ts}.{nonce}.{sha256(body)}")</code> 규칙이며 값은 브라우저 메모리에만 존재하고 서버로 원본 그대로 전송되지 않습니다.
-                비워두면 <code>SKIP_HEADER_VERIFICATION=true</code> 모드에서만 정상 동작합니다.
-              </p>
-
-              <div class="spacer"></div>
-
               <label>model</label>
               <input id="f-model" type="text" placeholder="모델명 로드 중…" />
               <div class="toolbar" style="margin-top:10px;margin-bottom:0">
@@ -824,10 +670,6 @@
                 </label>
                 <button type="button" id="send">전송</button>
               </div>
-
-              <div class="spacer"></div>
-              <label>전송된 헤더 (디버그)</label>
-              <pre id="debug-headers" style="font-size:12px;white-space:pre-wrap">아직 요청을 보내지 않았습니다.</pre>
             </div>
 
             <div class="response-shell">
@@ -880,261 +722,9 @@
       const sendBtn = document.getElementById("send");
       const modelInput = document.getElementById("f-model");
       const streamInput = document.getElementById("f-stream");
-      const apiKeyInput = document.getElementById("f-api-key");
-      const secretInput = document.getElementById("f-secret");
       const respStatus = document.getElementById("resp-status");
       const respCtype = document.getElementById("resp-ctype");
       const respBody = document.getElementById("resp-body");
-      const debugHeaders = document.getElementById("debug-headers");
-
-      // --- HMAC 서명 헬퍼 (Web Crypto + pure-JS 폴백) ----------------------
-      // Web Crypto 의 SubtleCrypto 는 secure context (HTTPS · localhost ·
-      // 127.0.0.1) 에서만 노출된다. http://0.0.0.0:8000 또는 LAN IP 로 접속한
-      // 경우 통째로 undefined 가 되므로 pure-JS SHA-256/HMAC 폴백을 둔다.
-      const _textEncoder = new TextEncoder();
-      const _hasSubtleCrypto =
-        typeof crypto !== "undefined" && !!crypto.subtle;
-
-      function _bytesToHex(buf) {
-        return [...new Uint8Array(buf)]
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
-      }
-
-      // FIPS 180-4 SHA-256 round constants.
-      const _SHA256_K = new Uint32Array([
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-        0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-        0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-        0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-      ]);
-
-      function _rotr32(x, n) {
-        return ((x >>> n) | (x << (32 - n))) >>> 0;
-      }
-
-      // SHA-256 (입력·출력 모두 Uint8Array). 단일 메시지 단위 호출용.
-      function _sha256Bytes(bytes) {
-        const len = bytes.length;
-        const bitLenLow = (len << 3) >>> 0;
-        const bitLenHigh = Math.floor(len / 0x20000000) >>> 0;
-        // padding length: append 0x80, zeros, then 64-bit big-endian length.
-        const padTotal = ((len + 9 + 63) & ~63) >>> 0;
-        const padded = new Uint8Array(padTotal);
-        padded.set(bytes);
-        padded[len] = 0x80;
-        const view = new DataView(padded.buffer);
-        view.setUint32(padTotal - 8, bitLenHigh, false);
-        view.setUint32(padTotal - 4, bitLenLow, false);
-
-        const H = new Uint32Array([
-          0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-          0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-        ]);
-        const W = new Uint32Array(64);
-
-        for (let off = 0; off < padTotal; off += 64) {
-          for (let i = 0; i < 16; i++) {
-            W[i] = view.getUint32(off + i * 4, false);
-          }
-          for (let i = 16; i < 64; i++) {
-            const w15 = W[i - 15];
-            const w2 = W[i - 2];
-            const s0 = _rotr32(w15, 7) ^ _rotr32(w15, 18) ^ (w15 >>> 3);
-            const s1 = _rotr32(w2, 17) ^ _rotr32(w2, 19) ^ (w2 >>> 10);
-            W[i] = (W[i - 16] + s0 + W[i - 7] + s1) >>> 0;
-          }
-          let a = H[0],
-            b = H[1],
-            c = H[2],
-            d = H[3],
-            e = H[4],
-            f = H[5],
-            g = H[6],
-            h = H[7];
-          for (let i = 0; i < 64; i++) {
-            const S1 = _rotr32(e, 6) ^ _rotr32(e, 11) ^ _rotr32(e, 25);
-            const ch = (e & f) ^ (~e & g);
-            const t1 = (h + S1 + ch + _SHA256_K[i] + W[i]) >>> 0;
-            const S0 = _rotr32(a, 2) ^ _rotr32(a, 13) ^ _rotr32(a, 22);
-            const mj = (a & b) ^ (a & c) ^ (b & c);
-            const t2 = (S0 + mj) >>> 0;
-            h = g;
-            g = f;
-            f = e;
-            e = (d + t1) >>> 0;
-            d = c;
-            c = b;
-            b = a;
-            a = (t1 + t2) >>> 0;
-          }
-          H[0] = (H[0] + a) >>> 0;
-          H[1] = (H[1] + b) >>> 0;
-          H[2] = (H[2] + c) >>> 0;
-          H[3] = (H[3] + d) >>> 0;
-          H[4] = (H[4] + e) >>> 0;
-          H[5] = (H[5] + f) >>> 0;
-          H[6] = (H[6] + g) >>> 0;
-          H[7] = (H[7] + h) >>> 0;
-        }
-
-        const out = new Uint8Array(32);
-        const outView = new DataView(out.buffer);
-        for (let i = 0; i < 8; i++) outView.setUint32(i * 4, H[i], false);
-        return out;
-      }
-
-      function _hmacSha256Bytes(keyBytes, msgBytes) {
-        const blockSize = 64;
-        let key = keyBytes;
-        if (key.length > blockSize) key = _sha256Bytes(key);
-        if (key.length < blockSize) {
-          const padded = new Uint8Array(blockSize);
-          padded.set(key);
-          key = padded;
-        }
-        const ipad = new Uint8Array(blockSize);
-        const opad = new Uint8Array(blockSize);
-        for (let i = 0; i < blockSize; i++) {
-          ipad[i] = key[i] ^ 0x36;
-          opad[i] = key[i] ^ 0x5c;
-        }
-        const inner = new Uint8Array(blockSize + msgBytes.length);
-        inner.set(ipad, 0);
-        inner.set(msgBytes, blockSize);
-        const innerHash = _sha256Bytes(inner);
-        const outer = new Uint8Array(blockSize + 32);
-        outer.set(opad, 0);
-        outer.set(innerHash, blockSize);
-        return _sha256Bytes(outer);
-      }
-
-      // 자체 테스트 — FIPS / RFC 4231 표준 벡터로 폴백 정확성 확인.
-      // 회귀 시 콘솔에 즉시 적색 에러를 띄워 디버깅 단서 제공.
-      function _selfTestPureCrypto() {
-        const cases = [
-          {
-            label: "SHA-256('')",
-            actual: _bytesToHex(_sha256Bytes(_textEncoder.encode(""))),
-            expected:
-              "e3b0c44298fc1c149afbf4c8996fb924" +
-              "27ae41e4649b934ca495991b7852b855",
-          },
-          {
-            label: "SHA-256('abc')",
-            actual: _bytesToHex(_sha256Bytes(_textEncoder.encode("abc"))),
-            expected:
-              "ba7816bf8f01cfea414140de5dae2223" +
-              "b00361a396177a9cb410ff61f20015ad",
-          },
-          {
-            label: "HMAC-SHA256(RFC4231 case 1)",
-            actual: _bytesToHex(
-              _hmacSha256Bytes(
-                new Uint8Array(20).fill(0x0b),
-                _textEncoder.encode("Hi There"),
-              ),
-            ),
-            expected:
-              "b0344c61d8db38535ca8afceaf0bf12b" +
-              "881dc200c9833da726e9376c2e32cff7",
-          },
-        ];
-        for (const c of cases) {
-          if (c.actual !== c.expected) {
-            console.error(
-              "[playground] pure-JS crypto self-test failed:",
-              c.label,
-              "actual=",
-              c.actual,
-              "expected=",
-              c.expected,
-            );
-          }
-        }
-      }
-      _selfTestPureCrypto();
-
-      async function sha256Hex(text) {
-        const bytes = _textEncoder.encode(text);
-        if (_hasSubtleCrypto) {
-          const digest = await crypto.subtle.digest("SHA-256", bytes);
-          return _bytesToHex(digest);
-        }
-        return _bytesToHex(_sha256Bytes(bytes));
-      }
-
-      async function hmacSha256Hex(secret, message) {
-        const secretBytes = _textEncoder.encode(secret);
-        const messageBytes = _textEncoder.encode(message);
-        if (_hasSubtleCrypto) {
-          const key = await crypto.subtle.importKey(
-            "raw",
-            secretBytes,
-            { name: "HMAC", hash: "SHA-256" },
-            false,
-            ["sign"],
-          );
-          const sig = await crypto.subtle.sign("HMAC", key, messageBytes);
-          return _bytesToHex(sig);
-        }
-        return _bytesToHex(_hmacSha256Bytes(secretBytes, messageBytes));
-      }
-
-      function randomNonce() {
-        // crypto.randomUUID 는 현대 브라우저 기본 제공. 없으면 fallback.
-        if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-        const bytes = new Uint8Array(16);
-        crypto.getRandomValues(bytes);
-        return _bytesToHex(bytes);
-      }
-
-      async function buildSignedHeaders(bodyText) {
-        const apiKey = apiKeyInput.value.trim();
-        const secret = secretInput.value; // 공백 의미있는 시크릿 배려
-        if (!apiKey && !secret) return null;
-        if (!apiKey || !secret) {
-          throw new Error(
-            "X-API-Key 와 SECRET 은 둘 다 채우거나 둘 다 비워야 합니다.",
-          );
-        }
-        const ts = Math.floor(Date.now() / 1000).toString();
-        const nonce = randomNonce();
-        // sha256(body) 는 서명 계산 재료로만 쓰고 헤더로는 보내지 않는다
-        // (게이트웨이가 ADMIN 호출 시점에 body 로 재계산해 전달).
-        const bodyHash = await sha256Hex(bodyText);
-        const signature = await hmacSha256Hex(
-          secret,
-          `${ts}.${nonce}.${bodyHash}`,
-        );
-        return {
-          "X-API-Key": apiKey,
-          "X-Timestamp": ts,
-          "X-Nonce": nonce,
-          "X-Signature": signature,
-        };
-      }
-
-      function renderDebugHeaders(headers) {
-        if (!headers) {
-          debugHeaders.textContent =
-            "(인증 헤더 없이 전송 — SKIP_HEADER_VERIFICATION=true 모드 전용)";
-          return;
-        }
-        debugHeaders.textContent = JSON.stringify(headers, null, 2);
-      }
 
       function addMessageRow(role = "user", content = "") {
         const row = document.createElement("div");
@@ -1178,32 +768,15 @@
           messages: collectMessages(),
           stream: streamInput.checked,
         };
-        // body 문자열은 서명·전송 모두 동일해야 bodyHash 가 맞는다.
-        const bodyText = JSON.stringify(body);
         respBody.textContent = "요청 중…";
         respStatus.textContent = "—";
         respCtype.textContent = "—";
 
-        let signedHeaders;
-        try {
-          signedHeaders = await buildSignedHeaders(bodyText);
-        } catch (err) {
-          setStatus("ERR");
-          respBody.textContent = String(err.message || err);
-          return;
-        }
-        renderDebugHeaders(signedHeaders);
-
-        const requestHeaders = { "Content-Type": "application/json" };
-        if (signedHeaders) {
-          Object.assign(requestHeaders, signedHeaders);
-        }
-
         try {
           const res = await fetch("/v1/chat/completions", {
             method: "POST",
-            headers: requestHeaders,
-            body: bodyText,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
           });
           setStatus(res.status);
           respCtype.textContent = res.headers.get("content-type") || "—";
@@ -1329,23 +902,6 @@
         });
       });
 
-      function warnIfInsecureContext() {
-        if (_hasSubtleCrypto) return;
-        const port = location.port || "8000";
-        const msg =
-          "[참고] 비-보안 컨텍스트 (" +
-          location.origin +
-          ") — Web Crypto 가 비활성화되어 pure-JS HMAC 폴백을 사용합니다.\n" +
-          "전송은 정상 동작하지만 더 빠른 native 구현을 원하면\n" +
-          "→ http://localhost:" +
-          port +
-          "/playground/ 또는 http://127.0.0.1:" +
-          port +
-          "/playground/ 로 접속해주세요.";
-        debugHeaders.textContent = msg;
-      }
-
-      warnIfInsecureContext();
       loadDefaultModel();
       loadSpec();
     </script>
