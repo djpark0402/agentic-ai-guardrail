@@ -889,7 +889,7 @@
 
       // --- HMAC 서명 헬퍼 (Web Crypto + pure-JS 폴백) ----------------------
       // Web Crypto 의 SubtleCrypto 는 secure context (HTTPS · localhost ·
-      // 127.0.0.1) 에서만 노출된다. http://0.0.0.0:54081 또는 LAN IP 로 접속한
+      // 127.0.0.1) 에서만 노출된다. http://0.0.0.0:54088 또는 LAN IP 로 접속한
       // 경우 통째로 undefined 가 되므로 pure-JS SHA-256/HMAC 폴백을 둔다.
       const _textEncoder = new TextEncoder();
       const _hasSubtleCrypto =
@@ -1331,7 +1331,7 @@
 
       function warnIfInsecureContext() {
         if (_hasSubtleCrypto) return;
-        const port = location.port || "54081";
+        const port = location.port || "54088";
         const msg =
           "[참고] 비-보안 컨텍스트 (" +
           location.origin +
