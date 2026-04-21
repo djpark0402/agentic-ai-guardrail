@@ -15,7 +15,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "54081:54081"
     # Linux 개발 서버에서 컨테이너가 호스트 프로세스 (예: admin-backend) 에
     # 접근할 수 있도록 host.docker.internal 별칭을 게이트웨이로 매핑.
     extra_hosts:
@@ -26,7 +26,7 @@ services:
         - "CMD"
         - "python"
         - "-c"
-        - "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"
+        - "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:54081/health', timeout=5).status == 200 else 1)"
       interval: 30s
       timeout: 10s
       retries: 3

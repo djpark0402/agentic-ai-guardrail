@@ -66,7 +66,7 @@ gateway-backend/
 |------|------|
 | `uv sync` | `pyproject.toml` 과 `uv.lock` 기준으로 가상환경에 의존성 설치 |
 | `uv run pytest` | 가상환경 안에서 pytest 실행 |
-| `uv run uvicorn app.main:app --reload` | 개발 서버 기동 (코드 변경 시 자동 재시작) |
+| `uv run uvicorn app.main:app --reload --port 54081` | 개발 서버 기동 (코드 변경 시 자동 재시작) |
 
 핵심은 `pyproject.toml` 에서 `core-secure-layer` 가 **editable 로컬 경로 패키지**로 등록되어 있다는 점이다. `uv sync` 하면 PyPI 가 아니라 형제 디렉터리에서 바로 설치한다.
 
@@ -158,7 +158,7 @@ routers/ ──▶ services/ ──▶ 외부 (admin-backend, core_secure_layer,
 
 ## 4. 엔트리 포인트 읽기 — `app/main.py`
 
-개발 서버는 `uv run uvicorn app.main:app --reload` 로 뜬다. uvicorn 이 `app.main` 모듈을 import 한 뒤 그 안의 `app` 변수를 ASGI 애플리케이션으로 받아 간다.
+개발 서버는 `uv run uvicorn app.main:app --reload --port 54081` 로 뜬다. uvicorn 이 `app.main` 모듈을 import 한 뒤 그 안의 `app` 변수를 ASGI 애플리케이션으로 받아 간다.
 
 `app/main.py` — `FastAPI(...)` 초기화
 

@@ -54,10 +54,9 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
 프레임을 내보내고 `data: [DONE]` 로 종료한다. `error` 블록 스키마는
 비스트리밍과 동일.
 
-> **브레이킹 변경:** 이전 버전은 입력/출력 BLOCK 을 HTTP 400 + `{"detail"}`
-> 으로 반환했다. HTTP 상태 코드 기반 에러 감지를 하던 클라이언트는
-> `choices[0].finish_reason == "content_filter"` 또는
-> `error.type == "guardrail_block"` 검사로 이행해야 한다.
+> **브레이킹 변경:**
+> 1. 이전 버전은 입력/출력 BLOCK 을 HTTP 400 + `{"detail"}` 으로 반환했다. HTTP 상태 코드 기반 에러 감지를 하던 클라이언트는 `choices[0].finish_reason == "content_filter"` 또는 `error.type == "guardrail_block"` 검사로 이행해야 한다.
+> 2. **기본 포트 번호가 `8000`에서 `54081`로 변경되었다.** Docker 배포 및 로컬 실행 시 해당 포트를 사용해야 한다.
 
 #### 가드레일 입력 범위
 
@@ -210,7 +209,7 @@ BODY_HASH=$(printf "%s" "$BODY" | shasum -a 256 | cut -d' ' -f1)
 SIG=$(printf "%s.%s.%s" "$TS" "$NONCE" "$BODY_HASH" \
       | openssl dgst -sha256 -hmac "$SECRET" -r | cut -d' ' -f1)
 
-curl -X POST http://localhost:8000/v1/chat/completions \
+curl -X POST http://localhost:54081/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H "X-API-Key: $API_KEY" \
   -H "X-Timestamp: $TS" \
@@ -219,7 +218,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   --data "$BODY"
 
 # SKIP_HEADER_VERIFICATION=true 로 띄운 로컬 개발 서버에서 헤더 없이 호출
-curl -X POST http://localhost:8000/v1/chat/completions \
+curl -X POST http://localhost:54081/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "안녕"}]}'
 ```
@@ -243,7 +242,7 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 | 명령 | 설명 |
 |---|---|
 | `uv sync` | 의존성 설치 |
-| `uv run uvicorn app.main:app --reload` | 개발 서버 실행 |
+| `uv run uvicorn app.main:app --reload --port 54081` | 개발 서버 실행 |
 | `uv run pytest` | 전체 테스트 |
 | `uv run pytest tests/unit/routers/test_chat_router.py -v` | 단일 파일 테스트 |
 | `uv run ruff check .` | 린트 |
@@ -332,9 +331,9 @@ docker compose logs -f gateway-backend
 #  -> "Application startup complete" 확인
 
 # 6) 헬스체크
-curl -fsS http://localhost:8000/health
+curl -fsS http://localhost:54081/health
 #  -> {"status":"ok"}
-curl -fsS http://localhost:8000/v1/models/default
+curl -fsS http://localhost:54081/v1/models/default
 #  -> {"default_model":"..."}
 
 # 7) Docker healthcheck 상태
