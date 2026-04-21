@@ -1,0 +1,37 @@
+services:
+  gateway-backend:
+    build:
+      # 빌드 컨텍스트는 monorepo 루트 — core-secure-layer/ 를 함께 포함해야
+      # editable path-dep (../core-secure-layer) 이 컨테이너 안에서 resolve 된다.
+      context: ..
+      dockerfile: gateway-backend/Dockerfile
+      # 팀 개발 서버가 x86_64 Linux 이므로 Apple Silicon 맥북에서도 x86 이미지로 빌드.
+      platforms:
+        - linux/amd64
+    image: agentic-gateway-backend:latest
+    container_name: gateway-backend
+    # 실행 시 타겟 플랫폼 고정 (ARM 호스트에서는 QEMU 에뮬레이션으로 동작)
+    platform: linux/amd64
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    # Linux 개발 서버에서 컨테이너가 호스트 프로세스 (예: admin-backend) 에
+    # 접근할 수 있도록 host.docker.internal 별칭을 게이트웨이로 매핑.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # 모델 로드(L2~L5 합산 최대 3분) 동안 healthy 전이 유예.
+      start_period: 300s
+    # ⚠️ 주의: core-secure-layer 디렉토리를 호스트 경로로 볼륨 마운트하지 않을 것.
+    # editable install 이 /app/core-secure-layer 를 .pth 절대경로로 가리키고 있어
+    # 외부 마운트로 덮어쓰면 모델/vectordb 리소스가 사라지고 import 가 깨진다.
