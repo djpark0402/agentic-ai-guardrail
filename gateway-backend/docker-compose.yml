@@ -12,6 +12,11 @@ services:
     container_name: gateway-backend
     # 실행 시 타겟 플랫폼 고정 (ARM 호스트에서는 QEMU 에뮬레이션으로 동작)
     platform: linux/amd64
+    # 컨테이너 내부 타임존을 KST 로 고정 — docker logs 출력 시각을 한국 시간으로.
+    # Dockerfile 의 ENV TZ=Asia/Seoul 이미 있지만 compose 에서도 명시해
+    # .env 에 다른 TZ 가 들어오더라도 KST 가 우선 적용되도록 한다.
+    environment:
+      TZ: Asia/Seoul
     env_file:
       - .env
     ports:

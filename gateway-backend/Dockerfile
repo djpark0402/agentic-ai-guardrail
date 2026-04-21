@@ -72,11 +72,15 @@ FROM python:3.14-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TZ=Asia/Seoul \
     PATH="/app/gateway-backend/.venv/bin:$PATH"
 
-# 런타임에도 ca-certificates 는 필요 (외부 LLM/admin-backend HTTPS 호출)
+# 런타임에 필요한 패키지
+# - ca-certificates: 외부 LLM/admin-backend HTTPS 호출에 필요
+# - tzdata: TZ=Asia/Seoul 이 실제로 KST 로 동작하려면 zoneinfo 데이터가 필요
+#   (slim 이미지는 tzdata 가 기본 포함되어 있지 않다)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 appuser \
     && useradd  --system --uid 1000 --gid appuser --home-dir /app appuser
