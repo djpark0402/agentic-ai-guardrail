@@ -16,10 +16,12 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
   `ollama/모델명` → Ollama / 그 외 → Solar (기본값).
 - LLM 호출은 **항상 비스트리밍**이다. 전체 응답을 받은 뒤 출력 가드레일 검사를
   먼저 수행한 다음, 사용자 응답만 선택적으로 SSE로 재방출한다.
-- 입력/출력 가드레일이 BLOCK 하면 `stream` 플래그와 무관하게 **HTTP 200 +
-  OpenAI `content_filter` 규격**으로 응답한다. 원본 LLM 응답은 절대 유출되지
-  않고, `choices[0].finish_reason="content_filter"` + 비표준 `error` 블록에
-  사유와 레이어 메타데이터가 담긴다.
+- 입력/출력 가드레일이 BLOCK 하면 `stream` 플래그와 무관하게 **HTTP 200 과
+  정상 LLM 응답 shape**(`finish_reason="stop"`) 을 유지한다. 원본 LLM 응답은
+  절대 유출되지 않고, `choices[0].message.content` 에 **몇 번째 레이어에서
+  어떤 사유로 차단되었는지** 한글 안내문이 담긴다. 스트리밍 요청에는 이
+  안내문을 문자 단위 SSE 프레임으로 짧은 지연과 함께 흘려보내 실제 LLM 토큰
+  스트리밍을 흉내낸다.
 
 #### 차단 응답 스키마
 
@@ -33,29 +35,28 @@ client → [policy fetch] → [input check] → [LLM (non-stream)] → [output c
   "model": "solar-pro",
   "choices": [{
     "index": 0,
-    "message": {"role": "assistant", "content": ""},
-    "finish_reason": "content_filter"
+    "message": {
+      "role": "assistant",
+      "content": "요청이 가드레일 L1(입력 보안) 단계에서 차단되었습니다.\n사유: prompt injection detected\n다른 표현으로 다시 시도해 주세요."
+    },
+    "finish_reason": "stop"
   }],
-  "usage": null,
-  "error": {
-    "type": "guardrail_block",
-    "stage": "input",
-    "message": "입력 보안 검사 실패: prompt injection detected",
-    "layer": "L1",
-    "reason": "prompt injection detected",
-    "severity": "CRITICAL",
-    "confidence": 1.0,
-    "tags": ["prompt_injection"]
-  }
+  "usage": null
 }
 ```
 
-스트리밍 (HTTP 200, `text/event-stream`) — 단일 `chat.completion.chunk`
-프레임을 내보내고 `data: [DONE]` 로 종료한다. `error` 블록 스키마는
-비스트리밍과 동일.
+스트리밍 (HTTP 200, `text/event-stream`) — 정상 스트림과 동일한 3-part 구조
+(role → content delta 여러 개 → finish) 로 방출되며, 마지막에 `data: [DONE]`
+으로 종료한다. content delta 프레임 사이에는 기본 20ms 지연이 들어가 실제
+LLM 토큰 스트리밍과 유사한 타이핑 UX 를 준다. 지연은 환경변수
+`GUARDRAIL_BLOCK_STREAM_DELAY_MS` (기본 `20`) 로 조정할 수 있다.
 
 > **브레이킹 변경:**
-> 1. 이전 버전은 입력/출력 BLOCK 을 HTTP 400 + `{"detail"}` 으로 반환했다. HTTP 상태 코드 기반 에러 감지를 하던 클라이언트는 `choices[0].finish_reason == "content_filter"` 또는 `error.type == "guardrail_block"` 검사로 이행해야 한다.
+> 1. 이전 버전은 차단을 `finish_reason="content_filter"` + 비표준 `error`
+>    블록으로 반환했다. 현재는 정상 LLM 응답과 동일한 shape 이므로
+>    `finish_reason` 기반 분기나 `error.type == "guardrail_block"` 검사는
+>    더 이상 매치되지 않는다. 차단 여부를 서버 측에서 구분해야 하는 경우
+>    관찰 모드(`guardrail_reports`) 또는 서버 로그를 사용한다.
 > 2. **외부 접속 포트 번호가 `54088`로 변경되었다.** (컨테이너 내부 포트는 `8000` 유지)
 
 #### 가드레일 입력 범위
@@ -82,7 +83,8 @@ user 메시지가 하나도 없으면 빈 문자열이 전달된다.
 데모용 대체 경로다. 이 환경변수를 `true` 로 두면 가드레일 레이어가 BLOCK 을
 내려도 파이프라인을 **끝까지 실행**(LLM 호출 + 후속 레이어 + 원본 응답 전송)
 하고, 응답에 레이어별 판정 내역을 담은 **`guardrail_reports` 블록**을
-첨부한다. 차단 응답(`content_filter` + `error`)은 내려가지 않는다.
+첨부한다. 차단 안내문 content 재작성은 일어나지 않고, 원본 LLM 응답이
+그대로 전달된다.
 
 비스트리밍 응답 예시 (정상 200):
 

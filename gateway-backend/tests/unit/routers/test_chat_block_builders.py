@@ -1,68 +1,61 @@
 """차단 응답 빌더 헬퍼 테스트."""
 
+import pytest
+
 from app.models.chat import Message
-from app.models.guardrail import CheckStatus, GuardrailResult
 from app.routers.chat import (
-    _block_message,
-    _build_block_error,
+    _build_block_content,
     _summarize_user_prompts,
 )
 
+# ---------------------------------------------------------------------------
+# _build_block_content — 사용자에게 노출되는 차단 안내문
+# ---------------------------------------------------------------------------
 
-def test_block_message_input_with_reason():
-    """입력 스테이지는 한글 프리픽스 + 사유를 이어붙인다."""
-    assert (
-        _block_message("input", "프롬프트 인젝션 감지")
-        == "입력 보안 검사 실패: 프롬프트 인젝션 감지"
+
+def test_build_block_content_input_with_layer_and_reason():
+    """입력 차단은 레이어 라벨·스테이지·사유가 담긴 다라인 안내문을 만든다."""
+    assert _build_block_content("input", "L2", "프롬프트 인젝션 감지") == (
+        "요청이 가드레일 L2(입력 보안) 단계에서 차단되었습니다.\n"
+        "사유: 프롬프트 인젝션 감지\n"
+        "다른 표현으로 다시 시도해 주세요."
     )
 
 
-def test_block_message_output_with_reason():
-    """출력 스테이지도 동일한 포맷을 따른다."""
-    assert (
-        _block_message("output", "유해 콘텐츠 감지")
-        == "출력 보안 검사 실패: 유해 콘텐츠 감지"
+def test_build_block_content_output_with_layer_and_reason():
+    """출력 차단은 '출력 보안' 라벨을 사용한다."""
+    assert _build_block_content("output", "L4", "민감 정보 감지") == (
+        "요청이 가드레일 L4(출력 보안) 단계에서 차단되었습니다.\n"
+        "사유: 민감 정보 감지\n"
+        "다른 표현으로 다시 시도해 주세요."
     )
 
 
-def test_block_message_without_reason():
-    """reason 이 None 이면 프리픽스만 반환한다."""
-    assert _block_message("input", None) == "입력 보안 검사 실패"
-    assert _block_message("output", None) == "출력 보안 검사 실패"
-
-
-def test_build_block_error_full_metadata():
-    """GuardrailResult 의 모든 메타데이터가 error 객체에 실린다."""
-    result = GuardrailResult(
-        status=CheckStatus.BLOCK,
-        reason="prompt injection detected",
-        layer="L3",
-        severity="HIGH",
-        confidence=0.92,
-        tags=["prompt_injection"],
+def test_build_block_content_omits_reason_line_when_missing():
+    """사유가 없으면 '사유:' 줄을 출력하지 않는다."""
+    assert _build_block_content("input", "L1", None) == (
+        "요청이 가드레일 L1(입력 보안) 단계에서 차단되었습니다.\n"
+        "다른 표현으로 다시 시도해 주세요."
     )
-    error = _build_block_error(result, "input")
-    assert error["type"] == "guardrail_block"
-    assert error["stage"] == "input"
-    assert error["message"] == "입력 보안 검사 실패: prompt injection detected"
-    assert error["layer"] == "L3"
-    assert error["reason"] == "prompt injection detected"
-    assert error["severity"] == "HIGH"
-    assert error["confidence"] == 0.92
-    assert error["tags"] == ["prompt_injection"]
 
 
-def test_build_block_error_nullable_metadata():
-    """메타데이터가 비어 있어도 고정 필드는 유지된다."""
-    result = GuardrailResult(status=CheckStatus.BLOCK, reason=None)
-    error = _build_block_error(result, "output")
-    assert error["type"] == "guardrail_block"
-    assert error["stage"] == "output"
-    assert error["message"] == "출력 보안 검사 실패"
-    assert error["layer"] is None
-    assert error["severity"] is None
-    assert error["confidence"] is None
-    assert error["tags"] == []
+def test_build_block_content_omits_layer_label_when_missing():
+    """레이어가 없으면 레이어 라벨을 생략한 문구로 대체한다."""
+    assert _build_block_content("output", None, "검출됨") == (
+        "요청이 가드레일(출력 보안) 단계에서 차단되었습니다.\n"
+        "사유: 검출됨\n"
+        "다른 표현으로 다시 시도해 주세요."
+    )
+
+
+@pytest.mark.parametrize("layer", ["L1", "L2", "L3", "L4", "L5", "L6"])
+def test_build_block_content_includes_layer_and_reason_substrings(layer):
+    """임의의 L1~L6 에 대해 레이어 ID와 사유가 모두 본문에 포함된다."""
+    reason = "테스트 사유"
+    content = _build_block_content("input", layer, reason)
+    assert layer in content
+    assert reason in content
+    assert "입력 보안" in content
 
 
 # ---------------------------------------------------------------------------

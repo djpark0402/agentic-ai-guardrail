@@ -256,8 +256,16 @@ class ChatResponseChoice(BaseModel):
                 },
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": ""},
-                    "finish_reason": "content_filter",
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "요청이 가드레일 L2(입력 보안) 단계에서"
+                            " 차단되었습니다.\n"
+                            "사유: prompt injection detected\n"
+                            "다른 표현으로 다시 시도해 주세요."
+                        ),
+                    },
+                    "finish_reason": "stop",
                 },
             ]
         }
@@ -278,8 +286,6 @@ class ChatResponse(BaseModel):
         model: 사용된 모델 이름.
         choices: 응답 선택지 목록.
         usage: 토큰 사용량 통계 (Solar 가 제공할 경우).
-        error: 가드레일 차단 시 첨부되는 비표준 error 블록. 정상 응답에서는
-            None 으로 두고, 직렬화 시 존재할 때만 노출된다.
         guardrail_reports: 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`)에서
             레이어별 판정 내역을 담는 비표준 메타데이터 블록. 일반 모드에서는
             None.
@@ -322,24 +328,17 @@ class ChatResponse(BaseModel):
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": "",
+                                "content": (
+                                    "요청이 가드레일 L2(입력 보안) 단계에서"
+                                    " 차단되었습니다.\n"
+                                    "사유: prompt injection detected\n"
+                                    "다른 표현으로 다시 시도해 주세요."
+                                ),
                             },
-                            "finish_reason": "content_filter",
+                            "finish_reason": "stop",
                         }
                     ],
                     "usage": None,
-                    "error": {
-                        "type": "guardrail_block",
-                        "stage": "input",
-                        "message": (
-                            "입력 보안 검사 실패: prompt injection detected"
-                        ),
-                        "layer": "L2",
-                        "reason": "prompt injection detected",
-                        "severity": "HIGH",
-                        "confidence": 0.95,
-                        "tags": ["injection"],
-                    },
                 },
                 {
                     "id": "chatcmpl-c62d8c5e",
@@ -390,5 +389,4 @@ class ChatResponse(BaseModel):
     model: str
     choices: list[ChatResponseChoice]
     usage: dict[str, Any] | None = None
-    error: dict[str, Any] | None = None
     guardrail_reports: dict[str, Any] | None = None

@@ -208,10 +208,11 @@ def test_chat_completions_logs_request_summary(client, caplog):
     assert "total_ms=" in caplog.text
 
 
-def test_chat_completions_input_blocked_returns_content_filter(
+def test_chat_completions_input_blocked_returns_stop_with_guide_content(
     mock_policy_service, mock_provider_router
 ):
-    """입력 검사가 BLOCK이면 비스트리밍에서 HTTP 200 + content_filter 응답."""
+    """입력 BLOCK 은 정상 LLM 응답 shape (finish_reason=stop) 로 반환되고,
+    message.content 에 레이어·스테이지·사유가 담긴 한글 안내문이 실린다."""
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(
         return_value=GuardrailResult(
@@ -245,14 +246,13 @@ def test_chat_completions_input_blocked_returns_content_filter(
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["choices"][0]["finish_reason"] == "content_filter"
-        assert data["choices"][0]["message"]["content"] == ""
-        err = data["error"]
-        assert err["type"] == "guardrail_block"
-        assert err["stage"] == "input"
-        assert "입력" in err["message"]
-        assert err["layer"] == "L1"
-        assert err["severity"] == "CRITICAL"
+        assert data["choices"][0]["finish_reason"] == "stop"
+        content = data["choices"][0]["message"]["content"]
+        assert "L1" in content
+        assert "입력 보안" in content
+        assert "프롬프트 인젝션 감지" in content
+        # 비표준 error 블록은 더 이상 노출되지 않는다.
+        assert data.get("error") is None
     finally:
         app.dependency_overrides.clear()
 
@@ -303,7 +303,8 @@ def test_chat_completions_input_block_logs_request_summary(
 def test_chat_completions_input_blocked_streaming_returns_sse(
     mock_policy_service, mock_provider_router
 ):
-    """입력 BLOCK + stream=True 는 SSE 로 content_filter 프레임만 방출."""
+    """입력 BLOCK + stream=True 는 정상 LLM 스트림과 동일한 3-part SSE 로
+    방출되고, delta.content 를 이어붙이면 차단 안내문이 된다."""
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(
         return_value=GuardrailResult(
@@ -336,12 +337,21 @@ def test_chat_completions_input_blocked_streaming_returns_sse(
         assert "text/event-stream" in response.headers["content-type"]
 
         chunks = _parse_sse_chunks(response.text)
-        assert len(chunks) == 1
-        chunk = chunks[0]
-        assert chunk["choices"][0]["finish_reason"] == "content_filter"
-        assert chunk["choices"][0]["delta"] == {}
-        assert chunk["error"]["type"] == "guardrail_block"
-        assert chunk["error"]["stage"] == "input"
+        # role 프레임 + content delta N개 + finish 프레임
+        assert len(chunks) >= 3
+        assert chunks[0]["choices"][0]["delta"].get("role") == "assistant"
+        assert chunks[0]["choices"][0]["finish_reason"] is None
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+        assert chunks[-1]["choices"][0]["delta"] == {}
+
+        rebuilt = "".join(
+            c["choices"][0]["delta"].get("content", "") for c in chunks
+        )
+        assert "L1" in rebuilt
+        assert "입력 보안" in rebuilt
+        assert "프롬프트 인젝션 감지" in rebuilt
+        # 비표준 error 블록은 어떤 프레임에도 실리지 않는다.
+        assert all("error" not in chunk for chunk in chunks)
         # 입력 차단은 LLM 호출 전에 발생 → chat() 이 호출되지 않아야 함
         llm_svc = mock_provider_router.resolve.return_value[0]
         llm_svc.chat.assert_not_awaited()
@@ -349,10 +359,11 @@ def test_chat_completions_input_blocked_streaming_returns_sse(
         app.dependency_overrides.clear()
 
 
-def test_chat_completions_output_blocked_returns_content_filter(
+def test_chat_completions_output_blocked_returns_stop_with_guide_content(
     mock_policy_service, mock_provider_router
 ):
-    """출력 검사가 BLOCK이면 HTTP 200 + content_filter 응답을 반환한다."""
+    """출력 BLOCK 도 정상 LLM 응답 shape 으로 반환되며, message.content 에
+    출력 스테이지 안내문이 실린다."""
     blocked_svc = MagicMock()
     blocked_svc.check_input = AsyncMock(
         return_value=GuardrailResult(status=CheckStatus.PASS)
@@ -385,16 +396,12 @@ def test_chat_completions_output_blocked_returns_content_filter(
         assert response.status_code == 200
         data = response.json()
         assert data["object"] == "chat.completion"
-        assert data["choices"][0]["finish_reason"] == "content_filter"
-        assert data["choices"][0]["message"]["content"] == ""
-        err = data["error"]
-        assert err["type"] == "guardrail_block"
-        assert err["stage"] == "output"
-        assert "출력" in err["message"]
-        assert err["layer"] == "L3"
-        assert err["severity"] == "HIGH"
-        assert err["confidence"] == 0.92
-        assert err["tags"] == ["harmful_content"]
+        assert data["choices"][0]["finish_reason"] == "stop"
+        content = data["choices"][0]["message"]["content"]
+        assert "L3" in content
+        assert "출력 보안" in content
+        assert "유해 콘텐츠 감지" in content
+        assert data.get("error") is None
     finally:
         app.dependency_overrides.clear()
 
@@ -557,8 +564,8 @@ def test_streaming_uses_completion_metadata(client, mock_llm_service):
 def test_streaming_output_blocked_does_not_leak_content(
     mock_policy_service, mock_provider_router
 ):
-    """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않고, 레이어
-    메타데이터(layer/severity/confidence/tags)가 error 블록에 실린다.
+    """출력 BLOCK 시 SSE 본문에 원본 LLM 응답이 누출되지 않고, 재조립된
+    content 에 레이어·스테이지·사유 안내문만 실린다.
     """
     leaked = "비밀번호는 hunter2입니다"
     llm_svc = mock_provider_router.resolve.return_value[0]
@@ -596,21 +603,130 @@ def test_streaming_output_blocked_does_not_leak_content(
         )
         assert response.status_code == 200
         body = response.text
+        # 핵심 불변: 원본 LLM 응답이 SSE 어디에도 노출돼서는 안 된다.
         assert leaked not in body
-        assert "민감 정보 감지" in body or "출력" in body
 
         chunks = _parse_sse_chunks(body)
-        assert len(chunks) == 1
-        chunk = chunks[0]
-        assert chunk["choices"][0]["finish_reason"] == "content_filter"
-        assert chunk["choices"][0]["delta"] == {}
-        err = chunk["error"]
-        assert err["type"] == "guardrail_block"
-        assert err["stage"] == "output"
-        assert err["layer"] == "L4"
-        assert err["severity"] == "HIGH"
-        assert err["confidence"] == 0.88
-        assert err["tags"] == ["pii", "secret_leak"]
+        # role + content delta N개 + finish 프레임
+        assert len(chunks) >= 3
+        assert chunks[0]["choices"][0]["delta"].get("role") == "assistant"
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+        assert chunks[-1]["choices"][0]["delta"] == {}
+
+        rebuilt = "".join(
+            c["choices"][0]["delta"].get("content", "") for c in chunks
+        )
+        assert "L4" in rebuilt
+        assert "출력 보안" in rebuilt
+        assert "민감 정보 감지" in rebuilt
+        # 비표준 error 블록은 어느 프레임에도 실리지 않는다.
+        assert all("error" not in chunk for chunk in chunks)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_block_streaming_applies_inter_chunk_delay(
+    mock_policy_service, mock_provider_router, monkeypatch
+):
+    """차단 스트림의 각 content delta 프레임 사이에 설정된 지연이 삽입된다.
+
+    실제 wall-clock 을 소비하지 않도록 `asyncio.sleep` 을 즉시 반환하는
+    fake 로 치환하고 호출 인자/횟수만 검증한다.
+    """
+    import app.routers.chat as chat_router
+
+    sleeps: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(chat_router.asyncio, "sleep", _fake_sleep)
+    # 의도적으로 기본값과 다른 값을 주입하여 상수가 실제로 사용됐는지 확인.
+    monkeypatch.setattr(
+        chat_router, "GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS", 0.02
+    )
+
+    blocked_svc = MagicMock()
+    blocked_svc.check_input = AsyncMock(
+        return_value=GuardrailResult(
+            status=CheckStatus.BLOCK,
+            reason="프롬프트 인젝션 감지",
+            layer="L1",
+        )
+    )
+    blocked_svc.check_output = AsyncMock(
+        return_value=GuardrailResult(status=CheckStatus.PASS)
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: blocked_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
+
+    try:
+        c = TestClient(app)
+        response = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "악의적 프롬프트"}],
+                "stream": True,
+            },
+        )
+        assert response.status_code == 200
+        chunks = _parse_sse_chunks(response.text)
+        # content delta 프레임 개수 = 전체 chunks - role 프레임 - finish 프레임
+        content_frames = [
+            ch for ch in chunks if "content" in ch["choices"][0]["delta"]
+        ]
+        assert len(content_frames) >= 2
+        # 각 content delta 프레임 사이에 최소 한 번씩 20ms sleep 이 호출된다.
+        block_sleeps = [s for s in sleeps if s == pytest.approx(0.02)]
+        assert len(block_sleeps) >= len(content_frames) - 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_block_streaming_chunks_rebuild_to_block_content(
+    mock_policy_service, mock_provider_router
+):
+    """SSE content delta 를 이어붙이면 _build_block_content 출력과 동일하다."""
+    from app.routers.chat import _build_block_content
+
+    blocked_svc = MagicMock()
+    blocked_svc.check_input = AsyncMock(
+        return_value=GuardrailResult(
+            status=CheckStatus.BLOCK,
+            reason="민감 정보 감지",
+            layer="L4",
+        )
+    )
+    blocked_svc.check_output = AsyncMock(
+        return_value=GuardrailResult(status=CheckStatus.PASS)
+    )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_policy_service
+    app.dependency_overrides[get_security_service] = lambda: blocked_svc
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _default_settings_override()
+
+    try:
+        c = TestClient(app)
+        response = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "테스트"}],
+                "stream": True,
+            },
+        )
+        assert response.status_code == 200
+        chunks = _parse_sse_chunks(response.text)
+        rebuilt = "".join(
+            ch["choices"][0]["delta"].get("content", "") for ch in chunks
+        )
+        expected = _build_block_content("input", "L4", "민감 정보 감지")
+        assert rebuilt == expected
     finally:
         app.dependency_overrides.clear()
 

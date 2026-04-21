@@ -11,14 +11,18 @@ OpenAI `/v1/chat/completions` 호환 엔드포인트 하나를 제공한다. 요
 5. 출력 가드레일 (L1~L6)
 6. 비스트리밍 JSON 또는 SSE 스트리밍 응답
 
-차단 시에는 HTTP 200 + `finish_reason="content_filter"` + 비표준 `error`
-블록 형태로 반환한다 (LiteLLM 호환). 관찰 모드
-(`CONTINUE_ON_LAYER_FAILURE=true`) 에서는 파이프라인을 끝까지 실행한 뒤
-응답에 `guardrail_reports` 블록을 첨부한다.
+차단 시에도 HTTP 200 과 정상 LLM 응답 shape(`finish_reason="stop"`) 을
+유지하되, `message.content` 에 어느 레이어에서 어떤 사유로 차단되었는지
+한글 안내문을 담는다. 스트리밍 요청에는 문자 단위로 쪼갠 SSE 프레임을
+짧은 지연과 함께 흘려보내 실제 LLM 토큰 스트리밍과 유사한 UX 를
+제공한다. 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`) 에서는 파이프라인을
+끝까지 실행한 뒤 응답에 `guardrail_reports` 블록을 첨부한다.
 """
 
+import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -61,6 +65,17 @@ router = APIRouter()
 
 # 사용자 측 스트리밍 시 응답을 쪼개는 청크 길이(문자 단위).
 _SSE_CHUNK_SIZE = 20
+
+# 가드레일 차단 응답을 스트리밍으로 흉내낼 때 프레임 사이에 끼우는 지연.
+# 실제 LLM 토큰 스트리밍과 유사한 타이핑 감각을 내기 위한 값이며, 환경변수
+# `GUARDRAIL_BLOCK_STREAM_DELAY_MS` 로 튜닝할 수 있다(밀리초 단위).
+GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS: float = (
+    float(os.getenv("GUARDRAIL_BLOCK_STREAM_DELAY_MS", "20")) / 1000.0
+)
+
+# 차단 스트림은 문자 단위로 쪼개어 실제 LLM 토큰 스트리밍과 유사한 타이핑 UX
+# 를 만든다.
+_BLOCK_STREAM_CHUNK_SIZE = 1
 
 # 스트리밍 응답에 프록시 버퍼링이 끼지 않도록 하기 위한 헤더.
 _SSE_HEADERS: dict[str, str] = {
@@ -253,6 +268,8 @@ async def _stream_openai_chunks(
     model: str,
     finish_reason: str,
     final_extra: dict[str, Any] | None = None,
+    chunk_size: int = _SSE_CHUNK_SIZE,
+    inter_chunk_delay: float = 0.0,
 ) -> AsyncGenerator[str]:
     """검증이 끝난 전체 content를 OpenAI SSE 규격으로 재방출한다.
 
@@ -268,6 +285,13 @@ async def _stream_openai_chunks(
         finish_reason: Solar 가 제공한 종료 이유. 비어 있으면 "stop".
         final_extra: 마지막 finish 프레임에 병합할 비표준 확장 필드.
             관찰 모드에서 `{"guardrail_reports": {...}}` 를 싣기 위해 사용.
+        chunk_size: content 델타 프레임 하나의 최대 길이(문자 단위).
+            기본값은 정상 LLM 응답용 `_SSE_CHUNK_SIZE`. 가드레일 차단
+            스트리밍처럼 토큰-by-토큰 타이핑 감각이 필요할 때는 1 로 낮춰
+            호출한다.
+        inter_chunk_delay: content 델타 프레임 사이에 끼울 지연(초).
+            0 이면 지연을 넣지 않고 기존 동작과 동일하다. 가드레일 차단
+            스트리밍에서 실제 LLM 토큰 스트림처럼 흉내내기 위해 사용한다.
 
     Yields:
         OpenAI 호환 SSE 프레임 문자열.
@@ -283,9 +307,13 @@ async def _stream_openai_chunks(
         )
     )
     # 2. content delta 프레임들
-    for chunk in _chunk_content(content):
+    first = True
+    for chunk in _chunk_content(content, size=chunk_size):
         if not chunk:
             continue
+        if not first and inter_chunk_delay > 0:
+            await asyncio.sleep(inter_chunk_delay)
+        first = False
         yield _format_sse_frame(
             _build_chunk(
                 chunk_id=chunk_id,
@@ -310,86 +338,62 @@ async def _stream_openai_chunks(
     yield "data: [DONE]\n\n"
 
 
-def _block_message(stage: str, reason: str | None) -> str:
-    """차단 응답에 사용할 사람이 읽을 메시지를 조립한다.
+def _stage_label_ko(stage: str) -> str:
+    """스테이지 코드를 한글 라벨로 변환한다.
 
     Args:
-        stage: 차단이 발생한 단계 ("input" 또는 "output").
-        reason: 레이어가 제공한 사유 문자열. None 이면 프리픽스만.
-
-    Returns:
-        `"<프리픽스>"` 또는 `"<프리픽스>: <사유>"` 형태의 문자열.
-    """
-    prefix = (
-        "입력 보안 검사 실패" if stage == "input" else "출력 보안 검사 실패"
-    )
-    return f"{prefix}: {reason}" if reason else prefix
-
-
-def _build_block_error(
-    result: GuardrailResult,
-    stage: str,
-) -> dict[str, Any]:
-    """차단 응답에 실릴 표준 error 객체를 조립한다.
-
-    스트리밍·비스트리밍·입력·출력 차단에서 공통으로 사용하여 응답 스키마를
-    단일화한다. LayerResult 에서 보존된 layer/severity/confidence/tags 를
-    그대로 노출한다.
-
-    Args:
-        result: BLOCK 판정이 담긴 GuardrailResult.
         stage: "input" 또는 "output".
 
     Returns:
-        OpenAI 비표준 error 블록 dict.
+        "입력 보안" 또는 "출력 보안".
     """
-    return {
-        "type": "guardrail_block",
-        "stage": stage,
-        "message": _block_message(stage, result.reason),
-        "layer": result.layer,
-        "reason": result.reason,
-        "severity": result.severity,
-        "confidence": result.confidence,
-        "tags": list(result.tags),
-    }
+    return "입력 보안" if stage == "input" else "출력 보안"
 
 
-async def _stream_guardrail_block(
-    result: GuardrailResult,
-    *,
-    stage: str,
-    chunk_id: str,
-    created: int,
-    model: str,
-) -> AsyncGenerator[str]:
-    """가드레일 BLOCK 시 OpenAI 규격 내에서 에러 프레임을 방출한다.
-
-    원본 LLM 응답은 절대 유출하지 않는다. finish_reason 은 OpenAI 모더레이션
-    관례대로 "content_filter" 로 세팅하고, 비표준 `error` 블록에 사유와 레이어
-    메타데이터를 담아 LiteLLM 등 일부 클라이언트가 인식할 수 있게 한다.
+def _layer_label(layer: str | None) -> str:
+    """레이어 ID 를 안내문용 라벨로 변환한다.
 
     Args:
-        result: BLOCK 판정이 담긴 GuardrailResult.
-        stage: "input" 또는 "output".
-        chunk_id: 스트림 응답 ID.
-        created: Unix timestamp.
-        model: 응답 모델 이름.
+        layer: "L1"~"L6" 레이어 이름 또는 None.
 
-    Yields:
-        단일 에러 chunk 프레임과 종료 마커.
+    Returns:
+        layer 가 있으면 " {layer}" (공백 포함), 없으면 빈 문자열.
     """
-    yield _format_sse_frame(
-        _build_chunk(
-            chunk_id=chunk_id,
-            created=created,
-            model=model,
-            delta={},
-            finish_reason="content_filter",
-            extra={"error": _build_block_error(result, stage)},
-        )
-    )
-    yield "data: [DONE]\n\n"
+    return f" {layer}" if layer else ""
+
+
+def _build_block_content(
+    stage: str,
+    layer: str | None,
+    reason: str | None,
+) -> str:
+    """차단 시 사용자에게 노출되는 assistant 메시지 본문을 조립한다.
+
+    정상 LLM 응답과 동일한 shape 으로 반환하되, 몇 번째 레이어에서 어떤
+    사유로 차단됐는지 사용자가 한글로 바로 이해할 수 있도록 구성한다.
+
+    포맷 예시::
+
+        요청이 가드레일 L2(입력 보안) 단계에서 차단되었습니다.
+        사유: 프롬프트 인젝션 감지
+        다른 표현으로 다시 시도해 주세요.
+
+    Args:
+        stage: "input" 또는 "output".
+        layer: 차단한 레이어 ID. 알 수 없으면 None.
+        reason: 레이어가 제공한 차단 사유. 없으면 None.
+
+    Returns:
+        다라인 한글 안내 문자열.
+    """
+    lines = [
+        f"요청이 가드레일{_layer_label(layer)}"
+        f"({_stage_label_ko(stage)}) 단계에서 차단되었습니다."
+    ]
+    if reason:
+        lines.append(f"사유: {reason}")
+    lines.append("다른 표현으로 다시 시도해 주세요.")
+    return "\n".join(lines)
 
 
 def _report_entry(result: GuardrailResult) -> dict[str, Any]:
@@ -432,10 +436,10 @@ def _build_block_response(
 ) -> ChatResponse:
     """가드레일 BLOCK 시 비스트리밍 ChatResponse 를 조립한다.
 
-    OpenAI 모더레이션 관례에 맞춰 HTTP 200 으로 반환한다. 원본 LLM 응답은
-    유출하지 않기 위해 content 를 빈 문자열로 두고, finish_reason 을
-    "content_filter" 로 설정한다. 비표준 `error` 블록에 사유와 레이어
-    메타데이터를 담는다.
+    정상 LLM 응답과 동일한 shape (`finish_reason="stop"`) 으로 반환하고,
+    `message.content` 에 몇 번째 레이어에서 어떤 사유로 차단되었는지 한글
+    안내문을 담는다. 원본 LLM 응답은 포함되지 않으므로 유출 위험이 없다.
+    `usage` 는 LLM 호출이 없었음을 표현하기 위해 None 으로 둔다.
 
     Args:
         result: BLOCK 판정이 담긴 GuardrailResult.
@@ -445,7 +449,7 @@ def _build_block_response(
         model: 응답 모델 이름.
 
     Returns:
-        error 블록이 채워진 ChatResponse.
+        사용자 안내문이 담긴 ChatResponse.
     """
     return ChatResponse(
         id=chunk_id,
@@ -455,12 +459,16 @@ def _build_block_response(
         choices=[
             ChatResponseChoice(
                 index=0,
-                message=ChatResponseMessage(role="assistant", content=""),
-                finish_reason="content_filter",
+                message=ChatResponseMessage(
+                    role="assistant",
+                    content=_build_block_content(
+                        stage, result.layer, result.reason
+                    ),
+                ),
+                finish_reason="stop",
             )
         ],
         usage=None,
-        error=_build_block_error(result, stage),
     )
 
 
@@ -753,7 +761,7 @@ _RESPONSE_EXAMPLES_SUCCESS: dict[str, Any] = {
 
 
 _RESPONSE_EXAMPLES_BLOCKED: dict[str, Any] = {
-    "summary": "가드레일 차단 (HTTP 200 + error 블록)",
+    "summary": "가드레일 차단 (정상 LLM 응답 shape, content 에 안내문)",
     "value": {
         "id": "chatcmpl-c62d8c5e",
         "object": "chat.completion",
@@ -762,21 +770,19 @@ _RESPONSE_EXAMPLES_BLOCKED: dict[str, Any] = {
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": ""},
-                "finish_reason": "content_filter",
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        "요청이 가드레일 L2(입력 보안) 단계에서"
+                        " 차단되었습니다.\n"
+                        "사유: prompt injection detected\n"
+                        "다른 표현으로 다시 시도해 주세요."
+                    ),
+                },
+                "finish_reason": "stop",
             }
         ],
         "usage": None,
-        "error": {
-            "type": "guardrail_block",
-            "stage": "input",
-            "message": ("입력 보안 검사 실패: prompt injection detected"),
-            "layer": "L2",
-            "reason": "prompt injection detected",
-            "severity": "HIGH",
-            "confidence": 0.95,
-            "tags": ["injection"],
-        },
     },
 }
 
@@ -841,16 +847,19 @@ _CHAT_COMPLETIONS_DESCRIPTION = (
     "### 응답 형태\n"
     '- **정상**: OpenAI 스펙 그대로. `finish_reason="stop"` / `"length"`'
     ' / `"tool_calls"` 등.\n'
-    '- **가드레일 차단**: HTTP 200 + `finish_reason="content_filter"` +'
-    " 비표준 `error` 블록 (LiteLLM 호환). OpenAI 공식 SDK 는 이 필드를"
-    " 조용히 무시합니다.\n"
+    "- **가드레일 차단**: HTTP 200 과 정상 LLM 응답 shape 을 유지하며,"
+    " `message.content` 에 몇 번째 레이어에서 어떤 사유로 차단되었는지"
+    ' 한글 안내문을 담아 반환합니다. `finish_reason` 은 `"stop"` 이고'
+    " 비표준 `error` 블록은 사용하지 않습니다.\n"
     "- **관찰 모드**(`CONTINUE_ON_LAYER_FAILURE=true`): 파이프라인을 끝까지"
     " 실행한 뒤 응답에 `guardrail_reports` 블록을 첨부합니다.\n\n"
     "### 스트리밍\n"
     "`stream=true` 일 때는 `text/event-stream` SSE 로 반환되며, 각 프레임은"
     " OpenAI 스펙의 delta 포맷(`data: {...}\\n\\n`) 을 따르고 마지막에"
-    " `data: [DONE]` 으로 종료됩니다. 가드레일 차단이 일어나면 최종 SSE"
-    " 프레임에 `error` 블록이 실립니다."
+    " `data: [DONE]` 으로 종료됩니다. 가드레일 차단 시에도 정상 스트림과"
+    " 동일한 3-part 구조(role → content delta x N → finish) 로 안내문을"
+    " 문자 단위로 짧은 지연과 함께 흘려보내, 실제 LLM 토큰 스트리밍을"
+    " 흉내냅니다."
 )
 
 
@@ -864,10 +873,11 @@ _CHAT_COMPLETIONS_DESCRIPTION = (
         200: {
             "model": ChatResponse,
             "description": (
-                "정상 응답 또는 가드레일 차단. 차단 시에도 HTTP 200 을"
-                ' 사용하며 `finish_reason="content_filter"` 와 비표준'
-                " `error` 블록으로 사유를 전달한다. 관찰 모드에서는"
-                " `guardrail_reports` 가 함께 실린다."
+                "정상 응답 또는 가드레일 차단. 차단 시에도 HTTP 200 과"
+                " 정상 LLM 응답 shape 을 유지하며, `message.content` 에"
+                " 어느 레이어에서 어떤 사유로 차단되었는지 한글 안내문을"
+                " 담아 반환한다. 관찰 모드에서는 `guardrail_reports` 가"
+                " 함께 실린다."
             ),
             "content": {
                 "application/json": {
@@ -1016,7 +1026,7 @@ async def chat_completions(
     )
     if input_result.status == CheckStatus.BLOCK:
         # 입력 BLOCK — LLM 호출 전에 종료. 스트리밍/비스트리밍 모두 HTTP 200 +
-        # OpenAI content_filter 규격으로 응답하여 인터페이스를 단일화한다.
+        # 정상 LLM 응답 shape 을 유지하며, content 에 차단 안내문을 담는다.
         block_chunk_id = f"chatcmpl-{session_id}"
         block_created = int(time.time())
         block_model = request.model
@@ -1028,13 +1038,18 @@ async def chat_completions(
         )
         t_response = time.perf_counter()
         if request.stream:
+            block_content = _build_block_content(
+                "input", input_result.layer, input_result.reason
+            )
             response = StreamingResponse(
-                _stream_guardrail_block(
-                    input_result,
-                    stage="input",
+                _stream_openai_chunks(
+                    block_content,
                     chunk_id=block_chunk_id,
                     created=block_created,
                     model=block_model,
+                    finish_reason="stop",
+                    chunk_size=_BLOCK_STREAM_CHUNK_SIZE,
+                    inter_chunk_delay=GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS,
                 ),
                 media_type="text/event-stream",
                 headers=_SSE_HEADERS,
@@ -1114,13 +1129,18 @@ async def chat_completions(
                 session_id,
                 total_ms,
             )
+            block_content = _build_block_content(
+                "output", output_result.layer, output_result.reason
+            )
             response = StreamingResponse(
-                _stream_guardrail_block(
-                    output_result,
-                    stage="output",
+                _stream_openai_chunks(
+                    block_content,
                     chunk_id=chunk_id,
                     created=created,
                     model=model_name,
+                    finish_reason="stop",
+                    chunk_size=_BLOCK_STREAM_CHUNK_SIZE,
+                    inter_chunk_delay=GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS,
                 ),
                 media_type="text/event-stream",
                 headers=_SSE_HEADERS,
@@ -1160,8 +1180,8 @@ async def chat_completions(
         )
         return response
 
-    # 5-b단계: 비스트리밍 요청 — 출력 BLOCK도 OpenAI content_filter 규격으로
-    # HTTP 200 반환 (스트리밍 경로와 인터페이스 일치).
+    # 5-b단계: 비스트리밍 요청 — 출력 BLOCK 도 정상 응답 shape 으로 HTTP 200
+    # 반환. content 에 차단 안내문을 담아 사용자에게 전달한다.
     if output_result.status == CheckStatus.BLOCK:
         t_response = time.perf_counter()
         logger.info(

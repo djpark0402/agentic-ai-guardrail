@@ -227,7 +227,7 @@ sequenceDiagram
     end
     S-->>R: GuardrailResult (PASS/BLOCK)
     alt 입력 BLOCK
-        R-->>C: content_filter 응답
+        R-->>C: 차단 안내문 응답 (finish_reason=stop)
     else 입력 PASS
         R->>LLM: chat(messages, ...)
         LLM-->>R: completion
@@ -372,17 +372,18 @@ completion = await llm_service.chat(messages=api_messages, **passthrough)
 
 > **관찰 모드 전용 대응 메서드**: `check_input_all` / `check_output_all` 은 같은 내부 헬퍼(`_run_layer_input`/`_run_layer_output`) 를 재사용해 BLOCK 이 나와도 루프를 끊지 않고 **활성 레이어 개수만큼의 결과 리스트**를 반환한다. 각 결과는 `_with_layer_name` 으로 `layer="L{idx}"` 가 보강돼 정책 순서 그대로 클라이언트 응답의 `guardrail_reports` 에 실린다. `CONTINUE_ON_LAYER_FAILURE=true` 인 관찰 모드 경로에서만 호출된다.
 
-### 5.8 차단되면 어떻게 응답하는가 (OpenAI `content_filter` 규격)
+### 5.8 차단되면 어떻게 응답하는가 (정상 LLM 응답 shape + 차단 안내문)
 
-가드레일이 BLOCK 을 내면 HTTP 상태코드는 여전히 **200** 이다. 대신 OpenAI 모더레이션 관례를 따라 `finish_reason="content_filter"` 와 비표준 `error` 블록을 채워 돌려준다. 스트리밍/비스트리밍 모두 스키마가 동일하다.
+가드레일이 BLOCK 을 내면 HTTP 상태코드는 **200** 이다. 클라이언트 입장에서는 정상 LLM 응답과 동일한 shape (`finish_reason="stop"`, 비표준 `error` 필드 없음) 을 받는다. 차단 사실은 `choices[0].message.content` 에 **몇 번째 레이어에서 어떤 사유로 차단됐는지** 한글 안내문으로 담겨 노출된다.
 
-응답을 빌드하는 세 함수 — 모두 `app/routers/chat.py` 안에 있다:
+응답을 빌드하는 두 함수 — 모두 `app/routers/chat.py` 안에 있다:
 
 | 함수 | 역할 |
 |------|------|
-| `_build_block_error` | 스트리밍·비스트리밍 공용 `error` 블록 dict 조립 (`type`/`stage`/`message`/`layer`/`reason`/`severity`/`confidence`/`tags`) |
-| `_stream_guardrail_block` | SSE 한 프레임 + `data: [DONE]` 방출 |
-| `_build_block_response` | 비스트리밍 `ChatResponse` 객체 조립 |
+| `_build_block_content` | "요청이 가드레일 L*x*(입력/출력 보안) 단계에서 차단되었습니다\n사유: *reason*\n다른 표현으로 다시 시도해 주세요." 형태의 다라인 문자열 조립. 스트리밍·비스트리밍 공용. |
+| `_build_block_response` | 비스트리밍 `ChatResponse` 객체 조립. `message.content` 에 위 안내문을 담고 `finish_reason="stop"`, `usage=None`. |
+
+스트리밍 차단은 별도 헬퍼 없이 정상 응답용 `_stream_openai_chunks` 를 재사용한다. `chunk_size=1`(문자 단위), `inter_chunk_delay=GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS`(기본 20ms) 를 주어 실제 LLM 토큰 스트림처럼 프레임이 흘러나오게 한다.
 
 **입력 BLOCK 분기** (`chat_completions` 내부):
 
@@ -390,8 +391,17 @@ completion = await llm_service.chat(messages=api_messages, **passthrough)
 if input_result.status == CheckStatus.BLOCK:
     ...
     if request.stream:
+        block_content = _build_block_content(
+            "input", input_result.layer, input_result.reason
+        )
         return StreamingResponse(
-            _stream_guardrail_block(input_result, stage="input", ...),
+            _stream_openai_chunks(
+                block_content,
+                chunk_id=..., created=..., model=...,
+                finish_reason="stop",
+                chunk_size=_BLOCK_STREAM_CHUNK_SIZE,
+                inter_chunk_delay=GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS,
+            ),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -400,9 +410,9 @@ if input_result.status == CheckStatus.BLOCK:
 
 **출력 BLOCK 분기** — LLM 호출이 끝난 뒤의 동일한 갈림길:
 
-- 스트리밍 요청이면 `_stream_guardrail_block(..., stage="output", ...)` 로 SSE 한 프레임만 보내고 `[DONE]`.
+- 스트리밍 요청이면 `_build_block_content("output", ...)` → `_stream_openai_chunks(...)` 로 정상 스트림과 동일한 3-part SSE 시퀀스를 방출.
 - 비스트리밍이면 `_build_block_response(..., stage="output", ...)` 로 JSON 하나.
-- 두 경로 모두 원본 LLM 응답 텍스트는 유출하지 않는다 (`content=""` 고정).
+- 두 경로 모두 원본 LLM 응답 텍스트는 유출하지 않는다. `content` 필드는 `_build_block_content()` 가 생성한 안내문으로 교체된다.
 
 비스트리밍 BLOCK `ChatResponse` 뼈대 (`_build_block_response`):
 
@@ -415,16 +425,18 @@ return ChatResponse(
     choices=[
         ChatResponseChoice(
             index=0,
-            message=ChatResponseMessage(role="assistant", content=""),
-            finish_reason="content_filter",
+            message=ChatResponseMessage(
+                role="assistant",
+                content=_build_block_content(stage, result.layer, result.reason),
+            ),
+            finish_reason="stop",
         )
     ],
     usage=None,
-    error=_build_block_error(result, stage),
 )
 ```
 
-관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`) 경로는 `_run_observe_mode_pipeline` 이 별도로 타며, 차단 응답 대신 `_build_guardrail_reports` 로 `{mode: "observe", input: [...], output: [...]}` 를 응답 본문에 끼워 넣는다.
+관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`) 경로는 `_run_observe_mode_pipeline` 이 별도로 타며, 차단 안내문 재작성 대신 `_build_guardrail_reports` 로 `{mode: "observe", input: [...], output: [...]}` 를 응답 본문에 끼워 넣고 원본 LLM 응답을 그대로 전달한다.
 
 ---
 
@@ -496,7 +508,7 @@ async def chat_completions(
 ```bash
 uv run pytest                                                   # 전체
 uv run pytest tests/unit/services/test_security_layer_service.py -v   # 단일 파일
-uv run pytest -k "content_filter"                               # 키워드 매칭
+uv run pytest -k "blocked"                                      # 키워드 매칭
 ```
 
 ---
