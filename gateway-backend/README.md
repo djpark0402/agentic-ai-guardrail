@@ -277,6 +277,104 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 > `.env` 파일은 **절대 커밋하지 않는다.** 새 환경 변수가 필요하면
 > `.env.example`에 먼저 추가한다.
 
+## Docker 배포
+
+팀 개발 서버(Linux x86_64, CPU 추론) 배포용 구성 파일이 포함되어 있다.
+로컬 macOS 환경과 어긋나지 않도록 `pyproject.toml` / `uv.lock` 은 손대지
+않고 Docker 레이어만으로 배포 차이를 흡수한다.
+
+### 포함 파일
+
+| 파일 | 역할 |
+|---|---|
+| `Dockerfile` | Python 3.14-slim-bookworm 기반 multi-stage 빌드. `uv` 로 `.venv` 구성, `core-secure-layer` 는 editable path-dep 으로 설치되어 `layers/l*/model/*` 의 모델 파일 (~7.2GB) 을 source 트리에서 그대로 로드한다. 비-root `appuser` 로 기동. |
+| `Dockerfile.dockerignore` | BuildKit 의 Dockerfile 전용 ignore. 빌드 컨텍스트(monorepo 루트) 에서 `admin-backend/`, `admin-frontend/`, `docs/`, `.venv/`, `.git`, `.env`, `tests/`, `*.egg-info` 등을 제외한다. |
+| `docker-compose.yml` | `context: ..` 로 monorepo 루트를 빌드 컨텍스트로 잡고, `platform: linux/amd64` 고정. `env_file: .env`, `extra_hosts: host.docker.internal:host-gateway`, `start_period: 300s` (모델 로드 유예). |
+
+### 아키텍처 / 런타임 특성
+
+- **빌드 컨텍스트**: `gateway-backend/` 단독이 아니라 `agentic-ai-guardrail/`
+  (monorepo 루트). `core-secure-layer/` 를 함께 포함해야 editable path-dep
+  (`../core-secure-layer`) 이 컨테이너 안에서 `/app/core-secure-layer` 로
+  resolve 된다.
+- **플랫폼**: 맥북 Apple Silicon 에서 빌드해도 `linux/amd64` 이미지가 나오도록
+  compose 에 플랫폼을 고정. 개발 서버(x86) 에서는 native 빌드가 수행된다.
+- **CPU / GPU**: 별도 설정 없음. PyTorch / transformers / sentence-transformers
+  는 런타임에 CUDA → MPS → CPU 순으로 device 를 자동 선택하므로, 컨테이너에
+  GPU 를 연결하지 않으면 자동으로 CPU 추론으로 동작한다.
+- **모델 로드 시점**: `app/services/layer_registry.py` 가 import 될 때 L1~L6
+  싱글턴이 즉시 인스턴스화된다 → uvicorn 이 `"Application startup complete"`
+  를 찍는 시점에는 이미 모델 로드가 끝난 상태. 초기 로드는 1~3분 소요.
+
+### 배포 절차 (개발 서버에서 수행)
+
+```bash
+# 1) 레포 clone / 갱신 후 gateway-backend 로 진입
+cd agentic-ai-guardrail/gateway-backend
+
+# 2) .env 준비 — .env.example 를 복사해 값 채움
+cp .env.example .env
+$EDITOR .env
+#  - 필수: LLM_MODEL, UPSTAGE_API_KEY
+#  - admin-backend 가 호스트 프로세스면
+#      ADMIN_BACKEND_URL=http://host.docker.internal:8001
+#    admin-backend 를 같은 compose 네트워크로 띄우면
+#      ADMIN_BACKEND_URL=http://admin-backend:8001
+
+# 3) 이미지 빌드 (x86 native 이면 QEMU 없이 바로 빌드됨)
+docker compose build
+
+# 4) 기동 (백그라운드)
+docker compose up -d
+
+# 5) 모델 로드 진행 상황 모니터링 (1~3분)
+docker compose logs -f gateway-backend
+#  -> "Application startup complete" 확인
+
+# 6) 헬스체크
+curl -fsS http://localhost:8000/health
+#  -> {"status":"ok"}
+curl -fsS http://localhost:8000/v1/models/default
+#  -> {"default_model":"..."}
+
+# 7) Docker healthcheck 상태
+docker inspect --format='{{json .State.Health}}' gateway-backend \
+  | python3 -m json.tool
+
+# 8) 중지 / 재시작
+docker compose stop     # 정지
+docker compose up -d    # 재기동
+docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지)
+```
+
+### 주의사항
+
+- **`core-secure-layer` 를 볼륨 마운트로 덮지 말 것.** editable install 의
+  `.pth` 가 `/app/core-secure-layer` 절대경로를 가리키고 있어, 호스트 경로로
+  마운트하면 모델/vectordb 리소스가 사라지고 `ModuleNotFoundError` 혹은
+  모델 로드 실패가 발생한다.
+- **`.env` 는 이미지에 들어가지 않는다.** `Dockerfile.dockerignore` 에서
+  명시적으로 제외하고 compose 의 `env_file` 로 런타임에 주입한다. 새 키가
+  필요하면 `.env.example` 에 먼저 추가.
+- **로컬 macOS 에서 실제 이미지 빌드는 비권장**: `linux/amd64` QEMU 에뮬레이션
+  으로 1~2시간 이상 소요될 수 있다. 구문 검증은 `docker compose config`
+  (단, `.env` 값이 표준 출력으로 노출되므로 `--no-interpolate` 사용 권장)
+  + `docker buildx build --check` 로 충분하며, 실제 빌드는 개발 서버 native
+  에서 수행한다.
+- **첫 기동이 5분 이상 걸리면 `start_period` 확장**: 디스크 I/O 가 느린
+  환경에서는 `docker-compose.yml` 의 `start_period: 300s` 를 `600s` 로 늘려
+  healthcheck 가 unhealthy 로 떨어지는 것을 방지한다.
+
+### 트러블슈팅
+
+| 증상 | 진단 포인트 |
+|---|---|
+| 기동 로그에 `core_secure_layer.layers.l*` import 오류 | editable 설치가 깨진 상태. `.dockerignore` 가 `core-secure-layer/` 의 모델 디렉토리를 제외하지 않는지 재확인. |
+| `모델 로드 실패` 워닝만 나오고 요청은 동작 | fail-open 설계 동작. 해당 레이어만 비활성. 로그에서 구체적인 레이어·경로 확인 후 이미지에 모델 파일이 복사됐는지 (`docker exec gateway-backend ls /app/core-secure-layer/core_secure_layer/layers/l4/model`) 점검. |
+| 컨테이너가 healthcheck 로 `unhealthy` 되어 재시작 반복 | 모델 로드가 `start_period` 를 초과. `docker compose logs` 로 실제 로드 시간 확인 후 `start_period` 상향. |
+| admin-backend 연결 실패 (`policy_service` 로그) | `ADMIN_BACKEND_URL` 값 확인. `docker exec gateway-backend python -c "import urllib.request; print(urllib.request.urlopen('$ADMIN_BACKEND_URL/health').status)"` 로 도달성 점검. 호스트 프로세스인 경우 admin-backend 가 `0.0.0.0` 에 바인딩돼 있어야 한다. |
+| `CUDA` 관련 워닝 | GPU 없는 환경의 정상 로그. PyTorch 가 자동으로 CPU 로 fallback. 무시 가능. |
+
 ## 프로젝트 구조
 
 ```
