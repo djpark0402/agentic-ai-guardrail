@@ -33,18 +33,35 @@ COPY gateway-backend/pyproject.toml gateway-backend/uv.lock /app/gateway-backend
 COPY gateway-backend/app /app/gateway-backend/app
 COPY gateway-backend/README.md /app/gateway-backend/README.md
 
-# 3) 의존성 설치 (.venv 는 /app/gateway-backend/.venv 에 생성됨)
-#    - 배포 전용: torch 는 이 단계에서 **설치하지 않고 스킵**한다.
-#      PyPI 의 Linux 기본 torch wheel 이 CUDA 라이브러리(~3GB)를 번들로
-#      포함하는데 팀 개발 서버에 GPU 가 없어 불필요하기 때문.
-#    - pyproject.toml / uv.lock 은 건드리지 않는다 (로컬 macOS 환경 분리).
+# 3) uv.lock 에서 torch 와 'torch 때문에만 딸려온' transitive deps
+#    (nvidia-cublas, nvidia-cudnn-*, triton 등 16개) 를 dep graph 기준으로
+#    잘라낸 requirements.txt 를 생성.
+#    - --prune torch 는 dep tree 에서 torch 와 torch 경유로만 도달 가능한
+#      패키지를 함께 제거 → 향후 torch 업그레이드로 새 nvidia 패키지가
+#      추가돼도 Dockerfile 수정 없이 자동 제외된다.
+#    - --no-hashes: hash 엄격검증으로 인한 빌드 실패 여지 제거 (버전 pin 은 유지).
+#    - pyproject.toml / uv.lock 은 건드리지 않는다 (로컬 macOS 환경과 분리).
 WORKDIR /app/gateway-backend
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-package torch
+    uv export --frozen --no-dev \
+        --prune torch \
+        --format requirements.txt \
+        --no-hashes \
+        -o /tmp/requirements.txt
 
-# 4) torch 는 PyTorch 공식 CPU 인덱스에서만 설치.
-#    uv.lock 의 torch 버전 제약을 그대로 따르되 (pyproject 의 torch>=2.11.0),
-#    CPU wheel 만 받아서 .venv 에 배치한다. CUDA 바이너리는 아예 내려받지 않음.
+# 4) 가상환경 생성 + non-torch 의존성 설치.
+#    requirements.txt 에는 editable path-dep 인 core-secure-layer 가
+#    -e file:///app/core-secure-layer 로, gateway-backend 자체도 editable
+#    project 로 포함되어 함께 설치된다 (각자 .pth 로 source 트리 연결).
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r /tmp/requirements.txt
+
+# 5) torch 는 PyTorch 공식 CPU 인덱스에서만 설치.
+#    이 index 의 Linux wheel 은 nvidia-* 를 Requires-Dist 로 선언하지
+#    않으므로 .venv 에 CPU torch 만 추가되고 CUDA 바이너리 다운로드
+#    자체가 발생하지 않는다.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install \
         --index-url https://download.pytorch.org/whl/cpu \
