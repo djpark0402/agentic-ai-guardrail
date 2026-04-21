@@ -1,5 +1,6 @@
 """Gateway Backend FastAPI 애플리케이션 진입점."""
 
+import html as html_lib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -10,7 +11,8 @@ import httpx
 import openai
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.exceptions import LangChainException
 
@@ -32,6 +34,20 @@ logger = logging.getLogger(__name__)
 
 # 미들웨어 로깅에서 제외할 경로.
 _SKIP_LOG_PATHS: frozenset[str] = frozenset({"/health", "/openapi.json"})
+_STATIC_DIR = Path(__file__).parent / "static"
+_DOCS_CSS_PATH = _STATIC_DIR / "docs-overrides.css"
+_DOCS_TITLE = "Agentic AI Guardrail Gateway - Swagger UI"
+_SWAGGER_UI_PARAMETERS: dict[str, object] = {
+    "defaultModelsExpandDepth": -1,
+    "displayRequestDuration": True,
+    "docExpansion": "list",
+    "filter": True,
+    "operationsSorter": "alpha",
+    "persistAuthorization": True,
+    "syntaxHighlight.theme": "nord",
+    "tagsSorter": "alpha",
+    "tryItOutEnabled": True,
+}
 
 
 @asynccontextmanager
@@ -95,6 +111,7 @@ app = FastAPI(
             "description": "헬스체크와 기본값 조회용 보조 엔드포인트.",
         },
     ],
+    docs_url=None,
     lifespan=lifespan,
 )
 
@@ -139,12 +156,53 @@ async def log_request(request: Request, call_next) -> Response:  # noqa: ANN001
 app.include_router(chat.router, prefix="/v1")
 
 # 플레이그라운드 정적 페이지 마운트 (/playground/)
-_STATIC_DIR = Path(__file__).parent / "static"
 app.mount(
     "/playground",
     StaticFiles(directory=_STATIC_DIR, html=True),
     name="playground",
 )
+
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_docs(url: str | None = None) -> HTMLResponse:
+    """기본 Swagger UI 에 개발 편의 설정만 적용한 문서를 반환한다."""
+    docs_url = url or app.openapi_url
+    swagger_html = get_swagger_ui_html(
+        openapi_url=docs_url,
+        title=_DOCS_TITLE,
+        swagger_ui_parameters=_SWAGGER_UI_PARAMETERS,
+    )
+    html = swagger_html.body.decode("utf-8")
+    css = _DOCS_CSS_PATH.read_text(encoding="utf-8")
+    topbar = f"""
+    <div class="gateway-swagger-topbar">
+      <div class="gateway-swagger-topbar__brand">
+        <span class="gateway-swagger-topbar__mark">{{}}</span>
+        <div>
+          <strong class="gateway-swagger-topbar__title">Swagger</strong>
+          <span class="gateway-swagger-topbar__subtitle">
+            Supported by SmartBear
+          </span>
+        </div>
+      </div>
+      <form
+        class="gateway-swagger-topbar__controls"
+        method="get"
+        action="/docs"
+      >
+        <input
+          type="text"
+          name="url"
+          aria-label="OpenAPI URL"
+          value="{html_lib.escape(docs_url, quote=True)}"
+        />
+        <button type="submit">Explore</button>
+      </form>
+    </div>
+    """
+    html = html.replace("<body>", f"<body>{topbar}", 1)
+    html = html.replace("</head>", f"<style>{css}</style></head>")
+    return HTMLResponse(content=html, status_code=swagger_html.status_code)
 
 
 @app.get("/health", tags=["meta"], summary="헬스체크")
