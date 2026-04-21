@@ -351,7 +351,7 @@ async def check_input(
 실제 호출 지점은 같은 파일의 private 헬퍼 `_run_layer_input` 이며, 네 단계로 요약된다:
 
 1. `get_layer(idx)` 로 core_secure_layer 싱글턴을 받아 온다. 매핑이 없으면 결과에 `layer="L{idx}"` 를 찍은 채 PASS.
-2. `messages_to_request(messages)` 로 `Message[]` → `GuardrailRequest` 변환 (user 메시지 본문만 `\n\n` 으로 연결, `app/services/guardrail_converter.py` 참조).
+2. `messages_to_request(messages)` 로 `Message[]` → `GuardrailRequest` 변환. 이번 턴의 **가장 최근 user 메시지 하나만** 추출해 `user_input` 으로 직렬화한다. 과거 user 턴은 이미 그 시점에 한 번 검사된 이력이므로, 히스토리 누적에 의한 중복 차단을 방지하기 위해 재검사 대상에서 제외된다 (`app/services/guardrail_converter.py` 참조).
 3. `await layer.check(request)` — **여기가 core_secure_layer 를 실제로 호출하는 유일한 라인**이다. 레이어가 `NotImplementedError` 를 던지면 PASS 로 처리하면서 `layer=layer.name` 을 스탬프.
 4. `LayerResult` 를 `layer_result_to_guardrail_result` 로 gateway 내부 모델로 역변환한 뒤 `_with_layer_name` 으로 레이어 이름을 보강.
 
