@@ -1,8 +1,8 @@
 """/v1/layers/status 라우터 테스트.
 
 실제 core-secure-layer 모델 로드 결과가 아닌, ``collect_layer_statuses``
-반환값을 monkeypatch 로 교체해 엔드포인트 응답 스키마와 ``all_loaded``
-계산 로직을 검증한다.
+반환값을 monkeypatch 로 교체해 엔드포인트 응답 스키마와 ``all_loaded`` /
+``all_effective`` 계산 로직을 검증한다.
 """
 
 from __future__ import annotations
@@ -17,85 +17,75 @@ from app.services.layer_diagnostics import LayerStatus
 client = TestClient(app)
 
 
-def _make_fake_statuses(with_failure: bool) -> list[LayerStatus]:
+def _statuses(*, l4_effective: bool) -> list[LayerStatus]:
     """테스트용 가짜 LayerStatus 리스트를 만든다."""
-    ok = [
+    return [
         LayerStatus(
             index=1,
             name="L1",
             class_name="L1Layer",
             model_loaded=True,
-            model_paths=[],
-            detail="규칙 기반, 모델 없음",
+            effective=True,
+            signals={"rule_based": True},
         ),
         LayerStatus(
-            index=2,
-            name="L2",
-            class_name="L2Layer",
+            index=4,
+            name="L4",
+            class_name="L4Layer",
             model_loaded=True,
-            model_paths=["/app/.../l2/model/gpt2"],
-            detail=None,
+            effective=l4_effective,
+            signals={
+                "nli_rules_count": 20 if l4_effective else 0,
+                "policy_collection_count": 35,
+                "llm_attached": l4_effective,
+                "nli_path_ok": l4_effective,
+                "vector_llm_path_ok": l4_effective,
+            },
+            detail=None
+            if l4_effective
+            else "nli_rules=0(NLI 스킵) llm=None(LLM 판단 스킵)",
         ),
     ]
-    if with_failure:
-        ok.append(
-            LayerStatus(
-                index=3,
-                name="L3",
-                class_name="L3Layer",
-                model_loaded=False,
-                model_paths=["/app/.../l3/model/mini"],
-                detail="_model_loaded=False path=/app/.../l3/model/mini",
-            )
-        )
-    return ok
 
 
-def test_layers_status_returns_all_loaded_true_when_success(
+def test_endpoint_returns_all_effective_true_when_each_effective(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """모든 레이어 loaded=True 면 all_loaded=true."""
     monkeypatch.setattr(
         layers_router,
         "collect_layer_statuses",
-        lambda: _make_fake_statuses(with_failure=False),
+        lambda: _statuses(l4_effective=True),
     )
-    response = client.get("/v1/layers/status")
-    assert response.status_code == 200
-    body = response.json()
+    body = client.get("/v1/layers/status").json()
     assert body["all_loaded"] is True
-    assert len(body["layers"]) == 2
-    assert body["layers"][0]["name"] == "L1"
-    assert body["layers"][0]["model_loaded"] is True
+    assert body["all_effective"] is True
 
 
-def test_layers_status_returns_all_loaded_false_on_any_failure(
+def test_endpoint_all_effective_false_when_any_layer_ineffective(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """하나라도 loaded=False 면 all_loaded=false."""
+    """모든 모델은 로드됐지만 L4 의 rules/llm 이 비어 있는 실제 상황 재현."""
     monkeypatch.setattr(
         layers_router,
         "collect_layer_statuses",
-        lambda: _make_fake_statuses(with_failure=True),
+        lambda: _statuses(l4_effective=False),
     )
-    response = client.get("/v1/layers/status")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["all_loaded"] is False
-    failing = [layer for layer in body["layers"] if not layer["model_loaded"]]
-    assert len(failing) == 1
-    assert failing[0]["name"] == "L3"
-    assert "loaded=False" in (failing[0]["detail"] or "")
+    body = client.get("/v1/layers/status").json()
+    assert body["all_loaded"] is True  # 모델은 다 로드됐다
+    assert body["all_effective"] is False  # 하지만 실제로는 동작 안 한다
+    l4 = next(x for x in body["layers"] if x["name"] == "L4")
+    assert l4["signals"]["nli_rules_count"] == 0
+    assert l4["signals"]["llm_attached"] is False
+    assert "NLI 스킵" in l4["detail"]
 
 
-def test_layers_status_schema_exposes_required_fields(
+def test_endpoint_exposes_all_required_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """응답 각 항목이 index/name/class_name/model_loaded 등 필수 필드를 포함."""
     monkeypatch.setattr(
         layers_router,
         "collect_layer_statuses",
-        lambda: _make_fake_statuses(with_failure=False),
+        lambda: _statuses(l4_effective=True),
     )
     body = client.get("/v1/layers/status").json()
     required_keys = {
@@ -103,6 +93,8 @@ def test_layers_status_schema_exposes_required_fields(
         "name",
         "class_name",
         "model_loaded",
+        "effective",
+        "signals",
         "model_paths",
         "detail",
     }
@@ -110,10 +102,9 @@ def test_layers_status_schema_exposes_required_fields(
         assert required_keys.issubset(layer.keys())
 
 
-def test_layers_status_empty_layer_map_returns_all_loaded_false(
+def test_endpoint_empty_layer_map_returns_all_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """레이어가 하나도 수집되지 않으면 all_loaded=false (안전 기본값)."""
     monkeypatch.setattr(
         layers_router,
         "collect_layer_statuses",
@@ -121,11 +112,11 @@ def test_layers_status_empty_layer_map_returns_all_loaded_false(
     )
     body = client.get("/v1/layers/status").json()
     assert body["all_loaded"] is False
+    assert body["all_effective"] is False
     assert body["layers"] == []
 
 
-def test_layers_status_exposed_in_openapi_schema() -> None:
-    """엔드포인트가 OpenAPI 문서에 등록된다."""
+def test_endpoint_exposed_in_openapi_schema() -> None:
     openapi = client.get("/openapi.json").json()
     assert "/v1/layers/status" in openapi["paths"]
     operation = openapi["paths"]["/v1/layers/status"]["get"]
