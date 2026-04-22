@@ -52,7 +52,10 @@ _SWAGGER_UI_PARAMETERS: dict[str, object] = {
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """앱 수명주기 동안 httpx AsyncClient 를 관리한다.
+    """앱 수명주기 동안 httpx AsyncClient 와 기동 진단 로그를 관리한다.
+
+    기동 시 각 가드레일 레이어(L1~L6)의 모델 로드 상태를 INFO/WARNING
+    로그로 출력해, docker 컨테이너 로그에서 바로 확인할 수 있게 한다.
 
     Args:
         _app: FastAPI 앱 인스턴스.
@@ -60,7 +63,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     Yields:
         None.
     """
+    # `_LAYER_MAP` 의 import 부작용(L1~L6 싱글턴 인스턴스화)을 main.py
+    # import 시점보다 뒤로 미루기 위해 지연 import.
+    from app.services.layer_diagnostics import (
+        collect_layer_statuses,
+        log_layer_statuses,
+    )
+
     client = get_http_client()
+    log_layer_statuses(collect_layer_statuses())
     try:
         yield
     finally:
