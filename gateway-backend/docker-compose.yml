@@ -37,6 +37,18 @@ services:
       retries: 3
       # 모델 로드(L2~L5 합산 최대 3분) 동안 healthy 전이 유예.
       start_period: 300s
-    # ⚠️ 주의: core-secure-layer 디렉토리를 호스트 경로로 볼륨 마운트하지 않을 것.
-    # editable install 이 /app/core-secure-layer 를 .pth 절대경로로 가리키고 있어
-    # 외부 마운트로 덮어쓰면 모델/vectordb 리소스가 사라지고 import 가 깨진다.
+    # ⚠️ core-secure-layer 디렉토리 전체(/app/core-secure-layer)를 마운트하지 말 것.
+    #    editable install 이 해당 경로를 .pth 절대경로로 가리키므로 전체를 덮어쓰면
+    #    vectordb/policies/patterns 리소스가 사라지고 import 가 깨진다.
+    #    대신 아래처럼 layers/*/model 서브디렉터리만 overlay 하면 editable 트리는
+    #    그대로 유지되고 무거운 모델 파일만 호스트에서 공급된다 (이미지 ~7GB 감소).
+    volumes:
+      # 호스트의 core-secure-layer 모델을 read-only 로 overlay.
+      # 이미지에는 .dockerignore 로 layers/*/model/ 이 빠져 있으므로
+      # 이 mount 가 없으면 L2~L5 가 모델 로드 실패(fail-open, effective=False).
+      - ../core-secure-layer/core_secure_layer/layers/l2/model:/app/core-secure-layer/core_secure_layer/layers/l2/model:ro
+      - ../core-secure-layer/core_secure_layer/layers/l3/model:/app/core-secure-layer/core_secure_layer/layers/l3/model:ro
+      - ../core-secure-layer/core_secure_layer/layers/l4/model:/app/core-secure-layer/core_secure_layer/layers/l4/model:ro
+      - ../core-secure-layer/core_secure_layer/layers/l5/model:/app/core-secure-layer/core_secure_layer/layers/l5/model:ro
+      # L6 kanana-safeguard-8b 는 아직 호스트에 없으므로 마운트하지 않는다.
+      # 모델이 준비되면 위와 동일 패턴으로 한 줄 추가할 것.

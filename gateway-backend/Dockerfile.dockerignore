@@ -58,3 +58,8 @@ skills-lock.json
 core-secure-layer/build/
 core-secure-layer/*.egg-info
 core-secure-layer/core_secure_layer.egg-info/
+
+# core-secure-layer 모델 파일 — 이미지에 넣지 않고 docker-compose 의 bind
+# mount (:ro) 로 공급 (이미지 ~7GB 감소). vectordb / patterns / policies 는
+# chromadb sqlite 쓰기 잠금/권한 문제 회피를 위해 이미지에 포함 유지.
+core-secure-layer/core_secure_layer/layers/*/model/
