@@ -32,6 +32,33 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+class _HealthAccessLogFilter(logging.Filter):
+    """uvicorn.access 로거에서 /health 경로 라인을 억제한다.
+
+    도커 healthcheck 가 수초마다 찍는 ``'"GET /health HTTP/1.1" 200 OK'``
+    스팸을 제거해, 레이어 진단·실제 요청 로그가 화면에서 밀려나지
+    않게 한다. uvicorn access 포맷은 ``(client_addr, method, full_path,
+    http_version, status_code)`` 튜플을 args 로 넘기므로 이를 순회해
+    ``/health`` 를 걸러내고, 포맷 변화에 대비해 포맷된 message 문자열
+    fallback 도 둔다.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple):
+            for item in args:
+                if isinstance(item, str) and item.startswith("/health"):
+                    return False
+        return "GET /health " not in record.getMessage()
+
+
+# 모듈 로드 시점에 필터 부착 — uvicorn 이 --reload 로 자식 프로세스를
+# 재기동하더라도 app import 시 함께 적용된다. 전체 access log 를 끄지
+# 않고 /health 라인만 제거하므로 POST /v1/chat/completions 등 실제
+# 요청 로그는 그대로 남는다.
+logging.getLogger("uvicorn.access").addFilter(_HealthAccessLogFilter())
+
 # 미들웨어 로깅에서 제외할 경로.
 _SKIP_LOG_PATHS: frozenset[str] = frozenset({"/health", "/openapi.json"})
 _STATIC_DIR = Path(__file__).parent / "static"
