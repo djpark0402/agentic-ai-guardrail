@@ -115,7 +115,22 @@ app = FastAPI(
         " 공식 SDK 는 이를 무시하므로 호환성에는 영향이 없습니다.\n"
         "- `guardrail_reports`: `CONTINUE_ON_LAYER_FAILURE=true` "
         "(관찰 모드)에서만 채워지며, 레이어별 PASS/BLOCK 판정 내역을 "
-        "배열로 반환합니다."
+        "배열로 반환합니다.\n\n"
+        "### 레이어 진단\n"
+        "각 가드레일 레이어(L1~L6)가 모델을 로드했는지, 그리고 실제로"
+        " BLOCK 판정을 낼 수 있는 상태인지(`effective`) 를 두 경로로"
+        " 확인할 수 있습니다.\n"
+        "- **기동 로그**: FastAPI lifespan startup 단계에서"
+        ' "레이어 로드 상태 요약" 을 INFO 로 출력합니다.'
+        " loaded/effective=True 는 INFO, 하나라도 실패한 라인은 WARNING"
+        ' 으로 올라오므로 `docker logs | grep "effective=False"` 로'
+        " 문제 레이어를 즉시 잡아낼 수 있습니다.\n"
+        "- **`GET /v1/layers/status`**: 각 레이어의 `model_loaded` /"
+        " `effective` / `signals` (레이어별 내부 상태: L4 의"
+        " `nli_rules_count`, `policy_collection_count`, `llm_attached`"
+        " 등) 을 JSON 으로 반환합니다. 모델은 로드됐어도 규칙/컬렉션/LLM"
+        " 이 비어 있어 조용히 PASS 되는 상태는 이 엔드포인트에서만"
+        " 드러납니다."
     ),
     version="0.2.0",
     openapi_tags=[
@@ -125,7 +140,11 @@ app = FastAPI(
         },
         {
             "name": "meta",
-            "description": "헬스체크와 기본값 조회용 보조 엔드포인트.",
+            "description": (
+                "헬스체크·기본값·레이어 진단용 보조 엔드포인트."
+                " `/v1/layers/status` 에서 각 레이어의 모델 로드 여부와"
+                " 실제 BLOCK 가능 여부(`effective`) 를 확인할 수 있다."
+            ),
         },
     ],
     docs_url=None,

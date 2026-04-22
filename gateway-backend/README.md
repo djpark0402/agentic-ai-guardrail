@@ -222,12 +222,100 @@ LLM 토큰 스트리밍과 유사한 타이핑 UX 를 준다. 지연은 환경�
 admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전파되어 해당
 요청은 실패로 처리된다.
 
+### 레이어 진단
+
+각 가드레일 레이어(L1~L6)가 모델을 로드했는지는 물론, **현재 상태에서
+실제로 BLOCK 판정을 낼 수 있는지(`effective`)** 를 두 경로로 확인할 수
+있다. 모델은 로드됐어도 규칙/컬렉션/LLM 이 비어 있어 조용히 PASS 되는
+레이어가 있을 수 있으므로, 단순 로드 여부만으로 "동작 중" 이라고 판단하지
+않도록 한다.
+
+#### 1) 기동 시 요약 로그
+
+FastAPI lifespan startup 단계에서 `app.services.layer_diagnostics` 가
+"레이어 로드 상태 요약" 을 한 번 출력한다. `effective=True` 는 `INFO`,
+하나라도 `effective=False` 인 라인은 `WARNING` 으로 올라가므로 운영자는
+아래 한 줄로 문제 레이어를 즉시 잡을 수 있다.
+
+```bash
+docker compose logs gateway-backend | grep "effective=False"
+```
+
+출력 예:
+
+```
+INFO    [app.services.layer_diagnostics] 레이어 로드 상태 요약:
+INFO    [app.services.layer_diagnostics]   L1 L1Layer loaded=True effective=True signals={rule_based=True} detail=규칙 기반, 모델 없음
+INFO    [app.services.layer_diagnostics]   L4 L4Layer loaded=True effective=True signals={nli_model_loaded=True embed_model_loaded=True reranker_model_loaded=True nli_rules_count=21 policy_collection_count=35 llm_attached=False nli_path_ok=True vector_llm_path_ok=False} ...
+WARNING [app.services.layer_diagnostics]   L6 L6Layer loaded=False effective=False signals={safety_model_loaded=False model_name=kanana-safeguard-8b} ...
+```
+
+#### 2) `GET /v1/layers/status`
+
+런타임에 HTTP 로 같은 정보를 조회한다. `/docs` 의 **meta** 태그에 함께
+노출되며, 외부 모니터링에서도 폴링 가능하다.
+
+```bash
+curl -s http://localhost:54088/v1/layers/status | jq .
+```
+
+응답 예 (축약):
+
+```json
+{
+  "all_loaded": false,
+  "all_effective": false,
+  "layers": [
+    {
+      "index": 4,
+      "name": "L4",
+      "class_name": "L4Layer",
+      "model_loaded": true,
+      "effective": true,
+      "signals": {
+        "nli_model_loaded": true,
+        "embed_model_loaded": true,
+        "reranker_model_loaded": true,
+        "nli_rules_count": 21,
+        "policy_collection_count": 35,
+        "llm_attached": false,
+        "nli_path_ok": true,
+        "vector_llm_path_ok": false
+      },
+      "model_paths": ["/app/core-secure-layer/core_secure_layer/layers/l4/model"],
+      "detail": null
+    },
+    {
+      "index": 6,
+      "name": "L6",
+      "class_name": "L6Layer",
+      "model_loaded": false,
+      "effective": false,
+      "signals": {"safety_model_loaded": false, "model_name": "kanana-safeguard-8b"},
+      "model_paths": ["/app/core-secure-layer/core_secure_layer/layers/l6/model/kanana-safeguard-8b"],
+      "detail": "_model_loaded=False"
+    }
+  ]
+}
+```
+
+- `model_loaded`: 모델 바이너리가 로드되었는지.
+- `effective`: 현재 상태에서 이 레이어가 실제로 BLOCK 판정을 낼 수 있는지.
+  모델은 로드됐어도 규칙/컬렉션/LLM 이 비어 있으면 `false`.
+- `signals`: 레이어별 런타임 상태. 예를 들어 L4 의 `nli_rules_count=0` 은
+  NLI 판정 경로가, `llm_attached=false` 는 LLM 판정 경로가 **조용히
+  스킵된다**는 뜻.
+- **fail-open 정책은 유지**된다. `effective=false` 여도 서비스는 정상
+  기동하며 해당 레이어만 PASS 로 처리된다. 본 엔드포인트/로그는
+  **가시성**만 제공한다.
+
 ## 엔드포인트
 
 | Method | Path | 설명 |
 |---|---|---|
 | POST | `/v1/chat/completions` | OpenAI/Solar 호환 채팅 완성 (stream 지원) |
 | GET | `/v1/models/default` | `.env` 의 `LLM_MODEL` 로 설정된 기본 모델명 반환 |
+| GET | `/v1/layers/status` | L1~L6 각 레이어의 모델 로드 여부 + 실제 BLOCK 가능 여부(`effective`) + 레이어별 `signals` 진단 조회 (아래 _레이어 진단_ 참고) |
 | GET | `/health` | 헬스체크 |
 | GET | `/docs` | 커스텀 Swagger UI (상단 바 + `static/docs-overrides.css`) |
 | GET | `/openapi.json` | OpenAPI 스키마 |
@@ -326,16 +414,19 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 
 | 파일 | 역할 |
 |---|---|
-| `Dockerfile` | Python 3.14-slim-bookworm 기반 multi-stage 빌드. `uv export --frozen --prune torch` 로 `uv.lock` 에서 torch·nvidia-\*/triton 을 dep graph 기준으로 제거한 `requirements.txt` 를 만들어 non-torch 의존성을 설치하고, `torch` 는 PyTorch 공식 CPU 인덱스에서 별도 설치한다 (CUDA 바이너리·nvidia-\* 이미지 미포함). `core-secure-layer` 는 editable path-dep 으로 설치되어 `layers/l*/model/*` 의 모델 파일 (~7.2GB) 을 source 트리에서 그대로 로드한다. 비-root `appuser` 로 기동. |
-| `Dockerfile.dockerignore` | BuildKit 의 Dockerfile 전용 ignore. 빌드 컨텍스트(monorepo 루트) 에서 `admin-backend/`, `admin-frontend/`, `docs/`, `.venv/`, `.git`, `.env`, `tests/`, `*.egg-info` 등을 제외한다. |
-| `docker-compose.yml` | `context: ..` 로 monorepo 루트를 빌드 컨텍스트로 잡고, `platform: linux/amd64` 고정. `env_file: .env`, `extra_hosts: host.docker.internal:host-gateway`, `start_period: 300s` (모델 로드 유예). |
+| `Dockerfile` | Python 3.14-slim-bookworm 기반 multi-stage 빌드. `uv export --frozen --prune torch` 로 `uv.lock` 에서 torch·nvidia-\*/triton 을 dep graph 기준으로 제거한 `requirements.txt` 를 만들어 non-torch 의존성을 설치하고, `torch` 는 PyTorch 공식 CPU 인덱스에서 별도 설치한다 (CUDA 바이너리·nvidia-\* 이미지 미포함). `core-secure-layer` 는 editable path-dep 으로 설치된다. **무거운 모델 파일 (`layers/*/model/`, ~7GB) 은 이미지에 넣지 않고 compose 의 bind mount 로 런타임에 공급**되어 이미지 크기가 대폭 줄어든다. 비-root `appuser` 로 기동. |
+| `Dockerfile.dockerignore` | BuildKit 의 Dockerfile 전용 ignore. 빌드 컨텍스트(monorepo 루트) 에서 `admin-backend/`, `admin-frontend/`, `docs/`, `.venv/`, `.git`, `.env`, `tests/`, `*.egg-info` 등을 제외. 그리고 `core-secure-layer/core_secure_layer/layers/*/model/` 도 제외해 빌드 컨텍스트 전송 크기를 **GB 단위로 줄인다**. vectordb / patterns / policies 는 chromadb sqlite 쓰기 잠금/권한 문제 회피를 위해 이미지에 포함 유지. |
+| `docker-compose.yml` | `context: ..` 로 monorepo 루트를 빌드 컨텍스트로 잡고, `platform: linux/amd64` 고정. `env_file: .env`, `extra_hosts: host.docker.internal:host-gateway`, `start_period: 300s` (모델 로드 유예). **`volumes` 섹션에서 `../core-secure-layer/core_secure_layer/layers/l{2..5}/model` 를 `:ro` 로 bind mount** 해 이미지에서 제외된 모델을 공급한다. L6 `kanana-safeguard-8b` 는 아직 호스트에 없으므로 마운트하지 않으며, 모델이 준비되면 같은 패턴으로 한 줄 추가. |
 
 ### 아키텍처 / 런타임 특성
 
 - **빌드 컨텍스트**: `gateway-backend/` 단독이 아니라 `agentic-ai-guardrail/`
-  (monorepo 루트). `core-secure-layer/` 를 함께 포함해야 editable path-dep
-  (`../core-secure-layer`) 이 컨테이너 안에서 `/app/core-secure-layer` 로
-  resolve 된다.
+  (monorepo 루트). `core-secure-layer/` 의 Python 소스 / vectordb / patterns
+  / policies 를 함께 포함해야 editable path-dep (`../core-secure-layer`) 이
+  컨테이너 안에서 `/app/core-secure-layer` 로 resolve 된다. 단 **무거운
+  `layers/*/model/` 은 `.dockerignore` 로 빌드 컨텍스트와 이미지 양쪽에서
+  모두 제외**되며 런타임에 bind mount 로 공급된다. 이로써 빌드 컨텍스트
+  전송량이 GB 단위로 줄고 이미지 용량도 ~7GB 감소한다.
 - **플랫폼**: 맥북 Apple Silicon 에서 빌드해도 `linux/amd64` 이미지가 나오도록
   compose 에 플랫폼을 고정. 개발 서버(x86) 에서는 native 빌드가 수행된다.
 - **CPU / GPU**: 빌드 단계에서 `torch` 를 PyTorch 공식 CPU 인덱스
@@ -345,9 +436,20 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
   `pyproject.toml` / `uv.lock` 은 수정하지 않아 로컬 macOS 개발 환경과 완전히
   분리되어 있다 (배포 전용 오버라이드는 Dockerfile 안에만 존재). 런타임에는
   transformers / sentence-transformers 가 device 자동 선택으로 CPU 추론.
+- **모델 공급 방식**: 이미지는 `core-secure-layer` 의 Python 패키지만 품고,
+  각 레이어의 모델 바이너리(`layers/l{2..5}/model/`)는 `docker-compose.yml`
+  의 `volumes:` 섹션이 **호스트의 `../core-secure-layer/...` 경로를 `:ro`
+  로 bind mount** 해서 `/app/core-secure-layer/.../model/` 에 투명하게
+  overlay 한다. editable install 의 `.pth` 는 여전히 `/app/core-secure-layer`
+  트리를 가리키고, 서브디렉터리 overlay 만 들어가므로 import 경로에는 영향이
+  없다. 결과: 로컬 측정 기준 이미지 `13.4GB → 5.64GB`, 빌드 컨텍스트 전송
+  `7.77GB → 4.66MB`.
 - **모델 로드 시점**: `app/services/layer_registry.py` 가 import 될 때 L1~L6
   싱글턴이 즉시 인스턴스화된다 → uvicorn 이 `"Application startup complete"`
   를 찍는 시점에는 이미 모델 로드가 끝난 상태. 초기 로드는 1~3분 소요.
+  이때 `app.services.layer_diagnostics` 가 "레이어 로드 상태 요약" 을
+  INFO / WARNING 으로 한 번 찍고(위 _레이어 진단_ 참고), `/v1/layers/status`
+  에서도 같은 결과를 조회할 수 있다.
 
 ### 배포 절차 (개발 서버에서 수행)
 
@@ -392,18 +494,30 @@ docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지
 
 ### 주의사항
 
-- **`core-secure-layer` 를 볼륨 마운트로 덮지 말 것.** editable install 의
-  `.pth` 가 `/app/core-secure-layer` 절대경로를 가리키고 있어, 호스트 경로로
-  마운트하면 모델/vectordb 리소스가 사라지고 `ModuleNotFoundError` 혹은
-  모델 로드 실패가 발생한다.
+- **`core-secure-layer` 디렉터리 _전체_ 를 볼륨 마운트하지 말 것.** editable
+  install 의 `.pth` 가 `/app/core-secure-layer` 절대경로를 가리키고 있어,
+  전체를 호스트 경로로 덮으면 vectordb / patterns / policies 리소스가
+  사라지고 `ModuleNotFoundError` 혹은 모델 로드 실패가 발생한다.
+  compose 가 쓰는 **`layers/*/model` 서브디렉터리 단위 overlay 는 권장
+  방식** — editable 트리는 유지되고 무거운 모델 파일만 호스트에서 공급된다.
+- **호스트 사전조건**: `docker compose up` 전에 **호스트(로컬·dev 서버
+  모두)에 `../core-secure-layer/core_secure_layer/layers/l{2,3,4,5}/model/`
+  경로가 반드시 존재**해야 한다. 모노레포를 clone 만 한 직후라면 모델 다운
+  스크립트를 먼저 돌려 모델을 배치할 것. bind mount 원본이 없으면 compose
+  가 즉시 실패한다.
+- **L6 kanana-safeguard-8b 는 아직 미배포**: 현재 `docker-compose.yml` 에
+  L6 마운트 라인이 빠져 있다. 이 상태에서는 L6 가 `loaded=False` / `effective
+  =False` 로 표시되고 L6 검사는 PASS 처리된다(fail-open). 모델이 호스트에
+  준비되면 compose 에 한 줄 추가(`../core-secure-layer/.../l6/model:...:ro`).
 - **`.env` 는 이미지에 들어가지 않는다.** `Dockerfile.dockerignore` 에서
   명시적으로 제외하고 compose 의 `env_file` 로 런타임에 주입한다. 새 키가
   필요하면 `.env.example` 에 먼저 추가.
 - **로컬 macOS 에서 실제 이미지 빌드는 비권장**: `linux/amd64` QEMU 에뮬레이션
-  으로 1~2시간 이상 소요될 수 있다. 구문 검증은 `docker compose config`
-  (단, `.env` 값이 표준 출력으로 노출되므로 `--no-interpolate` 사용 권장)
-  + `docker buildx build --check` 로 충분하며, 실제 빌드는 개발 서버 native
-  에서 수행한다.
+  으로 시간이 오래 걸린다. 다만 이번 bind mount 전환으로 **빌드 컨텍스트
+  전송이 GB → MB 단위로 줄어** 과거 대비 크게 빨라졌다. 구문 검증은
+  `docker compose config` (단, `.env` 값이 표준 출력으로 노출되므로
+  `--no-interpolate` 사용 권장) + `docker buildx build --check` 로 충분하며,
+  실 배포용 이미지는 개발 서버 native 에서 굽는 것을 권장.
 - **첫 기동이 5분 이상 걸리면 `start_period` 확장**: 디스크 I/O 가 느린
   환경에서는 `docker-compose.yml` 의 `start_period: 300s` 를 `600s` 로 늘려
   healthcheck 가 unhealthy 로 떨어지는 것을 방지한다.
@@ -412,8 +526,10 @@ docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지
 
 | 증상 | 진단 포인트 |
 |---|---|
-| 기동 로그에 `core_secure_layer.layers.l*` import 오류 | editable 설치가 깨진 상태. `.dockerignore` 가 `core-secure-layer/` 의 모델 디렉토리를 제외하지 않는지 재확인. |
-| `모델 로드 실패` 워닝만 나오고 요청은 동작 | fail-open 설계 동작. 해당 레이어만 비활성. 로그에서 구체적인 레이어·경로 확인 후 이미지에 모델 파일이 복사됐는지 (`docker exec gateway-backend ls /app/core-secure-layer/core_secure_layer/layers/l4/model`) 점검. |
+| 기동 로그에 `core_secure_layer.layers.l*` import 오류 | editable 설치가 깨진 상태. `Dockerfile.dockerignore` 가 `core-secure-layer/` 의 **Python 소스** 까지 제외하지는 않는지 재확인. 제외해야 하는 건 `layers/*/model/` 뿐이다. |
+| `GET /v1/layers/status` 에서 L2~L5 중 일부가 `loaded=false` | bind mount 원본 경로가 호스트에 없거나 비어 있음. `ls ../core-secure-layer/core_secure_layer/layers/l4/model` 로 호스트 모델 유무 확인. 또는 `docker exec gateway-backend ls /app/core-secure-layer/core_secure_layer/layers/l4/model` 로 mount 가 실제로 반영됐는지 점검. `docker exec gateway-backend mount \| grep core-secure-layer` 로 4줄의 `virtiofs ro` 항목이 보여야 정상. |
+| `GET /v1/layers/status` 에서 L2~L5 는 `loaded=true` 인데 `effective=false` | 모델은 있으나 규칙/컬렉션/LLM 이 비어 조용히 PASS 되는 상태. `signals` 필드를 확인(예: L4 `nli_rules_count`, `policy_collection_count`, `llm_attached`). `docker compose logs gateway-backend \| grep "effective=False"` 로도 동일하게 관찰된다. |
+| `모델 로드 실패` 워닝만 나오고 요청은 동작 | fail-open 설계 동작. 해당 레이어만 비활성. `/v1/layers/status` 의 `detail` 필드와 위 항목(bind mount 원본 확인)을 우선 점검. |
 | 컨테이너가 healthcheck 로 `unhealthy` 되어 재시작 반복 | 모델 로드가 `start_period` 를 초과. `docker compose logs` 로 실제 로드 시간 확인 후 `start_period` 상향. |
 | admin-backend 연결 실패 (`policy_service` 로그) | `ADMIN_BACKEND_URL` 값 확인. `docker exec gateway-backend python -c "import urllib.request; print(urllib.request.urlopen('$ADMIN_BACKEND_URL/health').status)"` 로 도달성 점검. 호스트 프로세스인 경우 admin-backend 가 `0.0.0.0` 에 바인딩돼 있어야 한다. |
 | CUDA / `libcu*` / `nvidia-*` 관련 경고 또는 오류 | CPU-only `torch` wheel 만 설치되어 CUDA 런타임 로드 경로 자체가 없어야 정상. 만약 빌드 로그에서 `Downloading nvidia-*` / `Downloading triton` 이 다시 보이면 이미지 캐시에 이전 빌드가 재사용됐을 가능성 → `docker builder prune -f --filter "label=com.docker.compose.project=gateway-backend"` 후 재빌드. transformers 가 단순 probe 차원에서 찍는 CUDA 관련 info 메시지는 무해. |
