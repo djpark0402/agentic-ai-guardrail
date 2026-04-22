@@ -22,7 +22,7 @@ from app.errors import (
     map_langchain_error,
     map_solar_error,
 )
-from app.routers import chat
+from app.routers import chat, layers
 
 # 앱 전체 로깅 포맷 설정 — uvicorn 기본 핸들러와 별개로 앱 로거 출력 보장.
 logging.basicConfig(
@@ -160,6 +160,9 @@ async def log_request(request: Request, call_next) -> Response:  # noqa: ANN001
 
 # 가드레일 채팅 라우터 마운트
 app.include_router(chat.router, prefix="/v1")
+
+# 레이어 진단 라우터 마운트 — /v1/layers/status 로 모델 로드 상태 조회
+app.include_router(layers.router, prefix="/v1")
 
 # 플레이그라운드 정적 페이지 마운트 (/playground/)
 app.mount(
