@@ -345,39 +345,138 @@ def collect_layer_statuses(
     return statuses
 
 
-def _format_signals(signals: dict[str, Any]) -> str:
-    """로그 한 줄에 들어갈 간결한 `key=value` 포맷."""
+def _format_signals_kv(signals: dict[str, Any]) -> str:
+    """Signals 딕셔너리를 ``"(signals: k=v, k=v, ...)"`` 한 줄로 변환.
+
+    키 이름은 운영자 grep 호환성을 위해 그대로 두고, 구분자만
+    기존 공백에서 쉼표+공백으로 바꿔 사람이 읽기 편하게 한다.
+    """
     if not signals:
         return ""
-    return " signals={" + " ".join(f"{k}={v}" for k, v in signals.items()) + "}"
+    kv = ", ".join(f"{k}={v}" for k, v in signals.items())
+    return f"(signals: {kv})"
+
+
+def _korean_verdict(status: LayerStatus) -> str:
+    """상태 조합에 따른 한국어 판정 문장을 반환한다."""
+    model_name = status.signals.get("model_name")
+    name_suffix = f"({model_name})" if model_name else ""
+
+    if status.effective and status.model_loaded:
+        return "로드 성공했습니다."
+    if status.effective and not status.model_loaded:
+        # L5 regex-only 처럼 주 모델 없이도 대체 경로로 동작하는 케이스.
+        return (
+            "로드 성공했습니다. 주 모델은 로드되지 않았지만 "
+            "대체 경로(규칙 기반)로 동작합니다."
+        )
+    if not status.effective and status.model_loaded:
+        return (
+            "로드 실패했습니다. 모델 파일은 로드되었지만 판정에 필요한 "
+            "보조 설정(규칙/컬렉션/LLM)이 비어 있어 조용히 PASS 됩니다."
+        )
+    return (
+        f"로드 실패했습니다. 지정된 경로에서 모델 파일{name_suffix}"
+        "을 찾지 못했습니다 — 이 레이어는 호출되더라도 조용히 "
+        "PASS 됩니다."
+    )
+
+
+def _partial_path_hint(status: LayerStatus) -> str | None:
+    """L4 처럼 두 경로 중 한쪽만 살아 있는 부분 가용 상태 설명.
+
+    signals 의 ``nli_path_ok`` / ``vector_llm_path_ok`` 조합이 한쪽만
+    True 일 때, 어느 경로로 동작하고 어느 경로가 왜 비활성인지
+    한국어로 설명한다. 두 키가 모두 없으면 해당 없음으로 ``None``.
+    """
+    if not status.effective:
+        return None
+    nli_ok = status.signals.get("nli_path_ok")
+    vec_ok = status.signals.get("vector_llm_path_ok")
+    if nli_ok is None or vec_ok is None:
+        return None
+    if nli_ok and not vec_ok:
+        rules = status.signals.get("nli_rules_count", "?")
+        return (
+            f"NLI 규칙 기반 경로(규칙 {rules}건)로 동작합니다. 참고: "
+            "LLM 이 연결되지 않아 벡터+LLM 경로는 비활성"
+            "(llm_attached=False)."
+        )
+    if vec_ok and not nli_ok:
+        rules = status.signals.get("nli_rules_count", 0)
+        return (
+            "벡터+LLM 경로로 동작합니다. 참고: NLI 규칙이 비어 있어 "
+            f"NLI 경로는 비활성(nli_rules_count={rules})."
+        )
+    return None
+
+
+def _attack_pattern_count_hint(status: LayerStatus) -> str | None:
+    """L3 공격 패턴 컬렉션 적재 수를 한국어로 드러낸다."""
+    count = status.signals.get("attack_patterns_count")
+    if isinstance(count, int) and count > 0:
+        return f"공격 패턴 {count}건 적재됨."
+    return None
+
+
+def _format_layer_line(status: LayerStatus) -> str:
+    """단일 레이어 한 줄 로그를 한국어 문장으로 조립한다."""
+    pieces: list[str] = [
+        f"  • [{status.name}] {status.class_name}: {_korean_verdict(status)}"
+    ]
+    hint = _partial_path_hint(status)
+    if hint:
+        pieces.append(hint)
+    count_hint = _attack_pattern_count_hint(status)
+    if count_hint:
+        pieces.append(count_hint)
+    # 성공 케이스의 의미 있는 보조 설명(L1 '규칙 기반, 모델 없음' 등).
+    if status.effective and status.detail:
+        pieces.append(f"{status.detail}.")
+    if status.model_paths:
+        pieces.append(f"모델 경로: {status.model_paths[0]}.")
+    signals_part = _format_signals_kv(status.signals)
+    if signals_part:
+        pieces.append(signals_part)
+    return " ".join(pieces)
 
 
 def log_layer_statuses(statuses: list[LayerStatus]) -> None:
-    """수집된 상태를 INFO / WARNING 으로 한 줄씩 출력한다.
+    """수집된 상태를 한국어 요약 + 레이어별 한 줄로 출력한다.
 
-    - ``effective=True`` 이면 INFO.
-    - ``effective=False`` 이면 WARNING. 운영자는 ``grep "effective=False"``
-      한 번으로 "로드는 됐지만 실제로는 판정을 못 내는 레이어" 를 잡을 수
-      있다.
+    - 맨 앞에 전체 성공/실패 개수를 한국어로 알리는 요약 라인.
+    - 각 레이어는 ``"[Lx] ClassName: 로드 성공/실패했습니다. ..."`` 형태.
+    - ``effective=True`` 는 INFO, ``effective=False`` 는 WARNING —
+      실패 수가 1 이상이면 요약 라인도 WARNING 으로 올려 ``docker logs
+      | grep WARNING`` 한 번으로 문제 레이어를 잡을 수 있다.
     """
-    logger.info("레이어 로드 상태 요약:")
+    total = len(statuses)
+    if total == 0:
+        logger.warning("가드레일 레이어가 하나도 등록되지 않았습니다.")
+        return
+
+    success_count = sum(1 for s in statuses if s.effective)
+    fail_count = total - success_count
+
+    if fail_count == 0:
+        logger.info(
+            "가드레일 레이어 로드 상태 요약 — 전체 %d개 레이어 모두 "
+            "정상 동작 준비가 완료되었습니다.",
+            total,
+        )
+    else:
+        logger.warning(
+            "가드레일 레이어 로드 상태 요약 — 전체 %d개 중 %d개 성공, "
+            "%d개는 동작 준비에 실패했습니다. 실패 레이어는 조용히 "
+            "PASS 되므로 아래 상세를 점검하세요.",
+            total,
+            success_count,
+            fail_count,
+        )
+
     for status in statuses:
-        path_str = (
-            f" path={status.model_paths[0]}" if status.model_paths else ""
-        )
-        detail_str = f" detail={status.detail}" if status.detail else ""
-        signals_str = _format_signals(status.signals)
-        template = "  %s %s loaded=%s effective=%s%s%s%s"
-        args = (
-            status.name,
-            status.class_name,
-            status.model_loaded,
-            status.effective,
-            signals_str,
-            path_str,
-            detail_str,
-        )
+        line = _format_layer_line(status)
         if status.effective:
-            logger.info(template, *args)
+            logger.info(line)
         else:
-            logger.warning(template, *args)
+            logger.warning(line)

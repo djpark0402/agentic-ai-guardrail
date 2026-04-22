@@ -300,6 +300,10 @@ def test_log_uses_info_only_when_all_effective(
     ):
         log_layer_statuses(statuses)
     assert all(r.levelno == logging.INFO for r in caplog.records)
+    # 요약 라인 + 레이어 라인이 모두 찍혀야 하므로 최소 2건.
+    assert len(caplog.records) >= 2
+    summary = caplog.records[0].getMessage()
+    assert "정상 동작 준비가 완료" in summary
 
 
 def test_log_warns_on_ineffective_layer(
@@ -321,11 +325,144 @@ def test_log_warns_on_ineffective_layer(
     ):
         log_layer_statuses(statuses)
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    msg = warnings[0].getMessage()
-    assert "effective=False" in msg
-    assert "nli_rules_count=0" in msg
-    assert "llm_attached=False" in msg
+    # 요약 라인 + 해당 레이어 라인이 모두 WARNING.
+    assert len(warnings) == 2
+    layer_msg = warnings[1].getMessage()
+    assert "실패했습니다" in layer_msg
+    # signals 키 이름은 운영자 grep 호환성을 위해 유지.
+    assert "nli_rules_count=0" in layer_msg
+    assert "llm_attached=False" in layer_msg
+
+
+def test_log_success_uses_korean_verdict(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """effective=True 레이어 로그에 한국어 성공 문구가 들어가고,
+    기존 영문 key=value 형식 판정 표현은 사라진다."""
+    statuses = [
+        LayerStatus(
+            index=2,
+            name="L2",
+            class_name="L2Layer",
+            model_loaded=True,
+            effective=True,
+            signals={"perplexity_ready": True},
+            model_paths=["/app/core-secure-layer/.../l2/model/gpt2"],
+        ),
+    ]
+    with caplog.at_level(
+        logging.DEBUG, logger="app.services.layer_diagnostics"
+    ):
+        log_layer_statuses(statuses)
+    layer_msg = caplog.records[1].getMessage()
+    assert "로드 성공했습니다" in layer_msg
+    assert "모델 경로: /app/core-secure-layer/.../l2/model/gpt2" in layer_msg
+    # 기존 판정 표현은 제거.
+    assert "loaded=True effective=True" not in layer_msg
+
+
+def test_log_failure_explains_loaded_but_ineffective(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """loaded=True & effective=False 케이스는 '모델 파일은 로드되었지만'
+    이라는 한국어 설명을 포함한다."""
+    statuses = [
+        LayerStatus(
+            index=4,
+            name="L4",
+            class_name="L4Layer",
+            model_loaded=True,
+            effective=False,
+            signals={"nli_rules_count": 0, "llm_attached": False},
+            detail="nli_rules=0(NLI 스킵) llm=None(LLM 판단 스킵)",
+        ),
+    ]
+    with caplog.at_level(
+        logging.DEBUG, logger="app.services.layer_diagnostics"
+    ):
+        log_layer_statuses(statuses)
+    layer_msg = caplog.records[1].getMessage()
+    assert "실패했습니다" in layer_msg
+    assert "모델 파일은 로드되었지만" in layer_msg
+
+
+def test_log_failure_explains_load_failure_with_model_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """loaded=False & effective=False 케이스에 model_name signal 이
+    있으면 고유명이 실패 사유에 노출된다."""
+    statuses = [
+        LayerStatus(
+            index=6,
+            name="L6",
+            class_name="L6Layer",
+            model_loaded=False,
+            effective=False,
+            signals={
+                "safety_model_loaded": False,
+                "model_name": "kanana-safeguard-8b",
+            },
+            model_paths=["/app/.../l6/model/kanana-safeguard-8b"],
+            detail="_model_loaded=False",
+        ),
+    ]
+    with caplog.at_level(
+        logging.DEBUG, logger="app.services.layer_diagnostics"
+    ):
+        log_layer_statuses(statuses)
+    layer_msg = caplog.records[1].getMessage()
+    assert "실패했습니다" in layer_msg
+    assert "모델 파일(kanana-safeguard-8b)" in layer_msg
+    assert "호출되더라도 조용히 PASS" in layer_msg
+
+
+def test_log_l4_partial_path_hint_when_only_nli_ok(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """L4 effective=True 지만 NLI 경로만 살아 있는 부분 가용 상태면,
+    어느 경로로 동작 중이고 어느 경로가 비활성인지 설명 문장이 붙는다."""
+    statuses = [
+        LayerStatus(
+            index=4,
+            name="L4",
+            class_name="L4Layer",
+            model_loaded=True,
+            effective=True,
+            signals={
+                "nli_model_loaded": True,
+                "embed_model_loaded": True,
+                "reranker_model_loaded": True,
+                "nli_rules_count": 21,
+                "policy_collection_count": 35,
+                "llm_attached": False,
+                "nli_path_ok": True,
+                "vector_llm_path_ok": False,
+            },
+        ),
+    ]
+    with caplog.at_level(
+        logging.DEBUG, logger="app.services.layer_diagnostics"
+    ):
+        log_layer_statuses(statuses)
+    layer_msg = caplog.records[1].getMessage()
+    assert "로드 성공했습니다" in layer_msg
+    assert "NLI 규칙 기반 경로(규칙 21건)" in layer_msg
+    assert "벡터+LLM 경로는 비활성" in layer_msg
+
+
+def test_log_empty_statuses_emits_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """빈 리스트 입력시 레이어 부재를 알리는 WARNING 한 줄."""
+    with caplog.at_level(
+        logging.DEBUG, logger="app.services.layer_diagnostics"
+    ):
+        log_layer_statuses([])
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+    assert (
+        "레이어가 하나도 등록되지 않았습니다" in caplog.records[0].getMessage()
+    )
 
 
 # ---------- helpers ----------
