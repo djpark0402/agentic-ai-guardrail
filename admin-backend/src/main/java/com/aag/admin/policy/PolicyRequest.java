@@ -15,6 +15,7 @@ public class PolicyRequest {
     private boolean l4Enabled;
     private boolean l5Enabled;
     private boolean l6Enabled;
+    private boolean outboundEnabled;
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
@@ -32,4 +33,6 @@ public class PolicyRequest {
     public void setL5Enabled(boolean l5Enabled) { this.l5Enabled = l5Enabled; }
     public boolean isL6Enabled() { return l6Enabled; }
     public void setL6Enabled(boolean l6Enabled) { this.l6Enabled = l6Enabled; }
+    public boolean isOutboundEnabled() { return outboundEnabled; }
+    public void setOutboundEnabled(boolean outboundEnabled) { this.outboundEnabled = outboundEnabled; }
 }

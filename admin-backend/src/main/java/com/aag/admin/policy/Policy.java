@@ -36,6 +36,9 @@ public class Policy {
     @Column(name = "l6_enabled", nullable = false)
     private boolean l6Enabled;
 
+    @Column(name = "outbound_enabled", nullable = false, columnDefinition = "BOOLEAN NOT NULL DEFAULT FALSE")
+    private boolean outboundEnabled;
+
     @Column(name = "is_use", nullable = false)
     private boolean isUse;
 
@@ -63,6 +66,8 @@ public class Policy {
     public void setL5Enabled(boolean l5Enabled) { this.l5Enabled = l5Enabled; }
     public boolean isL6Enabled() { return l6Enabled; }
     public void setL6Enabled(boolean l6Enabled) { this.l6Enabled = l6Enabled; }
+    public boolean isOutboundEnabled() { return outboundEnabled; }
+    public void setOutboundEnabled(boolean outboundEnabled) { this.outboundEnabled = outboundEnabled; }
     public boolean isUse() { return isUse; }
     public void setUse(boolean use) { this.isUse = use; }
     public Instant getCreatedAt() { return createdAt; }

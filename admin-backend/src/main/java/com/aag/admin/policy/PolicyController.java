@@ -104,6 +104,7 @@ public class PolicyController {
         policy.setL4Enabled(request.isL4Enabled());
         policy.setL5Enabled(request.isL5Enabled());
         policy.setL6Enabled(request.isL6Enabled());
+        policy.setOutboundEnabled(request.isOutboundEnabled());
     }
 
     private String policyDetail(Policy policy) {
@@ -122,6 +123,7 @@ public class PolicyController {
         map.put("l4Enabled", policy.isL4Enabled());
         map.put("l5Enabled", policy.isL5Enabled());
         map.put("l6Enabled", policy.isL6Enabled());
+        map.put("outboundEnabled", policy.isOutboundEnabled());
         map.put("createdAt", policy.getCreatedAt());
         map.put("updatedAt", policy.getUpdatedAt());
         return map;
