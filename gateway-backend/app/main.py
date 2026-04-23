@@ -148,16 +148,26 @@ app = FastAPI(
         " BLOCK 판정을 낼 수 있는 상태인지(`effective`) 를 두 경로로"
         " 확인할 수 있습니다.\n"
         "- **기동 로그**: FastAPI lifespan startup 단계에서"
-        ' "레이어 로드 상태 요약" 을 INFO 로 출력합니다.'
-        " loaded/effective=True 는 INFO, 하나라도 실패한 라인은 WARNING"
-        ' 으로 올라오므로 `docker logs | grep "effective=False"` 로'
-        " 문제 레이어를 즉시 잡아낼 수 있습니다.\n"
+        ' "가드레일 레이어 로드 상태 요약" 한 줄과 `• [Lx] ClassName:'
+        " 로드 성공/실패했습니다.` 형태의 레이어별 한국어 라인을"
+        " 출력합니다. 성공은 INFO, 실패(또는 부분 가용으로 WARNING 이"
+        " 필요한 경우)는 WARNING 으로 올라오므로 "
+        '`docker logs | grep "로드 실패했습니다"` 로 문제 레이어만 즉시'
+        " 추려낼 수 있습니다. L4 처럼 NLI / 벡터+LLM 두 경로 중 한쪽만"
+        " 살아 있는 부분 가용 상태에서는 어느 경로로 동작 중인지"
+        " 힌트 문장이 함께 붙습니다.\n"
         "- **`GET /v1/layers/status`**: 각 레이어의 `model_loaded` /"
         " `effective` / `signals` (레이어별 내부 상태: L4 의"
         " `nli_rules_count`, `policy_collection_count`, `llm_attached`"
         " 등) 을 JSON 으로 반환합니다. 모델은 로드됐어도 규칙/컬렉션/LLM"
         " 이 비어 있어 조용히 PASS 되는 상태는 이 엔드포인트에서만"
-        " 드러납니다."
+        " 드러납니다.\n\n"
+        "### 로그 필터\n"
+        "도커 healthcheck 가 수초마다 찍는 "
+        "`'\"GET /health HTTP/1.1\" 200 OK'` 라인은 `uvicorn.access`"
+        " 로거에 부착된 필터가 자동으로 억제합니다. `/health` 경로만"
+        " 제거되고 다른 요청(예: `POST /v1/chat/completions`) 의 access"
+        " log 는 그대로 남습니다."
     ),
     version="0.2.0",
     openapi_tags=[

@@ -233,22 +233,44 @@ admin-backend 가 응답하지 않거나 4xx/5xx 를 반환하면 예외가 전�
 #### 1) 기동 시 요약 로그
 
 FastAPI lifespan startup 단계에서 `app.services.layer_diagnostics` 가
-"레이어 로드 상태 요약" 을 한 번 출력한다. `effective=True` 는 `INFO`,
-하나라도 `effective=False` 인 라인은 `WARNING` 으로 올라가므로 운영자는
-아래 한 줄로 문제 레이어를 즉시 잡을 수 있다.
+"가드레일 레이어 로드 상태 요약" 을 한 번 출력한다. 판정 결과가 한국어
+문장으로 풀어서 찍히므로 `docker logs` 를 훑을 때 어느 레이어가 문제인지
+한눈에 보인다. `effective=True` 인 레이어는 `INFO`, 하나라도
+`effective=False` 이면 맨 위 요약 라인과 해당 레이어 라인이 함께
+`WARNING` 으로 올라간다.
 
 ```bash
-docker compose logs gateway-backend | grep "effective=False"
+# 실패한 레이어만 추려 보기
+docker compose logs gateway-backend | grep "로드 실패했습니다"
+
+# 전체 진단 블록을 한 번에 훑기
+docker compose logs gateway-backend | grep -E "레이어 로드 상태 요약|\[L[1-6]\]"
 ```
 
-출력 예:
+출력 예 (L6 모델 파일 미배포 + L4 가 NLI 경로만 동작 중):
 
 ```
-INFO    [app.services.layer_diagnostics] 레이어 로드 상태 요약:
-INFO    [app.services.layer_diagnostics]   L1 L1Layer loaded=True effective=True signals={rule_based=True} detail=규칙 기반, 모델 없음
-INFO    [app.services.layer_diagnostics]   L4 L4Layer loaded=True effective=True signals={nli_model_loaded=True embed_model_loaded=True reranker_model_loaded=True nli_rules_count=21 policy_collection_count=35 llm_attached=False nli_path_ok=True vector_llm_path_ok=False} ...
-WARNING [app.services.layer_diagnostics]   L6 L6Layer loaded=False effective=False signals={safety_model_loaded=False model_name=kanana-safeguard-8b} ...
+WARNING [app.services.layer_diagnostics] 가드레일 레이어 로드 상태 요약 — 전체 6개 중 5개 성공, 1개는 동작 준비에 실패했습니다. 실패 레이어는 조용히 PASS 되므로 아래 상세를 점검하세요.
+INFO    [app.services.layer_diagnostics]   • [L1] L1Layer: 로드 성공했습니다. 규칙 기반, 모델 없음. (signals: rule_based=True)
+INFO    [app.services.layer_diagnostics]   • [L3] L3Layer: 로드 성공했습니다. 공격 패턴 210건 적재됨. 모델 경로: /app/.../l3/model/all-MiniLM-L6-v2. (signals: embedding_ready=True, attack_patterns_collection=True, attack_patterns_count=210)
+INFO    [app.services.layer_diagnostics]   • [L4] L4Layer: 로드 성공했습니다. NLI 규칙 기반 경로(규칙 21건)로 동작합니다. 참고: LLM 이 연결되지 않아 벡터+LLM 경로는 비활성(llm_attached=False). 모델 경로: /app/.../l4/model. (signals: ... llm_attached=False, nli_path_ok=True, vector_llm_path_ok=False)
+WARNING [app.services.layer_diagnostics]   • [L6] L6Layer: 로드 실패했습니다. 지정된 경로에서 모델 파일(kanana-safeguard-8b)을 찾지 못했습니다 — 이 레이어는 호출되더라도 조용히 PASS 됩니다. 모델 경로: /app/.../l6/model/kanana-safeguard-8b. (signals: safety_model_loaded=False, model_name=kanana-safeguard-8b)
 ```
+
+판정 문구는 `loaded` × `effective` 조합에 따라 네 가지로 갈린다.
+
+| loaded | effective | 문구 |
+|---|---|---|
+| True | True | `로드 성공했습니다.` (+ 경로·보조 힌트) |
+| False | True | `로드 성공했습니다. 주 모델은 로드되지 않았지만 대체 경로(규칙 기반)로 동작합니다.` (예: L5 regex-only) |
+| True | False | `로드 실패했습니다. 모델 파일은 로드되었지만 판정에 필요한 보조 설정(규칙/컬렉션/LLM)이 비어 있어 조용히 PASS 됩니다.` |
+| False | False | `로드 실패했습니다. 지정된 경로에서 모델 파일(<모델명>)을 찾지 못했습니다 — 이 레이어는 호출되더라도 조용히 PASS 됩니다.` |
+
+L4 처럼 `nli_path_ok` / `vector_llm_path_ok` 중 한쪽만 True 인 **부분
+가용** 상태에서는 어느 경로로 동작 중이고 어느 경로가 왜 비활성인지를
+한 줄 힌트로 덧붙인다. `signals` 는 가독성을 위해 쉼표 구분으로 바뀌었지만
+키 이름(예: `nli_rules_count`, `llm_attached`) 은 기존 grep 워크플로우
+호환을 위해 그대로 유지된다.
 
 #### 2) `GET /v1/layers/status`
 
@@ -450,6 +472,14 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
   이때 `app.services.layer_diagnostics` 가 "레이어 로드 상태 요약" 을
   INFO / WARNING 으로 한 번 찍고(위 _레이어 진단_ 참고), `/v1/layers/status`
   에서도 같은 결과를 조회할 수 있다.
+- **`/health` access log 억제**: 도커 healthcheck 가 수초마다 때리는
+  `'"GET /health HTTP/1.1" 200 OK'` 라인은 `uvicorn.access` 로거에
+  부착된 `_HealthAccessLogFilter` 가 걸러낸다. `--no-access-log` 로
+  전체 access log 를 끄지 않고 `/health` 경로만 억제하므로,
+  `POST /v1/chat/completions` 같은 실제 트래픽은 평소대로 access log
+  에 남는다. 앱 자체 request 미들웨어(`log_request`) 도 이미
+  `/health` 와 `/openapi.json` 을 건너뛰도록 설정돼 있어 두 경로는
+  양쪽에서 모두 조용하다.
 
 ### 배포 절차 (개발 서버에서 수행)
 
@@ -528,7 +558,7 @@ docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지
 |---|---|
 | 기동 로그에 `core_secure_layer.layers.l*` import 오류 | editable 설치가 깨진 상태. `Dockerfile.dockerignore` 가 `core-secure-layer/` 의 **Python 소스** 까지 제외하지는 않는지 재확인. 제외해야 하는 건 `layers/*/model/` 뿐이다. |
 | `GET /v1/layers/status` 에서 L2~L5 중 일부가 `loaded=false` | bind mount 원본 경로가 호스트에 없거나 비어 있음. `ls ../core-secure-layer/core_secure_layer/layers/l4/model` 로 호스트 모델 유무 확인. 또는 `docker exec gateway-backend ls /app/core-secure-layer/core_secure_layer/layers/l4/model` 로 mount 가 실제로 반영됐는지 점검. `docker exec gateway-backend mount \| grep core-secure-layer` 로 4줄의 `virtiofs ro` 항목이 보여야 정상. |
-| `GET /v1/layers/status` 에서 L2~L5 는 `loaded=true` 인데 `effective=false` | 모델은 있으나 규칙/컬렉션/LLM 이 비어 조용히 PASS 되는 상태. `signals` 필드를 확인(예: L4 `nli_rules_count`, `policy_collection_count`, `llm_attached`). `docker compose logs gateway-backend \| grep "effective=False"` 로도 동일하게 관찰된다. |
+| `GET /v1/layers/status` 에서 L2~L5 는 `loaded=true` 인데 `effective=false` | 모델은 있으나 규칙/컬렉션/LLM 이 비어 조용히 PASS 되는 상태. `signals` 필드를 확인(예: L4 `nli_rules_count`, `policy_collection_count`, `llm_attached`). 기동 로그에서도 `docker compose logs gateway-backend \| grep "로드 실패했습니다"` 로 동일하게 관찰된다. |
 | `모델 로드 실패` 워닝만 나오고 요청은 동작 | fail-open 설계 동작. 해당 레이어만 비활성. `/v1/layers/status` 의 `detail` 필드와 위 항목(bind mount 원본 확인)을 우선 점검. |
 | 컨테이너가 healthcheck 로 `unhealthy` 되어 재시작 반복 | 모델 로드가 `start_period` 를 초과. `docker compose logs` 로 실제 로드 시간 확인 후 `start_period` 상향. |
 | admin-backend 연결 실패 (`policy_service` 로그) | `ADMIN_BACKEND_URL` 값 확인. `docker exec gateway-backend python -c "import urllib.request; print(urllib.request.urlopen('$ADMIN_BACKEND_URL/health').status)"` 로 도달성 점검. 호스트 프로세스인 경우 admin-backend 가 `0.0.0.0` 에 바인딩돼 있어야 한다. |
