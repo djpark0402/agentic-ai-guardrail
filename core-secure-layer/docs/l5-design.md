@@ -115,6 +115,7 @@
 모델 폴더에 `pii_labels.json` 이 **없으면**:
 - `config.json` 의 `id2label` 을 자동 추출해 `label_map` 으로 사용 (B-/I- 접두사 제거, 값은 원본 라벨명 그대로)
 - `block_singletons = <모든 라벨>`, `block_combinations = []`, `min_score = 0.0`, `aggregation_strategy = "simple"`
+- 단, 생성자 `min_score` 가 주어졌다면 그 값이 `0.0` 대신 쓰인다 (§3 참조)
 - 즉 "엔티티 하나라도 감지되면 차단" — 현재 동작과 동일
 - 로드 시점에 `logger.warning("pii_labels.json 없음, 폴백 동작 — 범용 NER 모델은 오탐 위험이 큼: %s", path)` 로 1회 경고
 
@@ -126,6 +127,7 @@
 layer = L5Layer(
     model_name="ner-ko",                     # NER 모델 폴더명
     extra_patterns=[r"PROJ-\d{6}"],          # 추가 차단 정규식
+    min_score=0.85,                          # JSON 의 min_score 를 override (선택)
 )
 ```
 
@@ -133,8 +135,9 @@ layer = L5Layer(
 |----------|------|--------|------|
 | `model_name` | `str` | `"ner-ko"` | NER 모델 폴더명 (`model/` 하위) |
 | `extra_patterns` | `list[str]` | `[]` | 추가 차단 정규식 리스트 |
+| `min_score` | `float \| None` | `None` | NER 엔티티 신뢰도 임계값. `None` 이면 `pii_labels.json` 의 값을 사용하고, 값이 주어지면 JSON 스펙을 override. 폴백 경로에서도 동일하게 적용 |
 
-판정 규칙은 `model/<model_name>/pii_labels.json` 에서 읽으므로 생성자로 주입하지 않는다.
+판정 규칙(`label_map`, `block_singletons`, `block_combinations`, `aggregation_strategy`)은 `model/<model_name>/pii_labels.json` 에서 읽으므로 생성자로 주입하지 않는다. 다만 `min_score` 만은 **프로젝트별 임계값 튜닝 용도로 생성자 주입을 허용** 한다 — 공유 모델 폴더를 여러 프로젝트가 다른 감도로 쓰는 시나리오를 커버한다.
 
 ## 4. 디렉토리 구조
 
