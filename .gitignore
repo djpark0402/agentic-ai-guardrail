@@ -25,7 +25,10 @@ __pycache__/
 # OS
 .DS_Store
 .claude/settings.local.json
-core-secure-layer/core_secure_layer/layers/**/model
+core-secure-layer/core_secure_layer/layers/**/model/**
+!core-secure-layer/core_secure_layer/layers/**/model/
+!core-secure-layer/core_secure_layer/layers/**/model/*/
+!core-secure-layer/core_secure_layer/layers/**/model/*/pii_labels.json
 core-secure-layer/core_secure_layer/layers/**/patterns
 core-secure-layer/core_secure_layer/layers/**/policies
 core-secure-layer/core_secure_layer/layers/**/vectordb
