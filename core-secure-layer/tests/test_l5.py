@@ -1095,3 +1095,5 @@ class TestNerKoRegression:
         }
         assert expected_singletons.issubset(set(inst._block_singletons))
         assert inst._block_combinations == []
+        # "오탐 절대 불허" 원칙 핵심 값 — 회귀 방지로 임계값 고정
+        assert inst._min_score == pytest.approx(0.7)

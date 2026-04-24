@@ -268,5 +268,5 @@ LayerResult(
    - 정형 PII 라벨(전화번호, 주민번호 등) → `block_singletons` 에 추가
    - 조합이어야 의미 있는 라벨(인명+지명 등) → `block_combinations` 에 추가
    - 오탐 위험이 높은 라벨(기관명 등) → 양쪽 모두에서 제외
-4. `min_score` 는 모델 성능에 따라 조정 (기본 `0.0`, 오탐이 많으면 `0.8` 이상으로)
-5. `L5Layer(model_name="<새모델명>")` 로 초기화해 통합 테스트
+4. `min_score` 는 "오탐 절대 불허" 원칙에 맞춰 **기본 `0.7` 이상** 권장. JSON 필드를 생략하면 코드 기본값 `0.0` 이 적용되지만 실제 배포 모델에서는 반드시 명시할 것. 프로젝트별로 감도가 다르면 `L5Layer(..., min_score=...)` 로 생성자 override
+5. `L5Layer(model_name="<새모델명>")` 로 초기화해 통합 테스트 (`scripts/smoke_l5_model.py` 활용)
