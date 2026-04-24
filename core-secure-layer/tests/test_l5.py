@@ -14,17 +14,36 @@ def _req(text):
     return GuardrailRequest(user_input=text)
 
 
+def _new_layer(
+    *,
+    ner_model: object | None = None,
+    extra_patterns: list[str] | None = None,
+) -> L5Layer:
+    """__init__ 을 우회해 L5Layer 인스턴스를 만드는 테스트용 팩토리.
+
+    pii_labels.json / HF 파이프라인 로드 없이도 `_check_regex` /
+    `_check_ner` 를 그대로 실행할 수 있도록 필수 속성을 모두 세팅한다.
+    """
+    inst = L5Layer.__new__(L5Layer)
+    inst.name = "L5"
+    inst.model_name = "ner-ko"
+    inst.extra_patterns = list(extra_patterns or [])
+    inst.min_score = 0.0
+    inst.label_map = {}
+    inst.block_singletons = frozenset()
+    inst.aggregation_strategy = "simple"
+    inst._block_combinations = ()
+    inst._ner_model = ner_model
+    return inst
+
+
 @pytest.fixture
 def layer():
     """NER 모델 미로드 상태의 L5Layer 인스턴스.
 
     Regex 1단계만 동작하고, NER 2단계는 fail-open 으로 허용.
     """
-    inst = L5Layer.__new__(L5Layer)
-    inst.name = "L5"
-    inst.extra_patterns = []
-    inst._ner_model = None
-    return inst
+    return _new_layer(ner_model=None)
 
 
 @pytest.fixture
@@ -33,11 +52,7 @@ def layer_with_extra():
 
     외부 주입 정규식 매칭 테스트용.
     """
-    inst = L5Layer.__new__(L5Layer)
-    inst.name = "L5"
-    inst.extra_patterns = [r"PROJ-\d{6}"]
-    inst._ner_model = None
-    return inst
+    return _new_layer(ner_model=None, extra_patterns=[r"PROJ-\d{6}"])
 
 
 @pytest.fixture
@@ -46,11 +61,7 @@ def layer_with_ner():
 
     _ner_predict 를 monkeypatch 하여 NER 결과를 제어한다.
     """
-    inst = L5Layer.__new__(L5Layer)
-    inst.name = "L5"
-    inst.extra_patterns = []
-    inst._ner_model = MagicMock()
-    return inst
+    return _new_layer(ner_model=MagicMock())
 
 
 # ──────────────────────────────────────────────

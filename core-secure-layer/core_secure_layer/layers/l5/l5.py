@@ -2,11 +2,16 @@
 
 1단계 Regex(기본 + extra_patterns)로 정형 PII를 탐지하고,
 2단계 NER 모델로 PII 엔티티를 탐지한다.
-PII 특화 NER 모델(이름, 주소, 전화번호 등)이 엔티티를
-감지하면 즉시 차단한다.
+각 모델 폴더(`model/<name>/`)는 자기 계약 파일
+`pii_labels.json` 을 가지며 `label_map` · `block_singletons` ·
+`block_combinations` · `min_score` · `aggregation_strategy` 를
+공개한다. 이 값들은 `L5Layer` 생성자 인자로 덮어쓸 수 있고,
+인스턴스 속성으로도 런타임에 갱신할 수 있다 — 차후 ADMIN 정책이
+`min_score` 등을 주입하는 경로에서 사용된다.
 fail-open 원칙: 모델 미로드나 예외 시 허용.
 """
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -23,6 +28,19 @@ logger = logging.getLogger(__name__)
 
 # NER 모델 기본 경로
 _MODEL_BASE_DIR = Path(__file__).parent / "model"
+
+# 각 모델 폴더 안에 배포되는 L5 운영 계약 파일
+_PII_LABELS_FILENAME = "pii_labels.json"
+
+# pii_labels.json 파일이 없거나 파싱 실패 시 사용하는 fail-open 기본값.
+# min_score=0.0 은 사실상 스코어 필터 미적용과 동일.
+_DEFAULT_LABELS_CONFIG: dict[str, Any] = {
+    "label_map": {},
+    "block_singletons": [],
+    "block_combinations": [],
+    "min_score": 0.0,
+    "aggregation_strategy": "simple",
+}
 
 # 기본 Regex 패턴: (패턴이름, 컴파일된 정규식)
 _DEFAULT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -52,25 +70,44 @@ _DEFAULT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
-# NER 엔티티에서 B- / I- 접두사를 제거한 레이블 매핑
-# PII 특화 NER 모델은 "B-이름", "I-전화번호" 등 반환
-_ENTITY_LABEL_MAP: dict[str, str] = {
-    "이름": "person",
-    "전화번호": "phone_number",
-    "휴대전화번호": "mobile_number",
-    "주민등록번호": "resident_id",
-    "계좌번호": "account_number",
-    "카드번호": "card_number",
-    "여권번호": "passport_number",
-    "운전면허번호": "driver_license",
-    "전자메일": "email",
-    "로그인ID": "login_id",
-    "상세주소": "address",
-    "우편번호": "zip_code",
-    "가맹점명": "merchant",
-    "결제금액": "payment_amount",
-    "신용점수": "credit_score",
-}
+def _load_pii_labels(model_dir: Path) -> dict[str, Any]:
+    """모델 폴더에서 `pii_labels.json` 을 읽어 dict 로 반환한다.
+
+    파일이 없거나 파싱 실패 시 fail-open — `_DEFAULT_LABELS_CONFIG`
+    기반 빈 기본값을 반환하고 debug 로그 한 줄만 남긴다.
+
+    Args:
+        model_dir: NER 모델 폴더 (`_MODEL_BASE_DIR / model_name`).
+
+    Returns:
+        키(`label_map`, `block_singletons`, `block_combinations`,
+        `min_score`, `aggregation_strategy`) 를 모두 채운 dict.
+    """
+    config: dict[str, Any] = {
+        "label_map": {},
+        "block_singletons": [],
+        "block_combinations": [],
+        "min_score": _DEFAULT_LABELS_CONFIG["min_score"],
+        "aggregation_strategy": _DEFAULT_LABELS_CONFIG[
+            "aggregation_strategy"
+        ],
+    }
+    labels_path = model_dir / _PII_LABELS_FILENAME
+    try:
+        with labels_path.open("r", encoding="utf-8") as fp:
+            raw = json.load(fp)
+    except (OSError, ValueError):
+        logger.debug(
+            "pii_labels.json 로드 실패, fail-open 기본값 사용: %s",
+            labels_path,
+        )
+        return config
+
+    if isinstance(raw, dict):
+        for key in _DEFAULT_LABELS_CONFIG:
+            if key in raw:
+                config[key] = raw[key]
+    return config
 
 
 class L5Layer(BaseLayer):
@@ -78,6 +115,11 @@ class L5Layer(BaseLayer):
 
     1단계 Regex로 정형 PII를 빠르게 걸러내고,
     2단계 NER 모델로 엔티티 조합을 검사한다.
+    NER 판정 계약(`label_map`, `block_singletons`, `min_score`,
+    `aggregation_strategy`) 은 모델 폴더의 `pii_labels.json` 에서
+    읽어 인스턴스 속성에 저장된다. 생성자 인자로 오버라이드하거나
+    런타임에 속성 대입으로 갱신할 수 있다 — 차후 ADMIN 정책이
+    `min_score` 등을 주입할 때 사용되는 주입 표면.
     """
 
     name: str = "L5"
@@ -86,17 +128,60 @@ class L5Layer(BaseLayer):
         self,
         model_name: str = "ner-ko",
         extra_patterns: list[str] | None = None,
+        *,
+        min_score: float | None = None,
+        label_map: dict[str, str] | None = None,
+        block_singletons: list[str] | None = None,
+        aggregation_strategy: str | None = None,
     ) -> None:
         """L5Layer 초기화.
 
         Args:
             model_name: NER 모델 폴더명.
             extra_patterns: 추가 차단 정규식 리스트.
+            min_score: NER 엔티티 스코어 컷오프. `None` 이면 모델
+                폴더의 `pii_labels.json` 값을 사용.
+            label_map: 모델 로컬 라벨(B-/I- 접두 제거 후) → 정규화
+                PII 타입 매핑. `None` 이면 `pii_labels.json` 값 사용.
+            block_singletons: 단일 검출로 차단할 정규화 타입 목록.
+                `None` 이면 `pii_labels.json` 값 사용.
+            aggregation_strategy: HuggingFace NER 파이프라인
+                aggregation 전략. `None` 이면 `pii_labels.json` 값 사용.
         """
         self.model_name = model_name
         self.extra_patterns: list[str] = (
             extra_patterns if extra_patterns is not None else []
         )
+
+        # 1) 모델 폴더의 pii_labels.json 을 먼저 읽고,
+        # 2) 생성자 오버라이드(None 아닌 값)로 덮어쓴 뒤,
+        # 3) 평평한 mutable 속성으로 보관 — _check_ner 가 매 호출 시
+        #    직접 참조하므로 `layer.min_score = X` 형태의 라이브
+        #    갱신도 다음 요청부터 즉시 반영된다.
+        file_cfg = _load_pii_labels(_MODEL_BASE_DIR / model_name)
+
+        self.min_score: float = float(
+            file_cfg["min_score"] if min_score is None else min_score,
+        )
+        self.label_map: dict[str, str] = dict(
+            file_cfg["label_map"] if label_map is None else label_map,
+        )
+        self.block_singletons: frozenset[str] = frozenset(
+            file_cfg["block_singletons"]
+            if block_singletons is None
+            else block_singletons,
+        )
+        self.aggregation_strategy: str = str(
+            file_cfg["aggregation_strategy"]
+            if aggregation_strategy is None
+            else aggregation_strategy,
+        )
+        # block_combinations 는 현재 계약상 빈 배열 — 미래 예약.
+        self._block_combinations: tuple[tuple[str, ...], ...] = tuple(
+            tuple(combo)
+            for combo in file_cfg.get("block_combinations", [])
+        )
+
         self._ner_model: Any = self._load_ner_model(model_name)
 
     def _load_ner_model(self, model_name: str) -> Any:
@@ -211,7 +296,7 @@ class L5Layer(BaseLayer):
         raw_label = first.get("entity", "")
         # B-이름, I-전화번호 → 이름, 전화번호
         clean_label = raw_label.split("-", 1)[-1]
-        pii_type = _ENTITY_LABEL_MAP.get(
+        pii_type = self.label_map.get(
             clean_label,
             clean_label,
         )
