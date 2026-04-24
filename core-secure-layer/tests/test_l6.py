@@ -12,6 +12,18 @@ def _req(text):
     return GuardrailRequest(user_input=text)
 
 
+@pytest.fixture(autouse=True)
+def _skip_real_model_load(monkeypatch):
+    # L6Layer 의 실제 Safety 모델 로딩을 스킵 (기본 kanana-safeguard-8b 는
+    # ~16GB RAM 을 쓰므로 테스트에서 로드하면 스왑 확장 등 부담이 크다).
+    def _noop(self):
+        self._tokenizer = None
+        self._model = None
+        self._model_loaded = False
+
+    monkeypatch.setattr(L6Layer, "_load_model", _noop)
+
+
 @pytest.fixture
 def layer():
     """모델 미로드 상태의 L6Layer 인스턴스.

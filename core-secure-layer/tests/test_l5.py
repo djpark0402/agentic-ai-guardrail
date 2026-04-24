@@ -144,6 +144,17 @@ def layer_generic_ner():
 class TestConstructorContract:
     """L5Layer 생성자가 필수 파라미터를 받는지 확인."""
 
+    @pytest.fixture(autouse=True)
+    def _skip_real_model_load(self, monkeypatch):
+        # 생성자 계약 테스트는 실제 ner-ko 모델 로딩이 불필요하므로 스킵.
+        # PIILabelsLoading / NerKoRegression 은 자체 monkeypatch 로 pipeline
+        # 만 가짜로 치환하므로 이 픽스처의 영향권 밖이다.
+        monkeypatch.setattr(
+            L5Layer,
+            "_load_ner_model",
+            lambda self, name: None,
+        )
+
     def test_accepts_all_params(self):
         # model_name 과 extra_patterns 를 전달할 수 있어야 한다
         inst = L5Layer(
