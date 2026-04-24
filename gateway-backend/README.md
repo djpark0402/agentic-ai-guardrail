@@ -173,10 +173,12 @@ LLM 토큰 스트리밍과 유사한 타이핑 UX 를 준다. 지연은 환경�
    ```
 
    서명 검증 자체는 ADMIN 이 수행한다. ADMIN 이 통과시키면 현재 활성
-   정책(`l1Enabled`..`l6Enabled`, `outboundEnabled`) 을 반환하고,
-   게이트웨이는 그 플래그에 따라 `core-secure-layer` L1~L6 를 선택적으로
-   실행하며, `outboundEnabled=false` 면 출력 가드레일 파이프라인 전체를
-   건너뛴다. 4xx/5xx 가 돌아오면 예외가 전파되어 해당 요청은 실패 처리된다.
+   정책(`l1Enabled`..`l6Enabled`, `outboundEnabled`, `l5Setting`) 을
+   반환하고, 게이트웨이는 그 플래그에 따라 `core-secure-layer` L1~L6 를
+   선택적으로 실행한다. `outboundEnabled=false` 면 출력 가드레일
+   파이프라인 전체를 건너뛰며, `l5Setting` 이 있으면 L5 실행 시 해당
+   모델 폴더와 NER threshold 를 적용한다. 4xx/5xx 가 돌아오면 예외가
+   전파되어 해당 요청은 실패 처리된다.
 
    ADMIN 응답 예시 (핵심 필드만):
 
@@ -188,12 +190,17 @@ LLM 토큰 스트리밍과 유사한 타이핑 UX 를 준다. 지연은 환경�
      "l4Enabled": true,
      "l5Enabled": true,
      "l6Enabled": true,
+     "l5Setting": {
+       "model": "pii_model_v11",
+       "threshold": 0.82
+     },
      "outboundEnabled": true
    }
    ```
 
    > 기존 호환: ADMIN 응답에 `outboundEnabled` 키가 없으면 기본값
    > `true` 로 간주되어 출력 가드레일이 기존과 동일하게 동작한다.
+   > `l5Setting` 이 없으면 기본 L5 모델 설정(`L5Layer()`) 을 사용한다.
 
 `SKIP_HEADER_VERIFICATION=true` 로 두면 4개 헤더 검증을 건너뛴다. 이 경우
 헤더가 없는 빈 문자열 값이 ADMIN 으로 전달되므로 ADMIN 이 4xx 를 낼 수
@@ -384,12 +391,12 @@ aggregation 전략(`aggregation_strategy`) 을 선언한다. 상태 API 는 이
 | `signals.available_models[].aggregation_strategy` | HF NER pipeline `aggregation_strategy`. |
 | `model_paths` | 1번째: 활성 모델 폴더 절대경로. 2번째: 모델 루트(`.../model`). |
 
-> **ADMIN 정책 주입 경로**: 차후 ADMIN 백엔드가 L5 정책을 내려줄 때,
-> `L5Layer(model_name=<정책>, min_score=<정책>, label_map=<정책>,
-> block_singletons=<정책>, aggregation_strategy=<정책>)` 생성자 또는
-> 기존 인스턴스 속성 대입(`layer.min_score = 0.8`) 으로 주입한다.
-> 두 경로 모두 `_check_ner` 에 즉시 반영되며, 상태 API 의 JSON 키 구조는
-> 그대로 유지된 채 값만 바뀐다.
+> **ADMIN 정책 주입 경로**: ADMIN 이 `l5Setting.model` 과
+> `l5Setting.threshold` 를 내려주면 게이트웨이는
+> `L5Layer(model_name=<model>, min_score=<threshold>)` 인스턴스를
+> 설정 조합별로 캐시해 L5 호출에 사용한다. `model` 값은
+> `core-secure-layer/layers/l5/model/<model>` 폴더명 그대로 해석된다.
+> `l5Setting` 이 없으면 기존 기본 L5 싱글턴을 사용한다.
 
 ###### L5 모델 계약 파일 `pii_labels.json`
 

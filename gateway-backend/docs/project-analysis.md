@@ -10,12 +10,13 @@ OpenAI 호환 `chat/completions` 요청을 받아 다음 파이프라인을 거�
 API에 프록시하는 가드레일 데모 게이트웨이이다.
 
 ```
-client → [policy fetch] → [input guardrail] → [Solar non-stream]
+client → [verify + policy fetch] → [input guardrail] → [Solar non-stream]
        → [output guardrail] → client (JSON or SSE)
 ```
 
-- 정책은 `admin-backend`의 `/api/v1/policies/active`에서 레이어별 플래그(L0~L5)로 수신
+- 정책은 `admin-backend`의 `/api/v1/gateway/verify`에서 레이어별 플래그(L1~L6)와 L5 전용 `l5Setting`으로 수신
 - 활성 레이어만 순차적으로 입력/출력 검사
+- L5 는 `l5Setting.model` 을 모델 폴더명으로, `l5Setting.threshold` 를 NER score 컷오프로 적용
 - LLM 호출은 **항상 non-stream**으로 수행하고, `stream=true`는 검증이 끝난 뒤
   내부에서 청크를 만들어 SSE로 재방출 — 유출 방지 목적
 
@@ -29,7 +30,7 @@ client → [policy fetch] → [input guardrail] → [Solar non-stream]
 | Chat 파이프라인 | `app/routers/chat.py` | OK (핵심 로직 분리 양호) |
 | Solar 클라이언트 | `app/services/solar_service.py` | 실연동 (AsyncOpenAI) |
 | 정책 조회 | `app/services/policy_service.py` | 실연동 (httpx) |
-| 보안 레이어 실행 | `app/services/security_layer_service.py` | **더미(PASS 고정)** |
+| 보안 레이어 실행 | `app/services/security_layer_service.py` | core-secure-layer 실연동 |
 | 요청/응답 모델 | `app/models/chat.py`, `guardrail.py`, `policy.py` | OK |
 | 플레이그라운드 | `app/static/index.html` | 제공 |
 | 단위 테스트 | `tests/unit/**` (9개 파일) | OK |
@@ -52,9 +53,9 @@ client → [policy fetch] → [input guardrail] → [Solar non-stream]
   존재하여 TDD 규칙과 일관.
 
 ### 3.2 의도된 한계 (데모 수준)
-- `SecurityLayerService._run_layer_input/output`이 항상 PASS — 실 보안 검사
-  로직이 아직 없음. 파일 docstring에 "core_secure_layer 실연동 이전"이라고
-  명시되어 **의도된 스텁**임이 분명.
+- L5 모델 선택은 ADMIN 의 `l5Setting.model` 이 실제 배포된
+  `core-secure-layer/layers/l5/model/<model>` 폴더명과 일치해야 한다.
+  경로가 틀리면 core L5 의 fail-open 정책에 따라 NER 단계가 no-op 이 될 수 있다.
 - 관측/감사 로그는 logging 한 줄 수준이며, 감사 추적(감사로그 저장소)은 없음.
 - 인증/레이트 리미팅은 없음 — README에 "사내망 가정"이라고 명시.
 

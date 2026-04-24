@@ -267,7 +267,9 @@ from core_secure_layer.layers.types import GuardrailRequest, LayerResult
 
 ### 5.3 레이어 레지스트리 — 숫자 ↔ 레이어 객체
 
-정책은 `l1Enabled`~`l6Enabled` 라는 불리언 여섯 개로 내려온다. 이걸 실제 레이어 객체로 바꿔 주는 "전화번호부" 가 `layer_registry.py` 다.
+정책은 `l1Enabled`~`l6Enabled` 라는 불리언 여섯 개와 L5 전용
+`l5Setting` 으로 내려온다. 이걸 실제 레이어 객체로 바꿔 주는
+"전화번호부" 가 `layer_registry.py` 다.
 
 `app/services/layer_registry.py:14-33`
 
@@ -284,11 +286,24 @@ _LAYER_MAP: dict[int, BaseLayer] = {
 
 def get_layer(layer_index: int) -> BaseLayer | None:
     return _LAYER_MAP.get(layer_index)
+
+
+def get_l5_layer(
+    *,
+    model_name: str | None,
+    threshold: float | None,
+) -> BaseLayer:
+    ...
 ```
 
 포인트:
 - 모듈이 import 되는 순간 `L1Layer()` ~ `L6Layer()` 가 **한 번씩만** 인스턴스화된다(파이썬에서 모듈은 최초 import 때 한 번만 실행되므로 자동 싱글턴).
 - 매 요청마다 새로 만드는 비용이 없고, 내부적으로 모델 가중치 등을 한 번만 로드하면 재사용된다.
+- L5 는 예외적으로 ADMIN 의 `l5Setting.model` 과
+  `l5Setting.threshold` 조합별 `L5Layer(model_name=..., min_score=...)`
+  인스턴스를 캐시한다. `model` 은
+  `core_secure_layer/layers/l5/model/<model>` 폴더명 그대로 해석된다.
+- `l5Setting` 이 없으면 기존 `_LAYER_MAP[5]` 기본 싱글턴을 사용한다.
 - 매핑이 없거나 `NotImplementedError` 를 던지는 레이어는 PASS 로 취급한다 (아래 5.5 참조).
 
 ### 5.4 정책 받아오기 — `PolicyService`
@@ -297,7 +312,7 @@ def get_layer(layer_index: int) -> BaseLayer | None:
 
 - 요청 body: 사용자의 4개 헤더 값(`apiKey`/`timestamp`/`nonce`/`signature`) + 게이트웨이가 계산한 `bodyHash` (SHA-256 hex). 상수 `_VERIFY_PATH = "/api/v1/gateway/verify"` 로 경로가 고정돼 있다.
 - 요청 헤더: 게이트웨이 자신의 `ADMIN_API_KEY` 를 `X-API-Key` 헤더로 함께 싣는다. 사용자의 `X-API-Key` 와는 별개 — 사용자 키는 body 의 `apiKey` 필드에만 들어간다.
-- 응답: ADMIN 이 정책을 **바로 내려줄 수도**, 검증 메타(valid/clientName 등) 를 최상위에 둔 **envelope 로 감싸 내려줄 수도** 있다. `_extract_policy_dict` 가 최상위 `l1Enabled` 존재 / `policy`·`data`·`result`·`payload` 같은 envelope 키 / 최상위 nested dict 순으로 탐색해 정책 dict 를 추출한 뒤, `GuardrailPolicy.model_validate(...)` 로 Pydantic 모델에 바인딩한다.
+- 응답: ADMIN 이 정책을 **바로 내려줄 수도**, 검증 메타(valid/clientName 등) 를 최상위에 둔 **envelope 로 감싸 내려줄 수도** 있다. `_extract_policy_dict` 가 최상위 `l1Enabled` 존재 / `policy`·`data`·`result`·`payload` 같은 envelope 키 / 최상위 nested dict 순으로 탐색해 정책 dict 를 추출한 뒤, `GuardrailPolicy.model_validate(...)` 로 Pydantic 모델에 바인딩한다. 정책 안의 `l5Setting` 은 L5 모델 폴더명과 NER threshold 로 보존된다.
 
 `app/models/policy.py`
 
@@ -309,6 +324,7 @@ l2: bool = Field(alias="l2Enabled")
 l3: bool = Field(alias="l3Enabled")
 l4: bool = Field(alias="l4Enabled")
 l5: bool = Field(alias="l5Enabled")
+l5_setting: L5Setting | None = Field(default=None, alias="l5Setting")
 l6: bool = Field(alias="l6Enabled")
 outbound: bool = Field(default=True, alias="outboundEnabled")
 ```
@@ -316,6 +332,7 @@ outbound: bool = Field(default=True, alias="outboundEnabled")
 - admin-backend 응답의 camelCase 키(`l1Enabled`) 를 alias 로 받고, 내부에서는 snake_case 짧은 이름(`l1`) 을 쓴다.
 - `extra="ignore"` 덕분에 `name`, `id`, `createdAt` 같은 모르는 필드는 무시된다.
 - **`outbound`** 는 출력 가드레일 파이프라인 전체 on/off 스위치다. False 면 L1~L6 활성 레이어와 무관하게 `check_output` 단계를 통째로 생략한다. ADMIN 응답에 `outboundEnabled` 키가 없으면 기본값 `True` 로 간주되어 기존 동작을 유지한다(하위 호환).
+- **`l5_setting`** 은 `model` 과 `threshold` 를 담는다. `threshold` 는 0.0~1.0 범위만 허용하며, `model` 은 L5 모델 폴더명으로 사용된다.
 
 `app/models/policy.py:66-73`
 
