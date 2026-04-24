@@ -18,6 +18,7 @@ from app.dependencies import (
 from app.main import app
 from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
+from app.routers.chat import _log_request_summary
 from app.services.request_verifier import (
     NonceStore,
 )
@@ -228,6 +229,33 @@ def test_chat_completions_logs_request_summary(client, caplog):
     assert "output_guardrail_ms=" in caplog.text
     assert "response_emit_ms=" in caplog.text
     assert "total_ms=" in caplog.text
+
+
+def test_request_summary_logs_input_guardrail_layer_timings(caplog):
+    """입력 가드레일 총합 바로 아래에 레이어별 소요 시간을 남긴다."""
+    timings = {
+        "policy_fetch": 1.0,
+        "input_guardrail": 10.0,
+        "input_guardrail_L1": 3.0,
+        "input_guardrail_L3": 7.0,
+        "llm_call": 5.0,
+        "total": 16.0,
+    }
+
+    with caplog.at_level(logging.INFO):
+        _log_request_summary(
+            "session-id",
+            final_status="success",
+            stream=False,
+            timings=timings,
+        )
+
+    assert "input_guardrail_ms=10.0" in caplog.text
+    assert "input_guardrail_L1(인코딩 검사)_ms=3.0" in caplog.text
+    assert "input_guardrail_L3(공격 패턴 유사도)_ms=7.0" in caplog.text
+    assert caplog.text.index("input_guardrail_ms=10.0") < caplog.text.index(
+        "input_guardrail_L1(인코딩 검사)_ms=3.0"
+    )
 
 
 def test_chat_completions_input_blocked_returns_stop_with_guide_content(

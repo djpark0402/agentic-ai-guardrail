@@ -57,7 +57,10 @@ from app.services.request_verifier import (
     verify_and_remember_nonce,
     verify_timestamp,
 )
-from app.services.security_layer_service import SecurityLayerService
+from app.services.security_layer_service import (
+    SecurityLayerService,
+    format_layer_display_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +100,40 @@ _TIMING_ORDER: tuple[str, ...] = (
 )
 
 
+def _ordered_timing_names(timings: dict[str, float]) -> list[str]:
+    """요약 로그에 출력할 타이밍 키를 안정적인 순서로 반환한다."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    for name in _TIMING_ORDER:
+        if name in timings:
+            ordered.append(name)
+            seen.add(name)
+        if name in {"input_guardrail", "output_guardrail"}:
+            layer_prefix = f"{name}_L"
+            layer_names = sorted(
+                key
+                for key in timings
+                if key.startswith(layer_prefix) and key not in seen
+            )
+            ordered.extend(layer_names)
+            seen.update(layer_names)
+
+    extras = sorted(key for key in timings if key not in seen)
+    ordered.extend(extras)
+    return ordered
+
+
+def _display_timing_name(name: str) -> str:
+    """콘솔 로그에 출력할 타이밍 이름을 사람이 읽기 좋게 변환한다."""
+    for prefix in ("input_guardrail_", "output_guardrail_"):
+        if not name.startswith(prefix):
+            continue
+        layer_name = name.removeprefix(prefix)
+        return f"{prefix}{format_layer_display_name(layer_name)}"
+    return name
+
+
 def _elapsed_ms(started_at: float) -> float:
     """지정 시각부터 현재까지의 경과 시간을 밀리초로 반환한다."""
     return (time.perf_counter() - started_at) * 1000
@@ -125,11 +162,9 @@ def _log_request_summary(
         f"[{session_id}] 요청 완료 요약: "
         f"final_status={final_status} stream={stream}"
     ]
-    for name in _TIMING_ORDER:
-        elapsed = timings.get(name)
-        if elapsed is None:
-            continue
-        lines.append(f"  {name}_ms={elapsed:.1f}")
+    for name in _ordered_timing_names(timings):
+        elapsed = timings[name]
+        lines.append(f"  {_display_timing_name(name)}_ms={elapsed:.1f}")
     logger.info("\n".join(lines))
 
 
@@ -506,6 +541,7 @@ async def _run_observe_mode_pipeline(
     input_results = await security_service.check_input_all(
         messages=request.messages,
         policy=policy,
+        timings=timings,
     )
     input_guardrail_ms = _record_timing(timings, "input_guardrail", t0)
     logger.info(
@@ -559,6 +595,7 @@ async def _run_observe_mode_pipeline(
         output_results = await security_service.check_output_all(
             content=content,
             policy=policy,
+            timings=timings,
         )
     output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
     logger.info(
@@ -1027,6 +1064,7 @@ async def chat_completions(
     input_result = await security_service.check_input(
         messages=request.messages,
         policy=policy,
+        timings=timings,
     )
     input_guardrail_ms = _record_timing(timings, "input_guardrail", t0)
     logger.info(
@@ -1122,6 +1160,7 @@ async def chat_completions(
         output_result = await security_service.check_output(
             content=content,
             policy=policy,
+            timings=timings,
         )
     output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
     logger.info(

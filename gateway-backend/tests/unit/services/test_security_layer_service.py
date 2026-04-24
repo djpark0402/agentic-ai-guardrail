@@ -67,6 +67,20 @@ async def test_check_input_runs_only_enabled_layers():
     assert spy.input_calls == [1, 3, 5, 6]
 
 
+async def test_check_input_records_layer_timings():
+    """입력 검사 요약 로그용 레이어별 소요 시간을 기록한다."""
+    spy = _SpyService()
+    policy = _policy(l2=False, l4=False, l5=False, l6=False)
+    timings: dict[str, float] = {}
+    messages = [Message(role="user", content="hi")]
+
+    await spy.check_input(messages=messages, policy=policy, timings=timings)
+
+    assert spy.input_calls == [1, 3]
+    assert set(timings) == {"input_guardrail_L1", "input_guardrail_L3"}
+    assert all(elapsed >= 0 for elapsed in timings.values())
+
+
 async def test_check_output_runs_only_enabled_layers():
     """policy 에서 비활성화된 레이어는 출력 검사에서도 호출되지 않는다."""
     spy = _SpyService()
@@ -120,7 +134,7 @@ async def test_check_input_logs_layer_block_reason(service, mocker, caplog):
         )
 
     assert "입력 레이어 결과" in caplog.text
-    assert "layer=L1" in caplog.text
+    assert "layer=L1(인코딩 검사)" in caplog.text
     assert "status=block" in caplog.text
     assert "reason=injection detected" in caplog.text
 
@@ -154,7 +168,7 @@ async def test_run_layer_output_logs_not_implemented_reason(
         await service._run_layer_output(4, "응답 텍스트")
 
     assert "출력 레이어 결과" in caplog.text
-    assert "layer=L4" in caplog.text
+    assert "layer=L4(정책 위반 검사)" in caplog.text
     assert "status=pass" in caplog.text
     assert "note=미구현" in caplog.text
 
@@ -414,4 +428,47 @@ async def test_check_input_short_circuits_on_block(mocker):
 
     assert result.status == CheckStatus.BLOCK
     assert call_log == ["L1"]
+    mock_l2.check.assert_not_called()
+
+
+async def test_check_input_records_timing_only_for_executed_layers(mocker):
+    """BLOCK 으로 중단되면 실행된 입력 레이어 시간만 기록한다."""
+    from core_secure_layer.layers.types import (
+        LayerResult,
+        Severity,
+    )
+
+    mock_l1 = mocker.MagicMock()
+    mock_l1.name = "L1"
+    mock_l1.check = mocker.AsyncMock(
+        return_value=LayerResult(
+            name="L1",
+            allowed=False,
+            reason="blocked",
+            severity=Severity.HIGH,
+        )
+    )
+    mock_l2 = mocker.MagicMock()
+    mock_l2.name = "L2"
+    mock_l2.check = mocker.AsyncMock()
+
+    def fake_get_layer(idx):
+        return {1: mock_l1, 2: mock_l2}.get(idx)
+
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        side_effect=fake_get_layer,
+    )
+
+    service = SecurityLayerService()
+    policy = _policy(l3=False, l4=False, l5=False, l6=False)
+    timings: dict[str, float] = {}
+    result = await service.check_input(
+        messages=[Message(role="user", content="test")],
+        policy=policy,
+        timings=timings,
+    )
+
+    assert result.status == CheckStatus.BLOCK
+    assert set(timings) == {"input_guardrail_L1"}
     mock_l2.check.assert_not_called()
