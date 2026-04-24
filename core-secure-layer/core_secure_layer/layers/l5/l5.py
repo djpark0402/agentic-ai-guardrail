@@ -187,6 +187,11 @@ class L5Layer(BaseLayer):
     def _load_ner_model(self, model_name: str) -> Any:
         """NER 모델 로드를 시도한다.
 
+        모델 계약(`pii_labels.json`) 의 `aggregation_strategy` 를 HF
+        `pipeline("ner", ...)` 에 전달한다. 기본값 `"simple"` 에서는
+        각 예측이 `entity` 대신 `entity_group` 키로 집계되므로
+        `_check_ner` 는 두 키를 모두 허용한다.
+
         Args:
             model_name: 모델 폴더명.
 
@@ -203,6 +208,7 @@ class L5Layer(BaseLayer):
                 "ner",
                 model=str(model_path),
                 tokenizer=str(model_path),
+                aggregation_strategy=self.aggregation_strategy,
             )
         except Exception:
             logger.debug(
@@ -270,8 +276,14 @@ class L5Layer(BaseLayer):
     def _check_ner(self, text: str) -> LayerResult | None:
         """2단계: NER 모델로 PII 엔티티를 탐지한다.
 
-        PII 특화 NER 모델이 엔티티를 감지하면
-        즉시 차단한다.
+        계약: `score >= self.min_score` 인 엔티티를 순회하며, 각 엔티티
+        라벨(B-/I- 접두 제거 후 `self.label_map` 정규화)이
+        `self.block_singletons` 에 포함되면 해당 엔티티로 차단한다.
+        조건을 만족하는 첫 엔티티가 없으면 허용(None).
+
+        평평한 속성 (`self.min_score`, `self.label_map`,
+        `self.block_singletons`) 을 매 호출 시 참조하므로, ADMIN 정책
+        핫스왑(속성 대입) 시 다음 호출부터 즉시 반영된다.
 
         Args:
             text: 검사 대상 텍스트.
@@ -291,25 +303,39 @@ class L5Layer(BaseLayer):
         if not entities:
             return None
 
-        # 첫 번째 감지된 엔티티로 차단
-        first = entities[0]
-        raw_label = first.get("entity", "")
-        # B-이름, I-전화번호 → 이름, 전화번호
-        clean_label = raw_label.split("-", 1)[-1]
-        pii_type = self.label_map.get(
-            clean_label,
-            clean_label,
-        )
-        start = first.get("start", 0)
+        for ent in entities:
+            # 1) score 컷오프. score 가 없으면 0.0 으로 간주 → min_score>0
+            #    환경에서는 자동 필터. min_score=0.0 인 테스트/기본값
+            #    환경에서는 모든 엔티티가 통과한다.
+            score = float(ent.get("score", 0.0))
+            if score < self.min_score:
+                continue
 
-        return LayerResult(
-            name=self.name,
-            allowed=False,
-            reason=(f"PII detected: {pii_type} at position {start}"),
-            severity=Severity.HIGH,
-            confidence=0.0,
-            tags=["pii", "ner", pii_type],
-        )
+            # 2) 라벨 정규화. aggregation 여부에 따라 key 가 다를 수 있어
+            #    `entity` 와 `entity_group` 둘 다 확인.
+            raw_label = ent.get("entity") or ent.get("entity_group") or ""
+            clean_label = raw_label.split("-", 1)[-1]
+            pii_type = self.label_map.get(clean_label, clean_label)
+
+            # 3) block_singletons 게이트. 비어 있으면 어떤 엔티티도 차단
+            #    하지 않는다 — 계약을 전혀 선언하지 않은 fail-open 상태.
+            if pii_type not in self.block_singletons:
+                continue
+
+            start = ent.get("start", 0)
+            return LayerResult(
+                name=self.name,
+                allowed=False,
+                reason=(
+                    f"PII detected: {pii_type} at position {start}"
+                ),
+                severity=Severity.HIGH,
+                confidence=0.0,
+                tags=["pii", "ner", pii_type],
+            )
+
+        # TODO: block_combinations 는 현재 계약상 비어 있어 no-op.
+        return None
 
     async def _check(
         self,
