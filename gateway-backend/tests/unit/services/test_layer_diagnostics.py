@@ -232,6 +232,140 @@ def test_l5_ner_missing_still_effective_via_regex() -> None:
     assert "regex" in (status.detail or "")
 
 
+def _write_pii_labels(
+    path: Path,
+    *,
+    min_score: float,
+    block_singletons: list[str],
+    aggregation_strategy: str = "simple",
+) -> None:
+    """테스트용 pii_labels.json 파일을 작성한다."""
+    import json
+
+    path.write_text(
+        json.dumps(
+            {
+                "label_map": {},
+                "block_singletons": block_singletons,
+                "block_combinations": [],
+                "min_score": min_score,
+                "aggregation_strategy": aggregation_strategy,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_scan_l5_models_returns_dicts_with_metadata(tmp_path: Path) -> None:
+    """`model/` 루트 아래 각 폴더의 `pii_labels.json` 을 메타와 함께
+    수집해 이름순으로 반환한다."""
+    root = tmp_path / "model"
+    (root / "ner-ko").mkdir(parents=True)
+    (root / "pii_model_v11").mkdir(parents=True)
+    _write_pii_labels(
+        root / "ner-ko" / "pii_labels.json",
+        min_score=0.7,
+        block_singletons=["person", "phone_number"],
+    )
+    _write_pii_labels(
+        root / "pii_model_v11" / "pii_labels.json",
+        min_score=0.65,
+        block_singletons=["person"],
+        aggregation_strategy="max",
+    )
+
+    result = layer_diagnostics._scan_l5_models(root)
+    assert [m["name"] for m in result] == ["ner-ko", "pii_model_v11"]
+    assert result[0]["min_score"] == 0.7
+    assert result[0]["block_singletons_count"] == 2
+    assert result[0]["aggregation_strategy"] == "simple"
+    assert result[1]["min_score"] == 0.65
+    assert result[1]["block_singletons_count"] == 1
+    assert result[1]["aggregation_strategy"] == "max"
+
+
+def test_scan_l5_models_tolerates_missing_pii_labels(tmp_path: Path) -> None:
+    """pii_labels.json 이 없는 폴더는 이름만 노출하고 metadata 는 None."""
+    root = tmp_path / "model"
+    (root / "empty_model").mkdir(parents=True)
+
+    result = layer_diagnostics._scan_l5_models(root)
+    assert result == [
+        {
+            "name": "empty_model",
+            "min_score": None,
+            "block_singletons_count": None,
+            "aggregation_strategy": None,
+        }
+    ]
+
+
+def test_scan_l5_models_returns_empty_when_root_missing(
+    tmp_path: Path,
+) -> None:
+    """루트 디렉터리 자체가 없으면 예외 없이 빈 리스트."""
+    result = layer_diagnostics._scan_l5_models(tmp_path / "does_not_exist")
+    assert result == []
+
+
+def test_l5_signals_expose_available_models_and_min_score(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_probe_l5 signals 에 available_models 와 active min_score 가 실림."""
+    root = tmp_path / "model"
+    (root / "ner-ko").mkdir(parents=True)
+    _write_pii_labels(
+        root / "ner-ko" / "pii_labels.json",
+        min_score=0.7,
+        block_singletons=["person"],
+    )
+
+    monkeypatch.setattr(
+        layer_diagnostics,
+        "_layer_base_dir",
+        lambda layer: tmp_path,
+    )
+
+    fake = _FakeL5(
+        _ner_model=object(),
+        model_name="ner-ko",
+        min_score=0.7,
+    )
+    status = collect_layer_statuses({5: fake})[0]
+
+    assert status.signals["min_score"] == 0.7
+    assert status.signals["available_models"] == [
+        {
+            "name": "ner-ko",
+            "min_score": 0.7,
+            "block_singletons_count": 1,
+            "aggregation_strategy": "simple",
+        }
+    ]
+    # 모델 경로에 활성 모델 폴더 + 모델 루트 두 개가 나란히 노출된다.
+    assert any(p.endswith("/model/ner-ko") for p in status.model_paths)
+    assert any(p.endswith("/model") for p in status.model_paths)
+
+
+def test_l5_signals_min_score_absent_when_layer_missing_attribute(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """레이어 인스턴스에 min_score 속성이 없으면 signals 에 None."""
+    root = tmp_path / "model"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(
+        layer_diagnostics,
+        "_layer_base_dir",
+        lambda layer: tmp_path,
+    )
+
+    fake = _FakeL5(_ner_model=object(), model_name="ner-ko")
+    status = collect_layer_statuses({5: fake})[0]
+    assert status.signals["min_score"] is None
+
+
 # ---------- L6 ----------
 
 

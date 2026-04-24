@@ -18,12 +18,15 @@ core-secure-layer 의 각 레이어는 로드 신호와 "실제로 판정을 낼
 - L6 은 `_model_loaded` 플래그만 True 면 충분.
 
 gateway-backend 쪽에서 레이어 인덱스별 probe 함수를 매핑하는 방식으로
-이 차이를 흡수한다. core-secure-layer 는 수정하지 않는다.
+이 차이를 흡수한다. probe 는 레이어 인스턴스의 공개 속성만 읽고,
+L5 의 모델 폴더 레이아웃 스캔(`pii_labels.json` 메타) 역시 gateway
+쪽에서 수행한다.
 """
 
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -228,11 +231,79 @@ def _probe_l4(layer: Any) -> LayerStatus:
     )
 
 
+def _scan_l5_models(root: Path) -> list[dict[str, Any]]:
+    """L5 모델 루트 아래 배포된 폴더의 계약 메타를 모아 반환한다.
+
+    각 항목은 해당 모델 폴더의 ``pii_labels.json`` 에서 핵심 계약을
+    읽어 다음 구조로 반환된다::
+
+        {
+            "name": "<folder name>",
+            "min_score": float | None,
+            "block_singletons_count": int | None,
+            "aggregation_strategy": str | None,
+        }
+
+    `pii_labels.json` 이 없는 모델 폴더는 이름만 실리고 나머지는
+    ``None`` 이 된다. 루트 디렉터리 자체가 없거나 스캔 중 예외가
+    발생하면 빈 리스트를 반환한다 — 상태 조회가 운영을 막지 않도록
+    fail-open 을 유지한다.
+
+    Args:
+        root: L5 모델 루트 (일반적으로 `layers/l5/model`).
+
+    Returns:
+        모델 폴더별 메타 dict 리스트, 이름 오름차순 정렬.
+    """
+    if not root.exists() or not root.is_dir():
+        return []
+    try:
+        entries = sorted(
+            p
+            for p in root.iterdir()
+            if p.is_dir() and not p.name.startswith(".")
+        )
+    except OSError:
+        return []
+
+    result: list[dict[str, Any]] = []
+    for entry in entries:
+        labels_path = entry / "pii_labels.json"
+        item: dict[str, Any] = {
+            "name": entry.name,
+            "min_score": None,
+            "block_singletons_count": None,
+            "aggregation_strategy": None,
+        }
+        cfg: Any = None
+        if labels_path.is_file():
+            try:
+                with labels_path.open("r", encoding="utf-8") as fp:
+                    cfg = json.load(fp)
+            except OSError, ValueError:
+                cfg = None
+        if isinstance(cfg, dict):
+            raw_score = cfg.get("min_score")
+            if isinstance(raw_score, (int, float)):
+                item["min_score"] = float(raw_score)
+            singletons = cfg.get("block_singletons")
+            if isinstance(singletons, list):
+                item["block_singletons_count"] = len(singletons)
+            agg = cfg.get("aggregation_strategy")
+            if isinstance(agg, str):
+                item["aggregation_strategy"] = agg
+        result.append(item)
+    return result
+
+
 def _probe_l5(layer: Any) -> LayerStatus:
     """L5: NER 모델이 로드됐거나 regex 경로가 살아 있으면 동작 가능.
 
     L5 는 ``_check_regex`` 와 ``_check_ner`` 를 순차로 호출하므로,
     NER 모델이 없더라도 regex 규칙만으로 일부 PII 는 잡을 수 있다.
+    signals 에는 배포된 모델 폴더 목록(`available_models`) 과 현재
+    활성 모델의 `min_score` 를 함께 노출해 운영자가 "어떤 모델이
+    있고, 어떤 임계값으로 동작하는가" 를 한 번에 확인할 수 있게 한다.
     """
     ner = getattr(layer, "_ner_model", None)
     ner_loaded = ner is not None
@@ -244,18 +315,26 @@ def _probe_l5(layer: Any) -> LayerStatus:
 
     effective = ner_loaded or regex_ready
 
+    base = _layer_base_dir(layer)
+    model_root = base / "model" if base is not None else None
+    available_models = (
+        _scan_l5_models(model_root) if model_root is not None else []
+    )
+
     signals: dict[str, Any] = {
         "ner_model_loaded": ner_loaded,
         "regex_ready": regex_ready,
         "model_name": getattr(layer, "model_name", None),
+        "min_score": getattr(layer, "min_score", None),
+        "available_models": available_models,
     }
 
-    base = _layer_base_dir(layer)
     paths: list[str] = []
     if base is not None:
         name = getattr(layer, "model_name", "")
-        target = base / "model" / name if name else base / "model"
-        paths.append(str(target))
+        if name:
+            paths.append(str(base / "model" / name))
+        paths.append(str(base / "model"))
 
     detail = None if ner_loaded else "_ner_model=None (regex 만 동작)"
     return LayerStatus(
