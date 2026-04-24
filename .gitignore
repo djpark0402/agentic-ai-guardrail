@@ -25,6 +25,9 @@ __pycache__/
 # OS
 .DS_Store
 .claude/settings.local.json
+
+# AES master keystores (per-environment, NEVER commit)
+admin-backend/config/*.p12
 core-secure-layer/core_secure_layer/layers/**/model/**
 !core-secure-layer/core_secure_layer/layers/**/model/
 !core-secure-layer/core_secure_layer/layers/**/model/*/

@@ -88,7 +88,7 @@ def _run_repl(layer: L5Layer) -> None:
             if not line:
                 break
             _judge_once(layer, line)
-    except EOFError, KeyboardInterrupt:
+    except (EOFError, KeyboardInterrupt):
         print()
 
 

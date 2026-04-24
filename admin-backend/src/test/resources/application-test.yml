@@ -8,3 +8,8 @@ spring:
     hibernate:
       ddl-auto: create-drop
     database-platform: org.hibernate.dialect.H2Dialect
+aag:
+  crypto:
+    keystore-path: classpath:test-keystore.p12
+    keystore-password: test1234
+    key-alias: test-aes

@@ -193,10 +193,10 @@ class L5Layer(BaseLayer):
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
             id2label = dict(config.get("id2label", {}))
-        except OSError, json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             try:
                 id2label = dict(ner_pipeline.model.config.id2label)
-            except AttributeError, TypeError:
+            except (AttributeError, TypeError):
                 id2label = {}
 
         label_map: dict[str, str] = {}

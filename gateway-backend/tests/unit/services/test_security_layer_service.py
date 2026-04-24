@@ -52,7 +52,9 @@ async def test_check_input_returns_pass_when_all_enabled(service):
 
 async def test_check_output_returns_pass_when_all_enabled(service):
     """모든 레이어 활성 정책으로 check_output() 은 PASS 를 반환한다."""
-    result = await service.check_output(content="응답", policy=_policy())
+    result = await service.check_output(
+        content="안녕하세요! 무엇을 도와드릴까요?", policy=_policy()
+    )
     assert result.status == CheckStatus.PASS
 
 
@@ -92,6 +94,69 @@ async def test_check_input_logs_enabled_layers(service, caplog):
             messages=[Message(role="user", content="x")], policy=policy
         )
     assert "[1, 3, 4, 6]" in caplog.text
+
+
+async def test_check_input_logs_layer_block_reason(service, mocker, caplog):
+    """레이어가 BLOCK 이면 레이어명과 사유를 로그에 남긴다."""
+    from core_secure_layer.layers.types import LayerResult, Severity
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L1"
+    mock_layer.check.return_value = LayerResult(
+        name="L1",
+        allowed=False,
+        reason="injection detected",
+        severity=Severity.HIGH,
+    )
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        return_value=mock_layer,
+    )
+
+    with caplog.at_level(logging.INFO):
+        await service.check_input(
+            messages=[Message(role="user", content="악성 입력")],
+            policy=_policy(l2=False, l3=False, l4=False, l5=False, l6=False),
+        )
+
+    assert "입력 레이어 결과" in caplog.text
+    assert "layer=L1" in caplog.text
+    assert "status=block" in caplog.text
+    assert "reason=injection detected" in caplog.text
+
+
+async def test_run_layer_input_logs_unmapped_layer_reason(service, caplog):
+    """매핑 없는 레이어 PASS 도 이유와 함께 로그에 남긴다."""
+    with caplog.at_level(logging.INFO):
+        await service._run_layer_input(
+            99, [Message(role="user", content="테스트")]
+        )
+
+    assert "입력 레이어 결과" in caplog.text
+    assert "layer=L99" in caplog.text
+    assert "status=pass" in caplog.text
+    assert "note=매핑 없음" in caplog.text
+
+
+async def test_run_layer_output_logs_not_implemented_reason(
+    service, mocker, caplog
+):
+    """미구현 출력 레이어 PASS 도 이유와 함께 로그에 남긴다."""
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L4"
+    mock_layer.check.side_effect = NotImplementedError
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        return_value=mock_layer,
+    )
+
+    with caplog.at_level(logging.INFO):
+        await service._run_layer_output(4, "응답 텍스트")
+
+    assert "출력 레이어 결과" in caplog.text
+    assert "layer=L4" in caplog.text
+    assert "status=pass" in caplog.text
+    assert "note=미구현" in caplog.text
 
 
 # ── core-secure-layer 실연동 테스트 ─────────────────────────
@@ -192,6 +257,120 @@ async def test_run_layer_output_block_propagates(service, mocker):
     assert result.status == CheckStatus.BLOCK
     assert result.reason == "sensitive data leak"
     assert result.layer == "L3"
+
+
+async def test_check_input_all_collects_every_enabled_layer_result(mocker):
+    """check_input_all 은 BLOCK 이 있어도 모든 활성 레이어를 실행하고
+    결과 리스트를 policy 순서대로 반환한다 (short-circuit 안 함)."""
+    from core_secure_layer.layers.types import (
+        LayerResult,
+        Severity,
+    )
+
+    call_log: list[str] = []
+
+    def _make_layer(name: str, allowed: bool, reason: str | None = None):
+        mock = mocker.MagicMock()
+        mock.name = name
+
+        async def fake_check(request):
+            call_log.append(name)
+            return LayerResult(
+                name=name,
+                allowed=allowed,
+                reason=reason,
+                severity=(Severity.HIGH if not allowed else Severity.NONE),
+            )
+
+        mock.check = fake_check
+        return mock
+
+    mock_l1 = _make_layer("L1", allowed=False, reason="injection")
+    mock_l2 = _make_layer("L2", allowed=True)
+    mock_l3 = _make_layer("L3", allowed=False, reason="pii")
+
+    def fake_get_layer(idx):
+        return {1: mock_l1, 2: mock_l2, 3: mock_l3}.get(idx)
+
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        side_effect=fake_get_layer,
+    )
+
+    service = SecurityLayerService()
+    policy = _policy(l4=False, l5=False, l6=False)
+    messages = [Message(role="user", content="데모 입력")]
+    results = await service.check_input_all(messages=messages, policy=policy)
+
+    # 모든 활성 레이어가 호출되었고 순서가 policy.enabled_layers() 와 일치.
+    assert call_log == ["L1", "L2", "L3"]
+    assert [r.layer for r in results] == ["L1", "L2", "L3"]
+    assert [r.status for r in results] == [
+        CheckStatus.BLOCK,
+        CheckStatus.PASS,
+        CheckStatus.BLOCK,
+    ]
+    assert results[0].reason == "injection"
+    assert results[2].reason == "pii"
+
+
+async def test_check_output_all_collects_every_enabled_layer_result(mocker):
+    """check_output_all 도 BLOCK 이 있어도 모든 활성 레이어를 끝까지 실행."""
+    from core_secure_layer.layers.types import LayerResult, Severity
+
+    call_log: list[str] = []
+
+    def _make_layer(name: str, allowed: bool):
+        mock = mocker.MagicMock()
+        mock.name = name
+
+        async def fake_check(request):
+            call_log.append(name)
+            return LayerResult(
+                name=name,
+                allowed=allowed,
+                severity=(Severity.LOW if not allowed else Severity.NONE),
+            )
+
+        mock.check = fake_check
+        return mock
+
+    mock_l2 = _make_layer("L2", allowed=False)
+    mock_l4 = _make_layer("L4", allowed=True)
+
+    def fake_get_layer(idx):
+        return {2: mock_l2, 4: mock_l4}.get(idx)
+
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        side_effect=fake_get_layer,
+    )
+
+    service = SecurityLayerService()
+    policy = _policy(l1=False, l3=False, l5=False, l6=False)
+    results = await service.check_output_all(
+        content="demo output", policy=policy
+    )
+
+    assert call_log == ["L2", "L4"]
+    assert [r.layer for r in results] == ["L2", "L4"]
+    assert [r.status for r in results] == [
+        CheckStatus.BLOCK,
+        CheckStatus.PASS,
+    ]
+
+
+async def test_check_input_all_fills_layer_name_for_unmapped_index():
+    """미매핑/PASS 레이어도 결과 리스트에 포함되며 layer 이름이 보존된다."""
+    spy = _SpyService()
+    policy = _policy(l2=False, l4=False, l5=False, l6=False)
+    results = await spy.check_input_all(
+        messages=[Message(role="user", content="x")], policy=policy
+    )
+    assert spy.input_calls == [1, 3]
+    assert len(results) == 2
+    assert all(r.status == CheckStatus.PASS for r in results)
+    assert [r.layer for r in results] == ["L1", "L3"]
 
 
 async def test_check_input_short_circuits_on_block(mocker):
