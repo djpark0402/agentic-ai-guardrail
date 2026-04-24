@@ -1,0 +1,41 @@
+{
+  "label_map": {
+    "PS": "person",
+    "PHONE": "phone_number",
+    "EMAIL": "email",
+    "RRN": "resident_id",
+    "PASSPORT": "passport_number",
+    "DLN": "driver_license",
+    "TIN": "tax_id",
+    "ARN": "alien_registration",
+    "BRN": "business_registration",
+    "HIN": "health_insurance",
+    "SSN": "ssn",
+    "EIN": "employer_id",
+    "MN": "member_number",
+    "OG": "organization",
+    "ADDR": "address",
+    "DT": "date"
+  },
+  "block_singletons": [
+    "person",
+    "phone_number",
+    "email",
+    "resident_id",
+    "passport_number",
+    "driver_license",
+    "tax_id",
+    "alien_registration",
+    "business_registration",
+    "health_insurance",
+    "ssn",
+    "employer_id",
+    "member_number",
+    "organization",
+    "address",
+    "date"
+  ],
+  "block_combinations": [],
+  "min_score": 0.7,
+  "aggregation_strategy": "simple"
+}

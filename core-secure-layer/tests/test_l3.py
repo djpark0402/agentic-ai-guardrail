@@ -13,6 +13,18 @@ _DEFAULT_THRESHOLD = 0.8
 _DEFAULT_TOP_K = 5
 
 
+@pytest.fixture(autouse=True)
+def _skip_real_resource_load(monkeypatch):
+    # L3Layer 의 실제 SentenceTransformer / ChromaDB 로딩을 스킵.
+    def _noop(self):
+        self._model = None
+        self._collection = None
+        self._model_loaded = False
+        self._db_loaded = False
+
+    monkeypatch.setattr(L3Layer, "_load_resources", _noop)
+
+
 @pytest.fixture
 def layer():
     """ChromaDB/모델 미로드 상태의 L3Layer 인스턴스."""

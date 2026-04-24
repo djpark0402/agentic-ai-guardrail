@@ -13,6 +13,18 @@ _DEFAULT_ENTROPY_LOW = 1.5
 _DEFAULT_ENTROPY_HIGH = 5.5
 
 
+@pytest.fixture(autouse=True)
+def _skip_real_model_load(monkeypatch):
+    # L2Layer 의 실제 GPT-2 모델 로딩을 스킵해 RAM 압박/스왑 확장을 방지.
+    # _load_model 이 호출되는 모든 테스트에 자동 적용된다.
+    def _noop(self):
+        self._tokenizer = None
+        self._model = None
+        self._model_loaded = False
+
+    monkeypatch.setattr(L2Layer, "_load_model", _noop)
+
+
 @pytest.fixture
 def layer():
     # 모델 미로드 상태의 인스턴스 (1차 필터링만 동작)
