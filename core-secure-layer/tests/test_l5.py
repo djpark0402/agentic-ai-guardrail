@@ -356,6 +356,85 @@ class TestPIILabelsLoading:
         assert captured["kwargs"].get("aggregation_strategy") == "max"
 
 
+class TestMinScoreOverride:
+    """생성자의 min_score 파라미터가 JSON 스펙을 override 한다."""
+
+    def _make_model(self, tmp_path, spec_min_score):
+        # 공통 준비: pii_labels.json 에 주어진 min_score 를 담은 모델 폴더
+        model_dir = tmp_path / "override-ner"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps({"id2label": {"0": "O"}}),
+            encoding="utf-8",
+        )
+        (model_dir / "pii_labels.json").write_text(
+            json.dumps(
+                {
+                    "label_map": {"PS": "person"},
+                    "block_singletons": ["person"],
+                    "block_combinations": [],
+                    "min_score": spec_min_score,
+                    "aggregation_strategy": "simple",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return model_dir
+
+    def test_constructor_min_score_overrides_json(self, tmp_path, monkeypatch):
+        # JSON 에 0.5 가 있어도 생성자가 0.99 를 주면 0.99 가 쓰인다
+        self._make_model(tmp_path, spec_min_score=0.5)
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        monkeypatch.setattr(
+            l5_mod,
+            "pipeline",
+            lambda *args, **kwargs: MagicMock(),
+        )
+
+        inst = L5Layer(model_name="override-ner", min_score=0.99)
+
+        assert inst._min_score == 0.99
+
+    def test_min_score_from_json_when_not_overridden(
+        self, tmp_path, monkeypatch
+    ):
+        # 생성자에서 min_score 를 안 주면 JSON 값(0.5) 이 그대로 쓰인다
+        self._make_model(tmp_path, spec_min_score=0.5)
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        monkeypatch.setattr(
+            l5_mod,
+            "pipeline",
+            lambda *args, **kwargs: MagicMock(),
+        )
+
+        inst = L5Layer(model_name="override-ner")
+
+        assert inst._min_score == 0.5
+
+    def test_constructor_min_score_overrides_fallback(
+        self, tmp_path, monkeypatch
+    ):
+        # pii_labels.json 이 없어 폴백 경로여도 생성자 값이 적용된다
+        model_dir = tmp_path / "no-json-ner"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {"id2label": {"0": "O", "1": "B-PS", "2": "I-PS"}},
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        monkeypatch.setattr(
+            l5_mod,
+            "pipeline",
+            lambda *args, **kwargs: MagicMock(),
+        )
+
+        inst = L5Layer(model_name="no-json-ner", min_score=0.75)
+
+        assert inst._min_score == 0.75
+
+
 # ──────────────────────────────────────────────
 # 2. 허용 골든 패스
 # ──────────────────────────────────────────────
