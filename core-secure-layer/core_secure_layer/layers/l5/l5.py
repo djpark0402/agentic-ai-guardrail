@@ -78,17 +78,23 @@ class L5Layer(BaseLayer):
         self,
         model_name: str = "ner-ko",
         extra_patterns: list[str] | None = None,
+        min_score: float | None = None,
     ) -> None:
         """L5Layer 초기화.
 
         Args:
             model_name: NER 모델 폴더명(``model/`` 하위).
             extra_patterns: 추가 차단 정규식 리스트.
+            min_score: NER 엔티티 신뢰도 임계값. ``None`` 이면
+                ``pii_labels.json`` 의 값을 사용하고, 값이 주어지면
+                JSON 스펙을 override 한다.
         """
         self.model_name = model_name
         self.extra_patterns: list[str] = (
             extra_patterns if extra_patterns is not None else []
         )
+        # 생성자 override 값(로딩 후 스펙에 최우선 적용)
+        self._min_score_override: float | None = min_score
         # pii_labels 스펙 속성(로딩 과정에서 채워짐)
         self._label_map: dict[str, str] = {}
         self._block_singletons: list[str] = []
@@ -159,13 +165,19 @@ class L5Layer(BaseLayer):
         return ner_pipeline
 
     def _apply_spec(self, spec: dict[str, Any]) -> None:
-        """``pii_labels.json`` 파싱 결과를 인스턴스 속성에 반영한다."""
+        """``pii_labels.json`` 파싱 결과를 인스턴스 속성에 반영한다.
+
+        생성자에서 ``min_score`` 가 주어진 경우 JSON 값을 덮어쓴다.
+        """
         self._label_map = dict(spec.get("label_map", {}))
         self._block_singletons = list(spec.get("block_singletons", []))
         self._block_combinations = [
             list(rule) for rule in spec.get("block_combinations", [])
         ]
-        self._min_score = float(spec.get("min_score", 0.0))
+        if self._min_score_override is not None:
+            self._min_score = float(self._min_score_override)
+        else:
+            self._min_score = float(spec.get("min_score", 0.0))
         self._aggregation_strategy = str(
             spec.get("aggregation_strategy", "simple")
         )
@@ -197,7 +209,10 @@ class L5Layer(BaseLayer):
         self._label_map = label_map
         self._block_singletons = list(label_map.keys())
         self._block_combinations = []
-        self._min_score = 0.0
+        if self._min_score_override is not None:
+            self._min_score = float(self._min_score_override)
+        else:
+            self._min_score = 0.0
         self._aggregation_strategy = "simple"
 
     def _ner_predict(self, text: str) -> list[dict[str, Any]]:
