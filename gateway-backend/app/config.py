@@ -1,9 +1,12 @@
 """애플리케이션 설정 모듈."""
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+AppEnv = Literal["dev", "prod"]
 
 
 class Settings(BaseSettings):
@@ -20,6 +23,12 @@ class Settings(BaseSettings):
             오차(초). 기본 5분(300).
         skip_header_verification: True 면 사용자 4개 헤더 검증을 건너뛴다.
             `skip_policy_fetch` 와 독립 동작하는 로컬/데모용 플래그.
+        app_env: 실행 환경. `"dev"` 또는 `"prod"` 만 허용. 기본값
+            `"prod"` (safe-by-default). 관찰 모드는 `"dev"` 에서만 허용.
+        continue_on_layer_failure: 데모/개발용 관찰 모드 플래그. True 면
+            레이어가 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에
+            `guardrail_reports` 를 첨부한다. `app_env="dev"` 일 때만
+            True 허용 — 그 외 환경에서 True 는 ValidationError.
     """
 
     model_config = SettingsConfigDict(
@@ -46,9 +55,13 @@ class Settings(BaseSettings):
     request_timestamp_skew_sec: int = 300
     skip_header_verification: bool = False
     skip_policy_fetch: bool = False
+    # 실행 환경. 기본 "prod" 는 safe-by-default — 명시하지 않으면 관찰
+    # 모드 등 개발 전용 기능이 활성화되지 않도록 잠근다.
+    app_env: AppEnv = "prod"
     # 데모용 관찰 모드 — True 면 레이어가 BLOCK 판정을 내려도 파이프라인을
     # 끝까지 진행하고, 응답에 `guardrail_reports` 블록으로 각 레이어 판정을
     # 첨부한다. False (기본) 면 기존 동작 유지(첫 BLOCK 시 즉시 차단 응답).
+    # `app_env="dev"` 일 때만 True 허용 (model_validator 로 강제).
     continue_on_layer_failure: bool = False
 
     @field_validator("admin_api_key", mode="before")
@@ -58,6 +71,20 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip() == "":
             return None
         return value
+
+    @model_validator(mode="after")
+    def _observe_mode_requires_dev(self) -> Settings:
+        """관찰 모드는 `app_env="dev"` 에서만 허용.
+
+        프로덕션/스테이징에서 `CONTINUE_ON_LAYER_FAILURE=true` 가 실수로
+        설정되어도 BLOCK 판정이 무시되는 사고를 막기 위한 기동 시 가드.
+        """
+        if self.continue_on_layer_failure and self.app_env != "dev":
+            raise ValueError(
+                "CONTINUE_ON_LAYER_FAILURE=true 는 APP_ENV='dev' 에서만 "
+                f"허용됩니다. 현재 APP_ENV={self.app_env!r}."
+            )
+        return self
 
 
 @lru_cache

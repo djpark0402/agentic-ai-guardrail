@@ -1011,6 +1011,7 @@ def _observe_settings_override():
             upstage_api_key=s.upstage_api_key.get_secret_value(),
             skip_policy_fetch=False,
             skip_header_verification=True,
+            app_env="dev",
             continue_on_layer_failure=True,
         )
 

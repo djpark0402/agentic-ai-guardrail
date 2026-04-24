@@ -58,9 +58,10 @@ def test_continue_on_layer_failure_defaults_to_false(monkeypatch):
 
 
 def test_continue_on_layer_failure_reads_env(monkeypatch):
-    """CONTINUE_ON_LAYER_FAILURE=true 이면 플래그가 켜진다."""
+    """CONTINUE_ON_LAYER_FAILURE=true 이면 플래그가 켜진다 (dev 환경 필요)."""
     monkeypatch.setenv("LLM_MODEL", "solar-pro")
     monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("APP_ENV", "dev")
     monkeypatch.setenv("CONTINUE_ON_LAYER_FAILURE", "true")
 
     from app.config import Settings
@@ -128,3 +129,93 @@ def test_skip_header_verification_reads_env(monkeypatch):
 
     settings = Settings(_env_file=None)
     assert settings.skip_header_verification is True
+
+
+def test_app_env_defaults_to_prod(monkeypatch):
+    """APP_ENV 미설정 시 기본값은 'prod' (safe-by-default)."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.app_env == "prod"
+
+
+def test_app_env_reads_dev(monkeypatch):
+    """APP_ENV=dev 로 설정되면 값이 보존된다."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("APP_ENV", "dev")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.app_env == "dev"
+
+
+def test_app_env_unknown_value_rejected(monkeypatch):
+    """알 수 없는 APP_ENV 값은 ValidationError."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("APP_ENV", "staging")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_observe_mode_allowed_when_app_env_dev(monkeypatch):
+    """APP_ENV=dev 이면 관찰 모드(CONTINUE_ON_LAYER_FAILURE=true) 정상 로드."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("CONTINUE_ON_LAYER_FAILURE", "true")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.app_env == "dev"
+    assert settings.continue_on_layer_failure is True
+
+
+def test_observe_mode_rejected_when_app_env_prod(monkeypatch):
+    """APP_ENV=prod + CONTINUE_ON_LAYER_FAILURE=true 는 기동 실패해야 한다."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("CONTINUE_ON_LAYER_FAILURE", "true")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_observe_mode_rejected_when_app_env_missing(monkeypatch):
+    """APP_ENV 미설정(기본 prod) + 관찰 모드 true 도 기동 실패."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("CONTINUE_ON_LAYER_FAILURE", "true")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_observe_mode_off_in_prod_ok(monkeypatch):
+    """APP_ENV=prod + CONTINUE_ON_LAYER_FAILURE=false 는 정상 로드."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("CONTINUE_ON_LAYER_FAILURE", "false")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.app_env == "prod"
+    assert settings.continue_on_layer_failure is False
