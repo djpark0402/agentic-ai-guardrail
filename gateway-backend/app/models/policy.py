@@ -3,6 +3,20 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class L5Setting(BaseModel):
+    """ADMIN 이 전달하는 L5 모델 선택/판정 설정.
+
+    Attributes:
+        model: L5 NER 모델 폴더명. 예: `pii_model_v11`.
+        threshold: NER 엔티티 스코어 컷오프. `L5Layer.min_score` 로 전달된다.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    model: str | None = None
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class GuardrailPolicy(BaseModel):
     """admin-backend가 제공하는 L1~L6 보안 레이어 활성화 정책.
 
@@ -16,6 +30,7 @@ class GuardrailPolicy(BaseModel):
         l3: 유해 콘텐츠 탐지 레이어 활성화 여부.
         l4: 환각 탐지 레이어 활성화 여부.
         l5: 개인정보 탐지 레이어 활성화 여부.
+        l5_setting: 개인정보 탐지 레이어의 모델 폴더명과 NER threshold.
         l6: 규정 준수 검사 레이어 활성화 여부.
         outbound: LLM 응답에 대한 출력 가드레일 파이프라인 전체 스위치.
             False 이면 L1~L6 활성 레이어와 무관하게 출력 검사를 통째로
@@ -30,6 +45,7 @@ class GuardrailPolicy(BaseModel):
     l3: bool = Field(alias="l3Enabled")
     l4: bool = Field(alias="l4Enabled")
     l5: bool = Field(alias="l5Enabled")
+    l5_setting: L5Setting | None = Field(default=None, alias="l5Setting")
     l6: bool = Field(alias="l6Enabled")
     outbound: bool = Field(default=True, alias="outboundEnabled")
 

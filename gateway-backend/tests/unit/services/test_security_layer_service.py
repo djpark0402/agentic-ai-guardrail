@@ -10,7 +10,7 @@ from app.models.policy import GuardrailPolicy
 from app.services.security_layer_service import SecurityLayerService
 
 
-def _policy(**overrides: bool) -> GuardrailPolicy:
+def _policy(**overrides: object) -> GuardrailPolicy:
     """기본 전체 활성 정책에서 일부 레이어를 덮어쓴다."""
     base = {f"l{i}": True for i in range(1, 7)}
     base.update(overrides)
@@ -25,13 +25,19 @@ class _SpyService(SecurityLayerService):
         self.output_calls: list[int] = []
 
     async def _run_layer_input(
-        self, layer_idx: int, messages: list[Message]
+        self,
+        layer_idx: int,
+        messages: list[Message],
+        policy: GuardrailPolicy,
     ) -> GuardrailResult:
         self.input_calls.append(layer_idx)
         return GuardrailResult(status=CheckStatus.PASS)
 
     async def _run_layer_output(
-        self, layer_idx: int, content: str
+        self,
+        layer_idx: int,
+        content: str,
+        policy: GuardrailPolicy,
     ) -> GuardrailResult:
         self.output_calls.append(layer_idx)
         return GuardrailResult(status=CheckStatus.PASS)
@@ -227,6 +233,66 @@ async def test_run_layer_input_block_propagates(service, mocker):
     assert result.status == CheckStatus.BLOCK
     assert result.reason == "injection detected"
     assert result.layer == "L1"
+
+
+async def test_run_layer_input_uses_l5_policy_setting(service, mocker):
+    """L5 입력 검사는 ADMIN 정책의 model/threshold 로 레이어를 고른다."""
+    from core_secure_layer.layers.types import LayerResult
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L5"
+    mock_layer.check.return_value = LayerResult(name="L5", allowed=True)
+    get_l5_layer = mocker.patch(
+        "app.services.security_layer_service.get_l5_layer",
+        return_value=mock_layer,
+    )
+    get_layer = mocker.patch("app.services.security_layer_service.get_layer")
+
+    policy = _policy(
+        l5Setting={
+            "model": "pii_model_v11",
+            "threshold": 0.82,
+        }
+    )
+    result = await service._run_layer_input(
+        5,
+        [Message(role="user", content="정상 입력")],
+        policy,
+    )
+
+    assert result.status == CheckStatus.PASS
+    get_l5_layer.assert_called_once_with(
+        model_name="pii_model_v11",
+        threshold=0.82,
+    )
+    get_layer.assert_not_called()
+
+
+async def test_run_layer_output_uses_l5_policy_setting(service, mocker):
+    """L5 출력 검사도 ADMIN 정책의 model/threshold 를 적용한다."""
+    from core_secure_layer.layers.types import LayerResult
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L5"
+    mock_layer.check.return_value = LayerResult(name="L5", allowed=True)
+    get_l5_layer = mocker.patch(
+        "app.services.security_layer_service.get_l5_layer",
+        return_value=mock_layer,
+    )
+
+    policy = _policy(
+        l5Setting={
+            "model": "pii_model_v11",
+            "threshold": 0.82,
+        }
+    )
+    result = await service._run_layer_output(5, "정상 출력", policy)
+
+    assert result.status == CheckStatus.PASS
+    get_l5_layer.assert_called_once_with(
+        model_name="pii_model_v11",
+        threshold=0.82,
+    )
 
 
 async def test_run_layer_input_pass_propagates(service, mocker):

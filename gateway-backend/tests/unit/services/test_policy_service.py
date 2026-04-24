@@ -191,6 +191,35 @@ async def test_verify_and_fetch_policy_unwraps_policy_envelope():
     assert policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
 
 
+async def test_verify_and_fetch_policy_preserves_l5_setting_in_envelope():
+    """policy envelope 내부 l5Setting 이 GuardrailPolicy 에 보존된다."""
+    wrapped = {
+        "valid": True,
+        "clientName": "테스트 클라이언트",
+        "policy": {
+            "l1Enabled": True,
+            "l2Enabled": True,
+            "l3Enabled": False,
+            "l4Enabled": False,
+            "l5Enabled": True,
+            "l6Enabled": False,
+            "l5Setting": {
+                "model": "pii_model_v11",
+                "threshold": 0.82,
+            },
+        },
+    }
+    service = _make_service(lambda _req: httpx.Response(200, json=wrapped))
+    policy = await service.verify_and_fetch_policy(
+        session_id="s",
+        headers=_SAMPLE_HEADERS,
+        body_hash=_SAMPLE_BODY_HASH,
+    )
+    assert policy.l5_setting is not None
+    assert policy.l5_setting.model == "pii_model_v11"
+    assert policy.l5_setting.threshold == 0.82
+
+
 async def test_verify_and_fetch_policy_unwraps_unknown_envelope_key():
     """envelope 키 이름이 미리 정의된 목록에 없어도 중첩된 정책을 찾아낸다."""
     wrapped = {

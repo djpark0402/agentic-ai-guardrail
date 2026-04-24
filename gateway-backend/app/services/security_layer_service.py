@@ -3,6 +3,8 @@
 import logging
 import time
 
+from core_secure_layer.layers.base import BaseLayer
+
 from app.models.chat import Message
 from app.models.guardrail import CheckStatus, GuardrailResult
 from app.models.policy import GuardrailPolicy
@@ -11,7 +13,7 @@ from app.services.guardrail_converter import (
     layer_result_to_guardrail_result,
     messages_to_request,
 )
-from app.services.layer_registry import get_layer
+from app.services.layer_registry import get_l5_layer, get_layer
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,25 @@ def _log_layer_result(
     )
 
 
+def _get_policy_layer(
+    layer_idx: int,
+    policy: GuardrailPolicy | None,
+) -> BaseLayer | None:
+    """정책 설정을 반영한 core-secure-layer 인스턴스를 반환한다."""
+    if layer_idx != 5:
+        return get_layer(layer_idx)
+
+    setting = policy.l5_setting if policy is not None else None
+    model_name = setting.model if setting is not None else None
+    threshold = setting.threshold if setting is not None else None
+    logger.info(
+        "L5 정책 설정 적용: model=%s threshold=%s",
+        model_name or "(default)",
+        threshold if threshold is not None else "(default)",
+    )
+    return get_l5_layer(model_name=model_name, threshold=threshold)
+
+
 def _with_layer_name(
     result: GuardrailResult,
     layer_idx: int,
@@ -140,7 +161,7 @@ class SecurityLayerService:
         )
         for layer_idx in enabled:
             t0 = time.perf_counter()
-            result = await self._run_layer_input(layer_idx, messages)
+            result = await self._run_layer_input(layer_idx, messages, policy)
             _record_layer_timing(timings, "input_guardrail", layer_idx, t0)
             if result.status is CheckStatus.BLOCK:
                 return result
@@ -170,7 +191,7 @@ class SecurityLayerService:
         )
         for layer_idx in enabled:
             t0 = time.perf_counter()
-            result = await self._run_layer_output(layer_idx, content)
+            result = await self._run_layer_output(layer_idx, content, policy)
             _record_layer_timing(timings, "output_guardrail", layer_idx, t0)
             if result.status is CheckStatus.BLOCK:
                 return result
@@ -207,7 +228,7 @@ class SecurityLayerService:
         results: list[GuardrailResult] = []
         for layer_idx in enabled:
             t0 = time.perf_counter()
-            result = await self._run_layer_input(layer_idx, messages)
+            result = await self._run_layer_input(layer_idx, messages, policy)
             _record_layer_timing(timings, "input_guardrail", layer_idx, t0)
             results.append(_with_layer_name(result, layer_idx))
         return results
@@ -239,7 +260,7 @@ class SecurityLayerService:
         results: list[GuardrailResult] = []
         for layer_idx in enabled:
             t0 = time.perf_counter()
-            result = await self._run_layer_output(layer_idx, content)
+            result = await self._run_layer_output(layer_idx, content, policy)
             _record_layer_timing(timings, "output_guardrail", layer_idx, t0)
             results.append(_with_layer_name(result, layer_idx))
         return results
@@ -248,17 +269,20 @@ class SecurityLayerService:
         self,
         layer_idx: int,
         messages: list[Message],
+        policy: GuardrailPolicy | None = None,
     ) -> GuardrailResult:
         """core-secure-layer 를 통해 입력 레이어를 실행한다.
 
         Args:
             layer_idx: 실행할 레이어 인덱스 (1~6).
             messages: 검사 대상 메시지 목록.
+            policy: L5 설정을 포함한 현재 요청 정책. None 이면 기본 레이어
+                설정을 사용한다.
 
         Returns:
             레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
-        layer = get_layer(layer_idx)
+        layer = _get_policy_layer(layer_idx, policy)
         if layer is None:
             result = GuardrailResult(
                 status=CheckStatus.PASS,
@@ -303,17 +327,20 @@ class SecurityLayerService:
         self,
         layer_idx: int,
         content: str,
+        policy: GuardrailPolicy | None = None,
     ) -> GuardrailResult:
         """core-secure-layer 를 통해 출력 레이어를 실행한다.
 
         Args:
             layer_idx: 실행할 레이어 인덱스 (1~6).
             content: 검사 대상 응답 텍스트.
+            policy: L5 설정을 포함한 현재 요청 정책. None 이면 기본 레이어
+                설정을 사용한다.
 
         Returns:
             레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
-        layer = get_layer(layer_idx)
+        layer = _get_policy_layer(layer_idx, policy)
         if layer is None:
             result = GuardrailResult(
                 status=CheckStatus.PASS,

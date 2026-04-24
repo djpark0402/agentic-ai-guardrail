@@ -1,5 +1,8 @@
 """Policy 모델 테스트."""
 
+import pytest
+from pydantic import ValidationError
+
 from app.models.policy import GuardrailPolicy
 
 
@@ -41,6 +44,53 @@ def test_guardrail_policy_parses_admin_api_payload():
     }
     policy = GuardrailPolicy.model_validate(payload)
     assert policy.enabled_layers() == [1, 2, 3, 5]
+
+
+def test_guardrail_policy_parses_l5_setting():
+    """ADMIN 응답의 l5Setting 을 L5 정책 설정으로 파싱한다."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": False,
+        "l4Enabled": False,
+        "l5Enabled": True,
+        "l6Enabled": False,
+        "l5Setting": {
+            "model": "pii_model_v11",
+            "threshold": 0.82,
+        },
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.l5_setting is not None
+    assert policy.l5_setting.model == "pii_model_v11"
+    assert policy.l5_setting.threshold == 0.82
+
+
+def test_guardrail_policy_defaults_l5_setting_to_none_when_missing():
+    """l5Setting 이 없으면 기존 기본 L5 동작을 유지한다."""
+    policy = GuardrailPolicy.all_enabled()
+    assert policy.l5_setting is None
+
+
+@pytest.mark.parametrize("threshold", [-0.01, 1.01])
+def test_guardrail_policy_rejects_l5_threshold_out_of_range(
+    threshold: float,
+):
+    """L5 threshold 는 NER score 범위인 0.0~1.0 만 허용한다."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+        "l5Setting": {
+            "model": "pii_model_v11",
+            "threshold": threshold,
+        },
+    }
+    with pytest.raises(ValidationError):
+        GuardrailPolicy.model_validate(payload)
 
 
 def test_guardrail_policy_parses_outbound_enabled_true():
