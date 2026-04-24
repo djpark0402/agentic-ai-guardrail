@@ -18,6 +18,27 @@ def _req(text):
     return GuardrailRequest(user_input=text)
 
 
+@pytest.fixture(autouse=True)
+def _skip_real_model_load(monkeypatch):
+    # L4Layer 의 실제 NLI/임베딩/reranker/ChromaDB 로딩을 스킵.
+    # _load_nli_rules 는 JSON 파싱뿐이라 경량이므로 그대로 둔다.
+    monkeypatch.setattr(
+        L4Layer,
+        "_load_cross_encoder",
+        lambda self, kind, name: None,
+    )
+    monkeypatch.setattr(
+        L4Layer,
+        "_load_sentence_transformer",
+        lambda self, kind, name: None,
+    )
+    monkeypatch.setattr(
+        L4Layer,
+        "_load_collection",
+        lambda self: None,
+    )
+
+
 @pytest.fixture
 def layer():
     """모델/DB 미로드 상태의 L4Layer 인스턴스.
