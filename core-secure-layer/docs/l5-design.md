@@ -75,11 +75,11 @@
     "zip_code", "merchant", "payment_amount", "credit_score"
   ],
   "block_combinations": [],
-  "min_score": 0.0,
+  "min_score": 0.7,
   "aggregation_strategy": "simple"
 }
 ```
-→ 특화 모델이라 "감지된 엔티티 = PII" 이므로 전부 singleton 차단. 현재 동작과 동일.
+→ 특화 모델이라 "감지된 엔티티 = PII" 이므로 전부 singleton 차단. 기본 임계값은 CLAUDE.md "오탐 절대 불허" 원칙에 맞춰 `0.7` 로 설정하며, "감지된 모든 엔티티 즉시 차단" 이 필요한 프로젝트는 `L5Layer(model_name="ner-ko", min_score=0.0)` 으로 생성자에서 override 한다.
 
 **JSON 예시 2 — 범용 NER 모델 (가상):**
 ```json
