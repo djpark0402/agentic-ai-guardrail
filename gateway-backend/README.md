@@ -85,13 +85,18 @@ LLM 토큰 스트리밍과 유사한 타이핑 UX 를 준다. 지연은 환경�
 > 입력 가드레일이 탐지하지 않는다. 이러한 페이로드를 검사하려면 호출
 > 측에서 해당 본문을 별도의 `user` 메시지로 감싸 전달해야 한다.
 
-#### 관찰 모드 (`CONTINUE_ON_LAYER_FAILURE=true`)
+#### 관찰 모드 (`CONTINUE_ON_LAYER_FAILURE=true`, `APP_ENV=dev` 전용)
 
 데모용 대체 경로다. 이 환경변수를 `true` 로 두면 가드레일 레이어가 BLOCK 을
 내려도 파이프라인을 **끝까지 실행**(LLM 호출 + 후속 레이어 + 원본 응답 전송)
 하고, 응답에 레이어별 판정 내역을 담은 **`guardrail_reports` 블록**을
 첨부한다. 차단 안내문 content 재작성은 일어나지 않고, 원본 LLM 응답이
 그대로 전달된다.
+
+관찰 모드는 **`APP_ENV=dev` 일 때만 허용**된다. `APP_ENV` 의 기본값은
+`prod` 이므로 명시적으로 `dev` 를 지정하지 않은 환경에서는 관찰 모드가
+**기동 시점에 `pydantic.ValidationError` 로 거부**되어 아예 활성화되지
+않는다.
 
 비스트리밍 응답 예시 (정상 200):
 
@@ -121,8 +126,11 @@ LLM 토큰 스트리밍과 유사한 타이핑 UX 를 준다. 지연은 환경�
 스트리밍에서도 content 는 그대로 재방출되고, 마지막 finish 프레임에 동일한
 `guardrail_reports` 블록이 추가 필드로 실린다.
 
-> 관찰 모드는 **보안 기능을 무력화**한다. 실제 운영에서는 절대 켜지 말고,
-> 플레이그라운드/데모/디버깅 용도로만 사용할 것.
+> 관찰 모드는 **보안 기능을 무력화**하므로 `APP_ENV=dev` 에서만 허용된다.
+> `APP_ENV` 가 `prod` (기본값) 일 때 `CONTINUE_ON_LAYER_FAILURE=true` 를
+> 설정하면 **프로세스 기동이 실패**한다 (`pydantic.ValidationError`).
+> 운영 사고를 기술적으로 차단하기 위한 가드이며, README 경고 외에 코드
+> 레벨 방어선으로도 강제된다.
 
 ### 사용자 요청 헤더 검증 + 정책 조회
 
@@ -416,12 +424,13 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 - `OLLAMA_BASE_URL` — Ollama 엔드포인트 (기본 `http://localhost:11434/v1`). API 키 불필요. `ollama/모델명` 형식으로 요청.
 
 **공통**
+- `APP_ENV` — 실행 환경. `"dev"` 또는 `"prod"` 만 허용 (기본 `"prod"`, safe-by-default). 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`) 는 `APP_ENV=dev` 일 때만 허용되며, 그 외 조합은 기동 시점에 거부된다. `"staging"` 등 다른 값은 `ValidationError` 로 즉시 차단.
 - `ADMIN_BACKEND_URL` — 검증·정책 조회용 admin-backend 주소
 - `ADMIN_API_KEY` — admin-backend `/api/v1/gateway/verify` 호출 시 게이트웨이가 `X-API-Key` 헤더로 제시할 키. 사용자의 `X-API-Key` 와는 별개 (기본 빈 값 = 헤더 미전송)
 - `REQUEST_TIMESTAMP_SKEW_SEC` — `X-Timestamp` 허용 오차(초). 기본 `300` (5분)
 - `SKIP_HEADER_VERIFICATION` — `true`로 설정하면 사용자 4개 헤더 검증을 건너뛴다. 로컬·데모용이며 `SKIP_POLICY_FETCH` 와 독립 동작 (기본 `false`)
 - `SKIP_POLICY_FETCH` — `true`로 설정하면 admin-backend 정책 조회를 생략하고 **L1~L6 전체 레이어를 강제 실행**. admin-backend 없이 로컬 풀 파이프라인을 검증할 때 사용 (기본 `false`)
-- `CONTINUE_ON_LAYER_FAILURE` — `true`로 설정하면 가드레일이 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에 `guardrail_reports` 블록을 첨부한다(**관찰 모드**, 위 섹션 참고). 데모·디버깅 전용이며 운영에서는 사용 금지 (기본 `false`)
+- `CONTINUE_ON_LAYER_FAILURE` — `true`로 설정하면 가드레일이 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에 `guardrail_reports` 블록을 첨부한다(**관찰 모드**, 위 섹션 참고). 데모·디버깅 전용. **`APP_ENV=dev` 일 때만 `true` 허용**되며, 그 외 환경에서 `true` 로 설정하면 기동 시 `ValidationError` 로 실패한다 (기본 `false`)
 
 > `.env` 파일은 **절대 커밋하지 않는다.** 새 환경 변수가 필요하면
 > `.env.example`에 먼저 추가한다.

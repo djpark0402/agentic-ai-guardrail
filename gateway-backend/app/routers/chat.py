@@ -860,8 +860,10 @@ _CHAT_COMPLETIONS_DESCRIPTION = (
     " `message.content` 에 몇 번째 레이어에서 어떤 사유로 차단되었는지"
     ' 한글 안내문을 담아 반환합니다. `finish_reason` 은 `"stop"` 이고'
     " 비표준 `error` 블록은 사용하지 않습니다.\n"
-    "- **관찰 모드**(`CONTINUE_ON_LAYER_FAILURE=true`): 파이프라인을 끝까지"
-    " 실행한 뒤 응답에 `guardrail_reports` 블록을 첨부합니다.\n\n"
+    "- **관찰 모드**(`CONTINUE_ON_LAYER_FAILURE=true` + `APP_ENV=dev`):"
+    " 파이프라인을 끝까지 실행한 뒤 응답에 `guardrail_reports` 블록을"
+    " 첨부합니다. `APP_ENV=prod` 에서는 이 조합이 설정되면 프로세스가"
+    " 기동하지 않습니다.\n\n"
     "### 스트리밍\n"
     "`stream=true` 일 때는 `text/event-stream` SSE 로 반환되며, 각 프레임은"
     " OpenAI 스펙의 delta 포맷(`data: {...}\\n\\n`) 을 따르고 마지막에"

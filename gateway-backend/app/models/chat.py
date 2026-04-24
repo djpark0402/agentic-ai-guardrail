@@ -286,9 +286,10 @@ class ChatResponse(BaseModel):
         model: 사용된 모델 이름.
         choices: 응답 선택지 목록.
         usage: 토큰 사용량 통계 (Solar 가 제공할 경우).
-        guardrail_reports: 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`)에서
-            레이어별 판정 내역을 담는 비표준 메타데이터 블록. 일반 모드에서는
-            None.
+        guardrail_reports: 관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true` +
+            `APP_ENV=dev`)에서 레이어별 판정 내역을 담는 비표준 메타데이터
+            블록. 일반 모드에서는 None. prod 환경에서는 관찰 모드 자체가
+            기동 시점에 거부되어 이 필드가 채워지는 경로가 없다.
     """
 
     model_config = ConfigDict(
