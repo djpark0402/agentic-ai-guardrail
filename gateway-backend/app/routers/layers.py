@@ -52,14 +52,22 @@ class LayerStatusItem(BaseModel):
     signals: dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "레이어별 런타임 보조 상태. 예: L4 의 nli_rules_count,"
-            " policy_collection_count, llm_attached. 값 자체는 레이어마다"
-            " 다르며 진단용 참고 정보."
+            "레이어별 런타임 보조 상태. 값의 키 구성은 레이어마다 다르다."
+            " 예: L4 의 nli_rules_count, policy_collection_count,"
+            " llm_attached. L5 는 추가로 활성 모델의 min_score 와"
+            " `core-secure-layer/layers/l5/model/` 아래 배포된 모델"
+            " 폴더 목록(`available_models`: [{name, min_score,"
+            " block_singletons_count, aggregation_strategy}, ...]) 을"
+            " 노출한다 — 각 모델의 `pii_labels.json` 계약에서 읽어온다."
         ),
     )
     model_paths: list[str] = Field(
         default_factory=list,
-        description="모델이 있을 것으로 예상되는 디렉터리 경로(진단용).",
+        description=(
+            "모델이 있을 것으로 예상되는 디렉터리 경로(진단용)."
+            " L5 는 활성 모델 폴더와 모델 루트(`.../model`) 두 경로를"
+            " 나란히 노출한다."
+        ),
     )
     detail: str | None = Field(
         default=None,

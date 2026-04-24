@@ -339,6 +339,80 @@ curl -s http://localhost:54088/v1/layers/status | jq .
   기동하며 해당 레이어만 PASS 로 처리된다. 본 엔드포인트/로그는
   **가시성**만 제공한다.
 
+##### L5 전용 signals — `available_models` 와 `min_score`
+
+L5 는 다른 레이어와 달리 `core-secure-layer/layers/l5/model/` 아래에
+**여러 모델을 동시에 배포**할 수 있고, 각 모델은 자기 계약 파일
+`pii_labels.json` 으로 판정 임계값(`min_score`) · 정규화 매핑
+(`label_map`) · 단일 차단 목록(`block_singletons`) · HF 파이프라인
+aggregation 전략(`aggregation_strategy`) 을 선언한다. 상태 API 는 이
+정보를 한 번에 노출해 운영자가 "어떤 모델이 있고 어떤 임계값으로
+동작하는가" 를 확인할 수 있게 한다.
+
+```json
+{
+  "index": 5,
+  "name": "L5",
+  "class_name": "L5Layer",
+  "model_loaded": true,
+  "effective": true,
+  "signals": {
+    "ner_model_loaded": true,
+    "regex_ready": true,
+    "model_name": "ner-ko",
+    "min_score": 0.7,
+    "available_models": [
+      {"name": "ner-ko",        "min_score": 0.7, "block_singletons_count": 15, "aggregation_strategy": "simple"},
+      {"name": "pii_model_v11", "min_score": 0.7, "block_singletons_count": 16, "aggregation_strategy": "simple"}
+    ]
+  },
+  "model_paths": [
+    "/app/core-secure-layer/core_secure_layer/layers/l5/model/ner-ko",
+    "/app/core-secure-layer/core_secure_layer/layers/l5/model"
+  ],
+  "detail": null
+}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `signals.model_name` | 현재 활성 모델 폴더명. |
+| `signals.min_score` | 현재 활성 모델의 NER 스코어 컷오프. `_check_ner` 가 매 호출 시 이 속성을 직접 참조하므로, 런타임에 `layer.min_score` 를 대입 갱신하면 다음 요청부터 즉시 반영된다. |
+| `signals.available_models[].name` | 모델 폴더명. |
+| `signals.available_models[].min_score` | 해당 모델의 `pii_labels.json` 에 선언된 임계값. 파일이 없으면 `null`. |
+| `signals.available_models[].block_singletons_count` | 단일 검출로 차단할 정규화 PII 타입 개수. |
+| `signals.available_models[].aggregation_strategy` | HF NER pipeline `aggregation_strategy`. |
+| `model_paths` | 1번째: 활성 모델 폴더 절대경로. 2번째: 모델 루트(`.../model`). |
+
+> **ADMIN 정책 주입 경로**: 차후 ADMIN 백엔드가 L5 정책을 내려줄 때,
+> `L5Layer(model_name=<정책>, min_score=<정책>, label_map=<정책>,
+> block_singletons=<정책>, aggregation_strategy=<정책>)` 생성자 또는
+> 기존 인스턴스 속성 대입(`layer.min_score = 0.8`) 으로 주입한다.
+> 두 경로 모두 `_check_ner` 에 즉시 반영되며, 상태 API 의 JSON 키 구조는
+> 그대로 유지된 채 값만 바뀐다.
+
+###### L5 모델 계약 파일 `pii_labels.json`
+
+각 모델 폴더는 반드시 `pii_labels.json` 을 포함해야 L5 가 NER 기반
+차단을 수행한다. 파일이 없으면 L5 는 fail-open 으로 NER 단계를 no-op
+처리하고 Regex 경로만 살아남는다.
+
+```json
+{
+  "label_map":         { "이름": "person", "전화번호": "phone_number", "...": "..." },
+  "block_singletons":  ["person", "phone_number", "resident_id", "..."],
+  "block_combinations": [],
+  "min_score":         0.7,
+  "aggregation_strategy": "simple"
+}
+```
+
+- `label_map`: 모델 로컬 라벨(B-/I- 접두 제거 후) → 정규화 PII 타입.
+- `block_singletons`: 정규화 타입이 이 집합에 속하면 단일 검출로 차단.
+- `block_combinations`: 현재 미사용(예약). 차후 조합 기반 차단용.
+- `min_score`: NER 예측의 score 가 이 값 이상이어야 차단 후보로 간주.
+- `aggregation_strategy`: HF `pipeline("ner", ...)` 에 전달되는 집계 전략.
+
 ## 엔드포인트
 
 | Method | Path | 설명 |
