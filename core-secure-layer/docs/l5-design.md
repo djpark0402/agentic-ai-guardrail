@@ -34,7 +34,7 @@
 
 ### 2.2 NER 모델 (2단계)
 
-1단계를 통과한 입력에 대해 로컬 NER 모델로 개체명 인식을 수행한다. **판정 로직은 모델 폴더 내 `pii_labels.json` 에서 정의**하며, L5Layer 코드는 JSON 스펙을 해석해 차단/허용을 결정한다.
+1단계를 통과한 입력에 대해 로컬 NER 모델로 개체명 인식을 수행한다. **판정 로직은 모델 폴더 내 `pii_labels.json` 에서 정의**하며, L5Layer 코드는 JSON 스펙을 해석해 차단/허용을 결정한다. 모델 학습 방식에 따라 서로 다른 어댑터(§2.3) 가 모델을 로드·추론하지만, 판정 알고리즘과 JSON 스펙은 공통이다.
 
 #### `pii_labels.json` 스펙
 
@@ -42,11 +42,13 @@
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
+| `adapter` | `str` | X (기본 `"hf-pipeline"`) | NER 어댑터 선택. `"hf-pipeline"` (`transformers.pipeline("ner", ...)`, 자연 텍스트 입력) 또는 `"hf-charlevel"` (글자 리스트 + `[SP]` 토큰 입력, `is_split_into_words=True` 로 학습된 모델용) |
 | `label_map` | `dict[str, str]` | O | 모델 원본 라벨(B-/I- 접두사 제거 후) → 정규화된 PII 타입명. 예: `{"이름": "person", "PS": "person"}` |
 | `block_singletons` | `list[str]` | O | 단일 감지만으로 차단할 PII 타입명 목록. 예: `["phone_number", "resident_id"]` |
 | `block_combinations` | `list[list[str]]` | O | 조합 차단 규칙. 각 내부 리스트의 모든 타입이 동시에 감지되면 차단. 예: `[["person", "location"]]`. 조합을 쓰지 않으면 `[]` |
 | `min_score` | `float` | X (기본 `0.0`) | 엔티티 신뢰도 임계값. 이 값 미만은 무시 |
-| `aggregation_strategy` | `str` | X (기본 `"simple"`) | `transformers.pipeline("ner", aggregation_strategy=...)` 에 그대로 전달. 서브워드 병합 정책 |
+| `aggregation_strategy` | `str` | X (기본 `"simple"`) | `hf-pipeline` 어댑터 전용. `transformers.pipeline("ner", aggregation_strategy=...)` 에 그대로 전달. `hf-charlevel` 에서는 무시 |
+| `max_length` | `int` | X (기본 `256`) | `hf-charlevel` 전용. 모델의 입력 토큰 수 상한. 학습 시 사용한 값과 일치시켜야 한다 |
 
 **JSON 예시 1 — PII 특화 모델 (`ner-ko`):**
 ```json
@@ -81,9 +83,10 @@
 ```
 → 특화 모델이라 "감지된 엔티티 = PII" 이므로 전부 singleton 차단. 기본 임계값은 CLAUDE.md "오탐 절대 불허" 원칙에 맞춰 `0.7` 로 설정하며, "감지된 모든 엔티티 즉시 차단" 이 필요한 프로젝트는 `L5Layer(model_name="ner-ko", min_score=0.0)` 으로 생성자에서 override 한다.
 
-**JSON 예시 2 — 범용 NER 모델 (가상):**
+**JSON 예시 2 — 범용 NER 모델 (가상, HF):**
 ```json
 {
+  "adapter": "hf-pipeline",
   "label_map": {
     "PS": "person",
     "LC": "location",
@@ -101,8 +104,30 @@
 ```
 → "홍길동" 단독은 허용, "홍길동이 서울 산다" 는 차단.
 
-#### 판정 알고리즘 (코드 측)
-1. NER 파이프라인 추론 → 엔티티 리스트 획득
+**JSON 예시 3 — 글자 단위 학습 PII 모델 (`pii_model_v11`):**
+```json
+{
+  "adapter": "hf-charlevel",
+  "label_map": {
+    "PS": "person",
+    "PHONE": "phone_number",
+    "EMAIL": "email",
+    "RRN": "resident_id",
+    "ADDR": "address"
+  },
+  "block_singletons": [
+    "person", "phone_number", "email", "resident_id", "address"
+  ],
+  "block_combinations": [],
+  "min_score": 0.7,
+  "max_length": 256
+}
+```
+→ 입력을 글자 리스트로 쪼개고 공백을 `[SP]` 로 치환한 뒤 `is_split_into_words=True` 로 추론. KoELECTRA-Base-v3 + KLUE-NER 스타일로 학습된 모델 (`pii_model_v11` 같은) 이 학습 분포 그대로 동작하도록 함.
+
+#### 판정 알고리즘 (어댑터 공통)
+1. 어댑터의 `predict(text)` 호출 → 정규화된 엔티티 리스트 획득
+   - 각 엔티티는 `{"entity": str, "word": str, "start": int, "score": float}` 형식 (§2.3 정규화 계약 참조)
 2. `min_score` 미만 엔티티 제거
 3. 각 엔티티의 `entity` 필드에서 B-/I- 접두사 제거 → `label_map` 으로 정규화 타입 획득 (맵에 없으면 무시)
 4. 정규화 타입 집합에 대해:
@@ -110,7 +135,30 @@
    - `block_combinations` 중 하나라도 전부 포함되면 차단
    - 그 외엔 허용
 
-### 2.3 `pii_labels.json` 부재 시 폴백 (관대 폴백)
+### 2.3 NER 어댑터
+
+모델 학습 방식별 로딩·추론 차이를 어댑터 클래스로 캡슐화한다. L5Layer 코어 로직은 어댑터의 `predict(text)` 만 호출하며, 반환 포맷은 HF 스타일 `{entity, word, start, score}` 로 통일된다.
+
+| 어댑터 | 선택 방법 | 로더 | 추론 | 출력 정규화 |
+|---|---|---|---|---|
+| `_HFPipelineAdapter` | `adapter = "hf-pipeline"` (기본) | `transformers.pipeline("ner", model=path, tokenizer=path, aggregation_strategy=...)` | `pipe(text)` | 원본 그대로 — `{entity_group, word, start, end, score}` 의 `entity_group` 을 `entity` 로 노출 |
+| `_HFCharLevelAdapter` | `adapter = "hf-charlevel"` | `AutoTokenizer.from_pretrained(path) + add_tokens(["[SP]"])`, `AutoModelForTokenClassification.from_pretrained(path) + resize_token_embeddings(...)` | 텍스트 → 글자 리스트 + `[SP]` 치환 → 문장 단위 청크 분할 → 각 청크에 `model(**inputs)` 직접 호출 → `word_ids` 로 글자별 라벨 매핑 → BIO 디코딩 → 엔티티 스팬 | 글자 스팬을 `{entity, word, start, score}` 로 변환 |
+
+#### 어댑터 공통 계약
+- **생성자**: `(model_path: Path, spec: dict[str, Any])` — 로드는 이 시점에 수행하고, 실패 시 예외 발생
+- **`predict(text: str) -> list[dict[str, Any]]`** — 위 정규화 포맷으로 엔티티 반환
+- **예외 전파 금지** — L5Layer 가 `_check_ner` 에서 `try/except` 로 한 번만 fail-open 처리
+
+#### `_HFCharLevelAdapter` 세부
+- **글자 단위 입력**: `["[SP]" if ch == " " else ch for ch in text]`
+- **`[SP]` 토큰 처리**: 토크나이저 vocab 에 `[SP]` 가 없으면 `add_tokens` 로 추가 후 모델 임베딩 테이블 확장
+- **문장 단위 청크**: `_CHUNK_SIZE` 이하로 문장 부호(`. ! ? \n` 등) 기준 분할. 단일 문장이 한도를 넘으면 강제 분할
+- **추론**: 각 청크를 `tokenizer(chars, is_split_into_words=True, truncation=True, max_length=...)` 로 토큰화 → `model(**inputs)` 직접 호출 → softmax → argmax → `word_ids` 로 글자 라벨 추출
+- **공백 브릿지 후처리**: `[SP]` 위치 라벨이 `O` 인데 양쪽 라벨이 동일 엔티티 타입이면 `I-{type}` 으로 보정 (학습 시 [SP] 가 가끔 O로 예측되는 경향 보완)
+- **BIO 디코딩**: 글자 라벨 시퀀스에서 `B-/I-` 연속 구간을 모아 엔티티 스팬 추출
+- **출력 변환**: 각 엔티티에 `{"entity": type, "word": text[start:end], "start": start, "score": min_in_span}` 형식으로 정규화
+
+### 2.4 `pii_labels.json` 부재 시 폴백 (관대 폴백)
 
 모델 폴더에 `pii_labels.json` 이 **없으면**:
 - `config.json` 의 `id2label` 을 자동 추출해 `label_map` 으로 사용 (B-/I- 접두사 제거, 값은 원본 라벨명 그대로)
@@ -119,7 +167,7 @@
 - 즉 "엔티티 하나라도 감지되면 차단" — 현재 동작과 동일
 - 로드 시점에 `logger.warning("pii_labels.json 없음, 폴백 동작 — 범용 NER 모델은 오탐 위험이 큼: %s", path)` 로 1회 경고
 
-> ⚠️ **주의**: 이 폴백은 PII 특화 모델을 전제로 한다. 범용 NER(PER/LOC/ORG 등) 모델을 `pii_labels.json` 없이 드롭인하면 정상 대화의 인명·지명도 차단되어 오탐이 폭증한다. 범용 모델은 반드시 `pii_labels.json` 을 함께 작성할 것.
+> ⚠️ **주의**: 이 폴백은 자연 텍스트 입력 + WordPiece subword 토큰화로 학습된 PII 특화 모델을 전제로 한다. 범용 NER(PER/LOC/ORG 등) 모델을 `pii_labels.json` 없이 드롭인하면 정상 대화의 인명·지명도 차단되어 오탐이 폭증한다. **글자 단위 + `[SP]` 로 학습된 모델 (예: `pii_model_v11`) 은 폴백 불가** — 어댑터가 `hf-pipeline` 로 동작해 학습 분포 밖 입력을 받게 되므로 정확도가 무너진다. 글자 단위 학습 모델은 반드시 `pii_labels.json` 에 `adapter: "hf-charlevel"` 명시할 것.
 
 ## 3. 초기화
 
@@ -145,12 +193,18 @@ layer = L5Layer(
 l5/
 ├── l5.py
 └── model/
-    └── ner-ko/
+    ├── ner-ko/                    # 자연 텍스트 입력 (기본 어댑터)
+    │   ├── config.json
+    │   ├── model.safetensors
+    │   ├── tokenizer.json
+    │   ├── tokenizer_config.json
+    │   └── pii_labels.json        ← adapter: "hf-pipeline" (생략 시 기본)
+    └── pii_model_v11/              # 글자 단위 + [SP] 학습
         ├── config.json
         ├── model.safetensors
         ├── tokenizer.json
-        ├── tokenizer_config.json
-        └── pii_labels.json      ← 추가
+        ├── tokenizer_config.json   # [SP] 가 added_tokens 에 등록돼 있음
+        └── pii_labels.json        ← adapter: "hf-charlevel"
 ```
 
 ## 5. 입력/출력
@@ -231,7 +285,7 @@ LayerResult(
 | 범용 모델 + `"홍길동"` 단독 | 허용 | `person` ∉ `block_singletons`, 조합 미충족 |
 | 범용 모델 + `"홍길동이 서울에 산다"` | 차단 (2단계) | `[person, location]` 조합 매칭 |
 | NER 모델 미로드 | 허용 | fail-open (1단계만 동작) |
-| `pii_labels.json` 미존재 | 경고 로그 + 폴백 동작 | §2.3 참조 |
+| `pii_labels.json` 미존재 | 경고 로그 + 폴백 동작 | §2.4 참조 |
 | 외부 주입 패턴 매칭 | 차단 (1단계) | `extra_patterns` |
 | 모델 추론 중 예외 | 허용 | fail-open |
 | `min_score` 미만 엔티티 | 무시 | 낮은 신뢰도 오탐 방지 |
@@ -242,7 +296,8 @@ LayerResult(
 - **fail-open 의 범위**: `pii_labels.json` JSON 파싱 실패 시에도 폴백이 아닌 **NER 비활성화(fail-open)** 으로 처리 — 잘못된 JSON 으로 의도치 않은 차단 규칙이 돌아가는 위험 회피
 - **Regex 안전성**: 외부 주입 정규식의 ReDoS 방지를 위해 타임아웃 또는 패턴 길이 제한 고려
 - **PII 원문 비노출**: `reason` 에 탐지 타입+위치만 포함, 원문은 노출하지 않음
-- **관대 폴백의 리스크**: §2.3 경고 참조 — 범용 NER 드롭인은 오탐 유발, 반드시 `pii_labels.json` 동반 작성
+- **관대 폴백의 리스크**: §2.4 경고 참조 — 범용 NER 드롭인은 오탐 유발, 반드시 `pii_labels.json` 동반 작성. 글자 단위 학습 모델은 폴백 불가 (반드시 `adapter: "hf-charlevel"` 명시)
+- **어댑터 필드 신뢰**: `pii_labels.json` 의 `adapter` 필드는 모델 폴더 배치자가 정하는 값으로 설계상 신뢰 대상. 잘못된 값이면 어댑터 로드가 예외로 실패해 fail-open
 
 ## 8. 의존성
 
@@ -260,7 +315,11 @@ LayerResult(
 
 ## 10. 모델 추가 가이드
 
-새 NER 모델을 L5 에 추가하려면:
+새 NER 모델을 L5 에 추가하려면 모델의 학습 방식에 따라 두 경로 중 하나를 따른다.
+
+### 10.1 자연 텍스트 입력 모델 (`adapter: "hf-pipeline"`, 기본)
+
+WordPiece subword 토큰화로 자연 텍스트를 그대로 입력받아 학습된 일반 HF 토큰 분류 모델 (예: `ner-ko`).
 
 1. `l5/model/<새모델명>/` 폴더 생성, HuggingFace 포맷(`config.json`, `model.safetensors`, `tokenizer.json`, `tokenizer_config.json`) 배치
 2. 해당 모델의 라벨 스키마를 확인 (`config.json` 의 `id2label` 또는 모델 카드)
@@ -270,3 +329,16 @@ LayerResult(
    - 오탐 위험이 높은 라벨(기관명 등) → 양쪽 모두에서 제외
 4. `min_score` 는 "오탐 절대 불허" 원칙에 맞춰 **기본 `0.7` 이상** 권장. JSON 필드를 생략하면 코드 기본값 `0.0` 이 적용되지만 실제 배포 모델에서는 반드시 명시할 것. 프로젝트별로 감도가 다르면 `L5Layer(..., min_score=...)` 로 생성자 override
 5. `L5Layer(model_name="<새모델명>")` 로 초기화해 통합 테스트 (`scripts/smoke_l5_model.py` 활용)
+
+### 10.2 글자 단위 + `[SP]` 학습 모델 (`adapter: "hf-charlevel"`)
+
+KoELECTRA-Base-v3 + KLUE-NER 스타일로 글자 리스트 + `[SP]` 토큰 + `is_split_into_words=True` 로 학습된 PII 모델 (예: `pii_model_v11`).
+
+1. `l5/model/<새모델명>/` 폴더 생성, HF 포맷 배치
+2. `tokenizer_config.json` 의 `added_tokens` 에 `[SP]` 가 포함돼 있는지 확인 (학습 시 추가됐을 것). 없으면 어댑터가 추론 시점에 `add_tokens` 로 추가하고 모델 임베딩을 확장
+3. `pii_labels.json` 에 다음 필드 명시:
+   - `"adapter": "hf-charlevel"` (필수)
+   - `label_map`, `block_singletons`, `block_combinations`, `min_score`
+   - `"max_length": 256` (학습 시 사용한 값)
+4. 학습 시 사용한 데이터 전처리(예: 공백 → `[SP]`) 와 동일하게 어댑터가 추론 입력을 변환하므로 추가 작업 불필요
+5. `aggregation_strategy` 는 charlevel 에서 의미 없으므로 생략
