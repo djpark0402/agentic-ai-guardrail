@@ -1,3 +1,5 @@
+import contextlib
+import itertools
 import json
 from unittest.mock import MagicMock
 
@@ -2023,3 +2025,1498 @@ class TestHFPipelineAdapterParity:
         assert "entity" in out[0]
         # 정규화된 라벨 또는 원본 라벨 어느 쪽이든 PS 가 포함돼야 한다
         assert "PS" in out[0]["entity"]
+
+
+# ──────────────────────────────────────────────
+# 9. GLiNER 어댑터 — dispatch / 로딩 / 6 개선안 통합
+# ──────────────────────────────────────────────
+#
+# 본 섹션은 _GLinerAdapter 를 신설하면서 도입되는 다음 6 개선안을
+# 어댑터 동작 차원에서 강제한다.
+#
+# 1) inference_labels 는 약 10 개로 제한 권장. max_types 안이면 단일
+#    호출, 초과하면 라벨 청크로 분할 호출
+# 2) 카테고리별 차등 임계값(category_thresholds) + default_threshold
+# 3) 이중 단계 임계값 — pre_threshold(기본 0.4) 로 후보 수집,
+#    카테고리 cut 으로 2차 필터
+# 4) 후처리 오탐 필터 (한국어 PII 특화)
+# 5) 슬라이딩 윈도우 텍스트 청크 (text_window_max_len + overlap)
+# 6) 윈도우 결과 (start, end) span dedup
+#
+# 추가 인프라:
+# - DeBERTa-v3 tokenizer 호환 레이어 (PreTrainedTokenizerFast 우회)
+# - words_splitter override
+# - inference_labels 미존재 / 알 수 없는 adapter 값 fail-open
+
+
+_GLINER_LABEL_MAP_FULL = {
+    "사람 이름": "person",
+    "기관명": "organization",
+    "주소": "address",
+    "위치명": "location",
+    "직업명": "job_title",
+    "거래내역": "transaction",
+    "대출정보": "loan",
+    "신용등급": "credit_rating",
+    "재산및소득정보": "income_property",
+    "IT시스템정보": "it_system",
+}
+
+
+_GLINER_INFERENCE_LABELS_FULL = list(_GLINER_LABEL_MAP_FULL.keys())
+
+
+_GLINER_CATEGORY_THRESHOLDS_FULL = {
+    "person": 0.65,
+    "organization": 0.70,
+    "address": 0.70,
+    "location": 0.75,
+    "job_title": 0.80,
+    "transaction": 0.80,
+    "loan": 0.80,
+    "credit_rating": 0.85,
+    "income_property": 0.80,
+    "it_system": 0.80,
+}
+
+
+def _write_gliner_model_dir(
+    tmp_path,
+    name="gliner-ner",
+    *,
+    label_map=None,
+    inference_labels=None,
+    category_thresholds=None,
+    default_threshold=None,
+    pre_threshold=None,
+    block_singletons=None,
+    block_combinations=None,
+    min_score=0.0,
+    max_length=256,
+    text_window_max_len=None,
+    text_window_overlap=None,
+    words_splitter=None,
+    omit_inference_labels=False,
+    adapter="gliner",
+    gliner_config_max_types=10,
+):
+    """GLiNER 어댑터용 모델 폴더와 pii_labels.json 생성.
+
+    omit_inference_labels=True 이면 inference_labels 키 자체를 빼서
+    어댑터의 fail-open 경로를 검증할 수 있다.
+    """
+    model_dir = tmp_path / name
+    model_dir.mkdir()
+    # GLiNER 모델은 gliner_config.json 을 가진다
+    (model_dir / "gliner_config.json").write_text(
+        json.dumps({"max_types": gliner_config_max_types}),
+        encoding="utf-8",
+    )
+    # config.json 도 폴백 경로 호환성 유지를 위해 둠
+    (model_dir / "config.json").write_text(
+        json.dumps({"id2label": {"0": "O"}}),
+        encoding="utf-8",
+    )
+
+    spec = {
+        "label_map": (
+            dict(label_map)
+            if label_map is not None
+            else dict(_GLINER_LABEL_MAP_FULL)
+        ),
+        "block_singletons": (
+            list(block_singletons)
+            if block_singletons is not None
+            else ["person", "address", "location"]
+        ),
+        "block_combinations": (
+            block_combinations if block_combinations is not None else []
+        ),
+        "min_score": min_score,
+        "max_length": max_length,
+    }
+    if adapter is not None:
+        spec["adapter"] = adapter
+    if not omit_inference_labels:
+        spec["inference_labels"] = (
+            list(inference_labels)
+            if inference_labels is not None
+            else list(_GLINER_INFERENCE_LABELS_FULL)
+        )
+    if category_thresholds is not None:
+        spec["category_thresholds"] = dict(category_thresholds)
+    if default_threshold is not None:
+        spec["default_threshold"] = default_threshold
+    if pre_threshold is not None:
+        spec["pre_threshold"] = pre_threshold
+    if text_window_max_len is not None:
+        spec["text_window_max_len"] = text_window_max_len
+    if text_window_overlap is not None:
+        spec["text_window_overlap"] = text_window_overlap
+    if words_splitter is not None:
+        spec["words_splitter"] = words_splitter
+
+    (model_dir / "pii_labels.json").write_text(
+        json.dumps(spec, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return model_dir
+
+
+def _make_fake_gliner_model(predict_return=None):
+    """GLiNER 모델 모형 — predict_entities 가 주어진 값을 반환."""
+    fake_model = MagicMock()
+    # data_processor.words_splitter 교체 검증용 속성
+    fake_model.data_processor = MagicMock()
+    fake_model.data_processor.words_splitter = MagicMock(
+        name="default-splitter"
+    )
+    # 평가 모드
+    fake_model.eval = MagicMock(return_value=fake_model)
+    # 기본 predict_entities — 빈 리스트
+    if predict_return is None:
+        fake_model.predict_entities = MagicMock(return_value=[])
+    else:
+        fake_model.predict_entities = MagicMock(return_value=predict_return)
+    # config.max_len 같은 속성도 일부 어댑터 구현이 참조할 수 있음
+    fake_model.config = MagicMock()
+    fake_model.config.max_len = 384
+    return fake_model
+
+
+def _patch_gliner(monkeypatch, fake_model=None, predict_return=None):
+    """gliner.GLiNER.from_pretrained 를 가짜로 치환한다.
+
+    어댑터 구현이 ``from gliner import GLiNER`` 또는
+    ``import gliner`` 후 ``gliner.GLiNER.from_pretrained`` 두 형태 모두
+    감지하도록 양쪽을 함께 monkeypatch.
+    """
+    import gliner as gliner_pkg
+
+    if fake_model is None:
+        fake_model = _make_fake_gliner_model(predict_return=predict_return)
+    from_pretrained = MagicMock(return_value=fake_model)
+    monkeypatch.setattr(
+        gliner_pkg.GLiNER,
+        "from_pretrained",
+        from_pretrained,
+    )
+    return fake_model, from_pretrained
+
+
+def _patch_pretrained_tokenizer_fast(monkeypatch):
+    """transformers.PreTrainedTokenizerFast.from_pretrained 를 가짜로 치환."""
+    from transformers import PreTrainedTokenizerFast
+
+    fake_tokenizer = MagicMock(name="fast-tokenizer")
+    from_pretrained = MagicMock(return_value=fake_tokenizer)
+    monkeypatch.setattr(
+        PreTrainedTokenizerFast,
+        "from_pretrained",
+        from_pretrained,
+    )
+    return fake_tokenizer, from_pretrained
+
+
+def _make_gliner_adapter(tmp_path, monkeypatch, **kwargs):
+    """_GLinerAdapter 를 직접 생성해 반환하는 헬퍼.
+
+    L5Layer 를 거치지 않고 어댑터 단위 동작을 검증할 때 사용.
+    """
+    fake_model = kwargs.pop("fake_model", None)
+    predict_return = kwargs.pop("predict_return", None)
+    name = kwargs.pop("name", "gliner-direct")
+    model_dir = _write_gliner_model_dir(tmp_path, name=name, **kwargs)
+    monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+    fake_model, _ = _patch_gliner(
+        monkeypatch,
+        fake_model=fake_model,
+        predict_return=predict_return,
+    )
+    _patch_pretrained_tokenizer_fast(monkeypatch)
+
+    spec_path = model_dir / "pii_labels.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    adapter = l5_mod._GLinerAdapter(model_dir, spec)
+    return adapter, fake_model, spec
+
+
+# ──────────────────────────────────────────────
+# 9.A. GLiNER dispatch — _load_ner_model 분기
+# ──────────────────────────────────────────────
+
+
+class TestGLinerDispatch:
+    """pii_labels.json 의 adapter='gliner' 가 _GLinerAdapter 로 분기."""
+
+    def test_gliner_adapter_dispatched(self, tmp_path, monkeypatch):
+        # adapter='gliner' → _GLinerAdapter 인스턴스
+        _write_gliner_model_dir(tmp_path, name="gliner-disp")
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        _patch_gliner(monkeypatch)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        inst = L5Layer(model_name="gliner-disp")
+
+        # 모듈 최상단에 _GLinerAdapter 클래스가 정의되어 있어야 한다
+        assert hasattr(l5_mod, "_GLinerAdapter")
+        assert inst._adapter is not None
+        assert isinstance(inst._adapter, l5_mod._GLinerAdapter)
+
+    def test_hf_pipeline_dispatch_unaffected(self, tmp_path, monkeypatch):
+        # GLiNER 추가가 hf-pipeline 분기를 깨뜨리지 않는다
+        _write_charlevel_model_dir(
+            tmp_path,
+            name="pipeline-still-works",
+            adapter="hf-pipeline",
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+
+        inst = L5Layer(model_name="pipeline-still-works")
+
+        assert isinstance(inst._adapter, l5_mod._HFPipelineAdapter)
+
+    def test_hf_charlevel_dispatch_unaffected(self, tmp_path, monkeypatch):
+        # GLiNER 추가가 hf-charlevel 분기를 깨뜨리지 않는다
+        _write_charlevel_model_dir(tmp_path, name="charlevel-still-works")
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        fake_tokenizer = MagicMock()
+        fake_tokenizer.add_tokens = MagicMock(return_value=1)
+        fake_model = MagicMock()
+        fake_model.eval = MagicMock(return_value=fake_model)
+        fake_model.resize_token_embeddings = MagicMock()
+        monkeypatch.setattr(
+            l5_mod,
+            "AutoTokenizer",
+            MagicMock(from_pretrained=MagicMock(return_value=fake_tokenizer)),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            l5_mod,
+            "AutoModelForTokenClassification",
+            MagicMock(from_pretrained=MagicMock(return_value=fake_model)),
+            raising=False,
+        )
+
+        inst = L5Layer(model_name="charlevel-still-works")
+
+        assert isinstance(inst._adapter, l5_mod._HFCharLevelAdapter)
+
+
+# ──────────────────────────────────────────────
+# 9.B. GLiNER 어댑터 로딩
+# ──────────────────────────────────────────────
+
+
+class TestGLinerAdapterLoading:
+    """_GLinerAdapter 생성자 동작."""
+
+    def test_calls_gliner_from_pretrained(self, tmp_path, monkeypatch):
+        # gliner.GLiNER.from_pretrained 가 모델 폴더 경로로 호출됨
+        model_dir = _write_gliner_model_dir(tmp_path, name="gliner-load")
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        _, from_pretrained = _patch_gliner(monkeypatch)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        L5Layer(model_name="gliner-load")
+
+        assert from_pretrained.called
+        # from_pretrained 의 첫 번째 인자에 모델 폴더 경로가 들어가야 한다
+        call_args = from_pretrained.call_args_list[0]
+        passed = list(call_args.args) + list(call_args.kwargs.values())
+        assert any(str(model_dir) in str(arg) for arg in passed)
+
+    def test_missing_inference_labels_is_fail_open(self, tmp_path, monkeypatch):
+        # inference_labels 가 spec 에 없으면 어댑터 생성 거부 → fail-open
+        _write_gliner_model_dir(
+            tmp_path,
+            name="gliner-no-labels",
+            omit_inference_labels=True,
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        _patch_gliner(monkeypatch)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        inst = L5Layer(model_name="gliner-no-labels")
+
+        assert inst._adapter is None
+        assert inst._ner_model is None
+
+    def test_deberta_compat_layer_uses_pretrained_tokenizer_fast(
+        self, tmp_path, monkeypatch
+    ):
+        # DeBERTa-v3 호환 레이어: BaseGLiNER._load_tokenizer 가 호출되면
+        # 그 내부 구현이 PreTrainedTokenizerFast.from_pretrained 를
+        # 사용하도록 어댑터가 교체해 두어야 한다
+        from gliner.model import BaseGLiNER
+
+        _write_gliner_model_dir(tmp_path, name="gliner-deberta")
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        _patch_gliner(monkeypatch)
+        _, fast_from_pretrained = _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        # 어댑터 로드 (이 시점에 BaseGLiNER._load_tokenizer 가 교체됨)
+        L5Layer(model_name="gliner-deberta")
+
+        # 교체된 _load_tokenizer 를 직접 호출해 PreTrainedTokenizerFast 가
+        # 쓰이는지 확인
+        from gliner.config import GLiNERConfig
+
+        fake_config = MagicMock(spec=GLiNERConfig)
+        # 호출 자체로 fast tokenizer 경로를 타야 한다 — 실패하면
+        # 호환 레이어가 활성화되지 않은 것
+        # 내부 후처리 단계에서 예외가 나도 호출 자체는 발생했어야 한다
+        with contextlib.suppress(Exception):
+            BaseGLiNER._load_tokenizer(
+                fake_config,
+                tmp_path / "gliner-deberta",
+            )
+
+        assert fast_from_pretrained.called
+
+    def test_words_splitter_override(self, tmp_path, monkeypatch):
+        # spec.words_splitter 가 있으면 model.data_processor.words_splitter
+        # 가 새 splitter 객체로 교체된다
+        _write_gliner_model_dir(
+            tmp_path,
+            name="gliner-mecab",
+            words_splitter="mecab",
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        fake_model, _ = _patch_gliner(monkeypatch)
+        original_splitter = fake_model.data_processor.words_splitter
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        # WordsSplitter 호출을 추적
+        from gliner.data_processing import WordsSplitter
+
+        new_splitter = MagicMock(name="mecab-splitter")
+        # 일부 구현은 WordsSplitter("mecab") 처럼 type 으로 인스턴스 생성
+        monkeypatch.setattr(
+            WordsSplitter,
+            "__new__",
+            staticmethod(lambda cls, *a, **kw: new_splitter),
+            raising=False,
+        )
+
+        L5Layer(model_name="gliner-mecab")
+
+        # 교체 후 splitter 가 원래 것과 달라야 한다
+        assert fake_model.data_processor.words_splitter is not original_splitter
+
+    def test_words_splitter_omitted_keeps_default(self, tmp_path, monkeypatch):
+        # words_splitter 가 spec 에 없으면 model.data_processor.words_splitter
+        # 는 그대로 유지된다
+        _write_gliner_model_dir(
+            tmp_path,
+            name="gliner-default-splitter",
+            words_splitter=None,
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        fake_model, _ = _patch_gliner(monkeypatch)
+        original_splitter = fake_model.data_processor.words_splitter
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        L5Layer(model_name="gliner-default-splitter")
+
+        assert fake_model.data_processor.words_splitter is original_splitter
+
+    def test_gliner_load_failure_is_fail_open(self, tmp_path, monkeypatch):
+        # GLiNER.from_pretrained 가 예외 → fail-open
+        _write_gliner_model_dir(tmp_path, name="gliner-boom")
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+
+        import gliner as gliner_pkg
+
+        def _boom(*args, **kwargs):
+            msg = "GLiNER load failed"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(gliner_pkg.GLiNER, "from_pretrained", _boom)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        inst = L5Layer(model_name="gliner-boom")
+
+        assert inst._adapter is None
+        assert inst._ner_model is None
+
+
+# ──────────────────────────────────────────────
+# 9.C. 라벨 청크 분할 (max_types 폴백)
+# ──────────────────────────────────────────────
+
+
+class TestGLinerLabelChunking:
+    """inference_labels 길이가 max_types 안/밖일 때 호출 패턴."""
+
+    def test_labels_within_max_types_single_call(self, tmp_path, monkeypatch):
+        # inference_labels = 5개, max_types = 10 → predict_entities 1회 호출
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-fits",
+            inference_labels=[
+                "사람 이름",
+                "기관명",
+                "주소",
+                "위치명",
+                "직업명",
+            ],
+            label_map={
+                "사람 이름": "person",
+                "기관명": "organization",
+                "주소": "address",
+                "위치명": "location",
+                "직업명": "job_title",
+            },
+            gliner_config_max_types=10,
+        )
+
+        adapter.predict("간단한 한국어 입력")
+
+        # 단일 라벨 청크 → predict_entities 1회 (텍스트 윈도우도 1)
+        assert fake_model.predict_entities.call_count == 1
+
+    def test_labels_exceeding_max_types_split_into_chunks(
+        self, tmp_path, monkeypatch
+    ):
+        # inference_labels = 12개, max_types = 5 → predict_entities 가
+        # 라벨 청크 단위로 여러 번 호출됨 (한 텍스트 윈도우 내)
+        many_labels = [f"라벨{i}" for i in range(12)]
+        many_label_map = {
+            label: f"type{i}" for i, label in enumerate(many_labels)
+        }
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-too-many",
+            inference_labels=many_labels,
+            label_map=many_label_map,
+            block_singletons=[],
+            gliner_config_max_types=5,
+        )
+
+        adapter.predict("간단한 한국어 입력")
+
+        # 12 / 5 = ceil 3 청크 이상 호출되어야 함
+        assert fake_model.predict_entities.call_count >= 3
+
+
+# ──────────────────────────────────────────────
+# 9.D. 슬라이딩 윈도우 텍스트 청크
+# ──────────────────────────────────────────────
+
+
+class TestGLinerTextWindowing:
+    """text_window_max_len + overlap 기반 슬라이딩 윈도우."""
+
+    def test_short_text_single_window(self, tmp_path, monkeypatch):
+        # 짧은 텍스트 → 단일 윈도우 → predict_entities 1회 호출
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-short",
+            text_window_max_len=64,
+            text_window_overlap=8,
+            gliner_config_max_types=10,
+        )
+
+        adapter.predict("짧은 입력")
+
+        assert fake_model.predict_entities.call_count == 1
+
+    def test_long_text_split_into_multiple_windows(self, tmp_path, monkeypatch):
+        # 긴 텍스트 → 여러 윈도우로 분할 → predict_entities 가 여러 번
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-long",
+            text_window_max_len=20,
+            text_window_overlap=4,
+            gliner_config_max_types=10,
+        )
+
+        long_text = "가" * 200
+        adapter.predict(long_text)
+
+        # 200 글자에 max_len=20, overlap=4 → 윈도우 여러 개
+        assert fake_model.predict_entities.call_count >= 5
+
+    def test_split_into_text_windows_helper_returns_overlapping_ranges(
+        self, tmp_path, monkeypatch
+    ):
+        # _split_into_text_windows 헬퍼가 (start, end) 튜플 리스트를 반환,
+        # 인접 윈도우는 overlap 만큼 겹침
+        adapter, _, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-split",
+            text_window_max_len=10,
+            text_window_overlap=3,
+            gliner_config_max_types=10,
+        )
+
+        # 어댑터에 슬라이딩 윈도우 헬퍼가 노출되어야 한다
+        assert hasattr(adapter, "_split_into_text_windows")
+        ranges = adapter._split_into_text_windows("a" * 30, 10, 3)
+
+        assert isinstance(ranges, list)
+        assert len(ranges) >= 2
+        # 첫 윈도우 시작은 0
+        assert ranges[0][0] == 0
+        # 마지막 윈도우 끝은 텍스트 길이 이상이어야 한다
+        assert ranges[-1][1] >= 30
+        # 인접 윈도우 겹침 검증
+        for prev, cur in itertools.pairwise(ranges):
+            assert cur[0] < prev[1]
+
+    def test_short_text_returns_single_window(self, tmp_path, monkeypatch):
+        # _split_into_text_windows 의 입력 길이가 max_len 이하면 단일 윈도우
+        adapter, _, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-onewin",
+            text_window_max_len=100,
+            text_window_overlap=10,
+            gliner_config_max_types=10,
+        )
+
+        ranges = adapter._split_into_text_windows("짧은", 100, 10)
+
+        assert ranges == [(0, len("짧은"))]
+
+    def test_window_local_offset_mapped_to_global(self, tmp_path, monkeypatch):
+        # 두 번째 윈도우에서 잡힌 엔티티의 (start, end) 가 전역 좌표로
+        # 정확히 매핑되어야 한다
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-offset",
+            text_window_max_len=10,
+            text_window_overlap=2,
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.0},
+            default_threshold=0.0,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+        # 윈도우별로 다른 결과를 반환하는 side_effect 구성.
+        # 첫 윈도우는 빈, 두 번째 윈도우(local_start=8 가정) 에서
+        # local start=2, end=5 의 엔티티 → 전역 start=10, end=13
+        call_log = []
+
+        def _predict(text, **kwargs):
+            call_log.append(text)
+            if len(call_log) == 2:
+                return [
+                    {
+                        "label": "사람 이름",
+                        "text": "홍길동",
+                        "start": 2,
+                        "end": 5,
+                        "score": 0.9,
+                    }
+                ]
+            return []
+
+        fake_model.predict_entities.side_effect = _predict
+
+        # 30글자 입력 → 윈도우 여러 개
+        result = adapter.predict("한" * 30)
+
+        assert any(
+            r.get("entity") == "person" and r.get("start", -1) >= 8
+            for r in result
+        )
+
+    def test_dedup_same_span_across_windows(self, tmp_path, monkeypatch):
+        # 같은 (start, end) 가 여러 윈도우에서 잡혀도 1개만 남고,
+        # score 가 가장 높은 라벨 유지
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-dedup",
+            text_window_max_len=20,
+            text_window_overlap=10,
+            inference_labels=["사람 이름", "기관명"],
+            label_map={
+                "사람 이름": "person",
+                "기관명": "organization",
+            },
+            block_singletons=[],
+            category_thresholds={"person": 0.0, "organization": 0.0},
+            default_threshold=0.0,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+        # 모든 윈도우에서 동일 전역 span (start=0, end=3, "홍길동") 반환
+        # 단, 한 번은 score 0.9 (사람 이름), 한 번은 score 0.5 (기관명)
+        scores = iter([0.9, 0.5, 0.4])
+        labels = iter(["사람 이름", "기관명", "사람 이름"])
+
+        def _predict(text, **kwargs):
+            try:
+                s = next(scores)
+                lab = next(labels)
+            except StopIteration:
+                return []
+            return [
+                {
+                    "label": lab,
+                    "text": "홍길동",
+                    "start": 0,
+                    "end": 3,
+                    "score": s,
+                }
+            ]
+
+        fake_model.predict_entities.side_effect = _predict
+
+        result = adapter.predict("홍길동" + "가" * 50)
+
+        # 같은 span (0, 3) 은 한 개만 남아야 한다
+        spans = [
+            (r["start"], r.get("end", r["start"] + len(r["word"])))
+            for r in result
+            if (r["start"], r.get("end", -1)) == (0, 3)
+        ]
+        assert len(spans) <= 1
+        # 최고 점수 라벨(사람 이름→person) 이 유지돼야 한다
+        if spans:
+            keep = next(r for r in result if r["start"] == 0)
+            assert keep["entity"] == "person"
+
+
+# ──────────────────────────────────────────────
+# 9.E. 카테고리별 차등 임계값
+# ──────────────────────────────────────────────
+
+
+class TestGLinerCategoryThresholds:
+    """category_thresholds + default_threshold 적용."""
+
+    def test_per_label_cut_drops_below_threshold(self, tmp_path, monkeypatch):
+        # person cut 0.65 미만은 제거
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-cat-cut",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.65},
+            default_threshold=0.5,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍",
+                "start": 0,
+                "end": 1,
+                "score": 0.40,  # 0.65 미만 → 제거
+            }
+        ]
+
+        result = adapter.predict("홍이 좋아한다")
+
+        assert all(r.get("entity") != "person" for r in result)
+
+    def test_per_label_cut_keeps_above_threshold(self, tmp_path, monkeypatch):
+        # credit_rating cut 0.85 이상만 유지
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-cat-keep",
+            inference_labels=["신용등급"],
+            label_map={"신용등급": "credit_rating"},
+            block_singletons=["credit_rating"],
+            category_thresholds={"credit_rating": 0.85},
+            default_threshold=0.5,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "신용등급",
+                "text": "AAA등급 신용",
+                "start": 0,
+                "end": 7,
+                "score": 0.90,  # 0.85 이상 → 유지
+            }
+        ]
+
+        result = adapter.predict("AAA등급 신용 안내")
+
+        assert any(r.get("entity") == "credit_rating" for r in result)
+
+    def test_default_threshold_for_unlisted_label(self, tmp_path, monkeypatch):
+        # category_thresholds 에 없는 라벨 → default_threshold 적용
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-default-cut",
+            inference_labels=["IT시스템정보"],
+            label_map={"IT시스템정보": "it_system"},
+            block_singletons=["it_system"],
+            category_thresholds={},  # 아무것도 명시 안 함
+            default_threshold=0.75,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+        # 0.6 → default 0.75 미만 → 제거
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "IT시스템정보",
+                "text": "AWS-VPC-prod-cluster-42",
+                "start": 0,
+                "end": 23,
+                "score": 0.6,
+            }
+        ]
+
+        result = adapter.predict("로그 시스템 정보 출력")
+
+        assert all(r.get("entity") != "it_system" for r in result)
+
+    def test_default_threshold_defaults_to_0_75(self, tmp_path, monkeypatch):
+        # spec 에 default_threshold 가 없으면 기본값 0.75 가 사용된다
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-default-imp",
+            inference_labels=["대출정보"],
+            label_map={"대출정보": "loan"},
+            block_singletons=["loan"],
+            category_thresholds={},
+            default_threshold=None,  # spec 에서 누락
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+        # 0.74 → 0.75 기본 cut 미만 → 제거
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "대출정보",
+                "text": "주택담보대출 5억",
+                "start": 0,
+                "end": 8,
+                "score": 0.74,
+            }
+        ]
+        out_low = adapter.predict("대출 안내")
+        assert all(r.get("entity") != "loan" for r in out_low)
+
+        # 0.80 → 통과
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "대출정보",
+                "text": "주택담보대출 5억",
+                "start": 0,
+                "end": 8,
+                "score": 0.80,
+            }
+        ]
+        out_high = adapter.predict("대출 안내")
+        assert any(r.get("entity") == "loan" for r in out_high)
+
+
+# ──────────────────────────────────────────────
+# 9.F. 이중 단계 임계값
+# ──────────────────────────────────────────────
+
+
+class TestGLinerTwoStageThreshold:
+    """pre_threshold(1차) + category_thresholds(2차) 동시 적용."""
+
+    def test_predict_entities_called_with_pre_threshold(
+        self, tmp_path, monkeypatch
+    ):
+        # 1차 cut: predict_entities(threshold=0.4) 로 호출됨 (기본)
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-pre-default",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.65},
+            default_threshold=0.5,
+            pre_threshold=None,  # spec 에서 생략 → 기본 0.4
+            gliner_config_max_types=10,
+        )
+
+        adapter.predict("홍길동이 좋아한다")
+
+        # threshold 인자 검증
+        call = fake_model.predict_entities.call_args_list[0]
+        threshold = call.kwargs.get("threshold")
+        if threshold is None and len(call.args) >= 3:
+            threshold = call.args[2]
+        assert threshold == pytest.approx(0.4)
+
+    def test_pre_threshold_override(self, tmp_path, monkeypatch):
+        # spec.pre_threshold = 0.3 으로 명시 → 그 값으로 호출
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-pre-override",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.65},
+            default_threshold=0.5,
+            pre_threshold=0.3,
+            gliner_config_max_types=10,
+        )
+
+        adapter.predict("홍길동이 좋아한다")
+
+        call = fake_model.predict_entities.call_args_list[0]
+        threshold = call.kwargs.get("threshold")
+        if threshold is None and len(call.args) >= 3:
+            threshold = call.args[2]
+        assert threshold == pytest.approx(0.3)
+
+    def test_pass_first_pass_second(self, tmp_path, monkeypatch):
+        # 1차 통과 + 2차 통과 → 결과에 포함
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-2pass-pass",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.65},
+            default_threshold=0.5,
+            pre_threshold=0.3,
+            gliner_config_max_types=10,
+        )
+
+        # 0.7 — 1차(0.3) 통과, 2차(0.65) 통과
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍길동",
+                "start": 0,
+                "end": 3,
+                "score": 0.7,
+            }
+        ]
+
+        result = adapter.predict("홍길동이 좋다")
+
+        assert any(r.get("entity") == "person" for r in result)
+
+    def test_pass_first_fail_second(self, tmp_path, monkeypatch):
+        # 1차 통과 + 2차 실패 → 결과에서 제외
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-2pass-fail",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.65},
+            default_threshold=0.5,
+            pre_threshold=0.3,
+            gliner_config_max_types=10,
+        )
+
+        # 0.5 — 1차(0.3) 통과, 2차(0.65) 실패 → 제거
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍길동",
+                "start": 0,
+                "end": 3,
+                "score": 0.5,
+            }
+        ]
+
+        result = adapter.predict("홍길동이 좋다")
+
+        assert all(r.get("entity") != "person" for r in result)
+
+
+# ──────────────────────────────────────────────
+# 9.G. 후처리 오탐 필터 (한국어 PII 특화)
+# ──────────────────────────────────────────────
+
+
+class TestGLinerPostFilters:
+    """후처리 오탐 필터 — 라벨별 정규식과 최소 길이."""
+
+    def _adapter_with_label(
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        ko_label,
+        norm_label,
+        category_thresholds=None,
+    ):
+        """단일 라벨 특화 어댑터 헬퍼."""
+        return _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name=f"gliner-filter-{norm_label}",
+            inference_labels=[ko_label],
+            label_map={ko_label: norm_label},
+            block_singletons=[norm_label],
+            category_thresholds=(
+                {norm_label: 0.0}
+                if category_thresholds is None
+                else category_thresholds
+            ),
+            default_threshold=0.0,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+    def test_person_single_char_filtered(self, tmp_path, monkeypatch):
+        # PERSON 1글자 ("홍") → 거름
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="사람 이름",
+            norm_label="person",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍",
+                "start": 0,
+                "end": 1,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("홍이 왔다")
+
+        assert all(r.get("entity") != "person" for r in result)
+
+    def test_person_starting_with_digit_filtered(self, tmp_path, monkeypatch):
+        # PERSON 숫자 시작 ("1길동") → 거름
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="사람 이름",
+            norm_label="person",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "1길동",
+                "start": 0,
+                "end": 3,
+                "score": 0.95,
+            }
+        ]
+
+        result = adapter.predict("1길동이 왔다")
+
+        assert all(r.get("entity") != "person" for r in result)
+
+    def test_person_with_josa_trimmed(self, tmp_path, monkeypatch):
+        # 조사가 붙은 경우 자동 trim — "정하은이지" → "정하은"
+        # word/start/end 가 trim 결과로 보정됨
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="사람 이름",
+            norm_label="person",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "정하은이지",
+                "start": 5,
+                "end": 10,
+                "score": 0.95,
+            }
+        ]
+
+        result = adapter.predict("어제 본 정하은이지 그 사람")
+
+        person_results = [r for r in result if r.get("entity") == "person"]
+        assert len(person_results) == 1
+        ent = person_results[0]
+        assert ent["word"] == "정하은"
+        # start 는 그대로, end 는 줄어들어야 한다
+        assert ent["start"] == 5
+        end = ent.get("end", ent["start"] + len(ent["word"]))
+        assert end == 5 + len("정하은")
+
+    def test_person_organization_suffix_filtered(self, tmp_path, monkeypatch):
+        # PERSON 으로 잡혔지만 조직 접미사("주식회사") 포함 → 거름
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="사람 이름",
+            norm_label="person",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "삼성주식회사",
+                "start": 0,
+                "end": 6,
+                "score": 0.95,
+            }
+        ]
+
+        result = adapter.predict("삼성주식회사 발표")
+
+        assert all(r.get("entity") != "person" for r in result)
+
+    def test_organization_common_noun_filtered(self, tmp_path, monkeypatch):
+        # ORGANIZATION 일반명사 "회사" → 거름
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="기관명",
+            norm_label="organization",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "기관명",
+                "text": "회사",
+                "start": 0,
+                "end": 2,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("회사 다닌다")
+
+        assert all(r.get("entity") != "organization" for r in result)
+
+    def test_organization_standalone_bank_name_filtered(
+        self, tmp_path, monkeypatch
+    ):
+        # ORGANIZATION 단독 은행명 "우리" → 거름
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="기관명",
+            norm_label="organization",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "기관명",
+                "text": "우리",
+                "start": 0,
+                "end": 2,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("우리 같이")
+
+        assert all(r.get("entity") != "organization" for r in result)
+
+    def test_address_standalone_place_filtered(self, tmp_path, monkeypatch):
+        # ADDRESS 단독 지명 "서울" → 거름 (최소 2개 요소 필요)
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="주소",
+            norm_label="address",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "주소",
+                "text": "서울",
+                "start": 0,
+                "end": 2,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("서울에 간다")
+
+        assert all(r.get("entity") != "address" for r in result)
+
+    def test_job_title_single_char_filtered(self, tmp_path, monkeypatch):
+        # JOB_TITLE 1글자 → 거름
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="직업명",
+            norm_label="job_title",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "직업명",
+                "text": "장",
+                "start": 0,
+                "end": 1,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("장 직급")
+
+        assert all(r.get("entity") != "job_title" for r in result)
+
+    def test_min_length_person_below_two_filtered(self, tmp_path, monkeypatch):
+        # PERSON 최소 길이 2 미만 → 거름 (1글자 정확히 동일 케이스도 보장)
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="사람 이름",
+            norm_label="person",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "박",
+                "start": 0,
+                "end": 1,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("박 회의")
+
+        assert all(r.get("entity") != "person" for r in result)
+
+    def test_min_length_address_below_five_filtered(
+        self, tmp_path, monkeypatch
+    ):
+        # ADDRESS 최소 길이 5 미만 → 거름 (조각 주소)
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="주소",
+            norm_label="address",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "주소",
+                "text": "강남구",
+                "start": 0,
+                "end": 3,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("강남구로")
+
+        assert all(r.get("entity") != "address" for r in result)
+
+    def test_address_full_address_kept(self, tmp_path, monkeypatch):
+        # ADDRESS 충분히 긴 (요소 ≥2) 주소는 유지
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="주소",
+            norm_label="address",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "주소",
+                "text": "서울시 강남구 역삼동 123-45",
+                "start": 0,
+                "end": 18,
+                "score": 0.95,
+            }
+        ]
+
+        result = adapter.predict("서울시 강남구 역삼동 123-45 거주")
+
+        assert any(r.get("entity") == "address" for r in result)
+
+    def test_person_normal_kept(self, tmp_path, monkeypatch):
+        # 정상 PERSON ("홍길동") 은 유지
+        adapter, fake_model, _ = self._adapter_with_label(
+            tmp_path,
+            monkeypatch,
+            ko_label="사람 이름",
+            norm_label="person",
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍길동",
+                "start": 0,
+                "end": 3,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("홍길동이 왔다")
+
+        assert any(r.get("entity") == "person" for r in result)
+
+
+# ──────────────────────────────────────────────
+# 9.H. 출력 정규화 + check_ner 통합
+# ──────────────────────────────────────────────
+
+
+class TestGLinerOutputAndIntegration:
+    """predict 출력 키 + L5Layer._check_ner 차단 흐름."""
+
+    def test_predict_output_has_required_keys(self, tmp_path, monkeypatch):
+        # entity / word / start / end / score 키가 모두 노출됨
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-out-keys",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.0},
+            default_threshold=0.0,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍길동",
+                "start": 0,
+                "end": 3,
+                "score": 0.9,
+            }
+        ]
+
+        result = adapter.predict("홍길동이 왔다")
+
+        assert len(result) == 1
+        ent = result[0]
+        for key in ("entity", "word", "start", "end", "score"):
+            assert key in ent
+
+    async def test_gliner_entity_flows_into_check_ner_singleton(
+        self, tmp_path, monkeypatch
+    ):
+        # 어댑터가 반환한 person 엔티티 → L5Layer._check_ner 가
+        # singleton 차단으로 처리
+        _write_gliner_model_dir(
+            tmp_path,
+            name="gliner-integ-singleton",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.0},
+            default_threshold=0.0,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        fake_model, _ = _patch_gliner(monkeypatch)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍길동",
+                "start": 0,
+                "end": 3,
+                "score": 0.9,
+            }
+        ]
+
+        inst = L5Layer(model_name="gliner-integ-singleton")
+        result = await inst.check(_req("홍길동이 왔다"))
+
+        assert result.allowed is False
+        assert "person" in result.tags
+        assert "ner" in result.tags
+        assert "PII detected: person" in result.reason
+
+    async def test_gliner_entity_flows_into_check_ner_combination(
+        self, tmp_path, monkeypatch
+    ):
+        # person + location 동시 감지 → 조합 차단
+        _write_gliner_model_dir(
+            tmp_path,
+            name="gliner-integ-combo",
+            inference_labels=["사람 이름", "위치명"],
+            label_map={"사람 이름": "person", "위치명": "location"},
+            block_singletons=[],
+            block_combinations=[["person", "location"]],
+            category_thresholds={"person": 0.0, "location": 0.0},
+            default_threshold=0.0,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        fake_model, _ = _patch_gliner(monkeypatch)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        fake_model.predict_entities.return_value = [
+            {
+                "label": "사람 이름",
+                "text": "홍길동",
+                "start": 0,
+                "end": 3,
+                "score": 0.9,
+            },
+            {
+                "label": "위치명",
+                "text": "서울",
+                "start": 5,
+                "end": 7,
+                "score": 0.9,
+            },
+        ]
+
+        inst = L5Layer(model_name="gliner-integ-combo")
+        result = await inst.check(_req("홍길동이 서울에 산다"))
+
+        assert result.allowed is False
+        assert "person" in result.tags
+        assert "location" in result.tags
+        assert "+" in (result.reason or "")
+
+
+# ──────────────────────────────────────────────
+# 9.I. fail-open 케이스
+# ──────────────────────────────────────────────
+
+
+class TestGLinerFailOpen:
+    """GLiNER 어댑터의 fail-open 동작."""
+
+    def test_unknown_adapter_value_fails_open(self, tmp_path, monkeypatch):
+        # 알 수 없는 adapter 값 → fail-open
+        _write_gliner_model_dir(
+            tmp_path,
+            name="gliner-unknown",
+            adapter="totally-novel-adapter",
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        _patch_gliner(monkeypatch)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        inst = L5Layer(model_name="gliner-unknown")
+
+        assert inst._adapter is None
+        assert inst._ner_model is None
+
+    def test_predict_entities_exception_window_fail_open(
+        self, tmp_path, monkeypatch
+    ):
+        # predict_entities 가 예외를 던져도 어댑터 predict 는 빈 결과를
+        # 반환 (해당 윈도우만 스킵, 전체 fail-open)
+        adapter, fake_model, _ = _make_gliner_adapter(
+            tmp_path,
+            monkeypatch,
+            name="gliner-window-fail",
+            inference_labels=["사람 이름"],
+            label_map={"사람 이름": "person"},
+            block_singletons=["person"],
+            category_thresholds={"person": 0.0},
+            default_threshold=0.0,
+            pre_threshold=0.0,
+            gliner_config_max_types=10,
+        )
+
+        def _boom(*args, **kwargs):
+            msg = "GLiNER inference failure"
+            raise RuntimeError(msg)
+
+        fake_model.predict_entities.side_effect = _boom
+
+        # 예외 전파 없이 빈 결과
+        result = adapter.predict("홍길동이 왔다")
+        assert result == []
+
+    async def test_l5_layer_allows_when_gliner_load_failed(
+        self, tmp_path, monkeypatch
+    ):
+        # GLiNER 어댑터 로드 실패 시 L5Layer 는 NER 비활성화로 fail-open
+        _write_gliner_model_dir(tmp_path, name="gliner-load-fail")
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+
+        import gliner as gliner_pkg
+
+        def _boom(*args, **kwargs):
+            msg = "GLiNER load failed"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(gliner_pkg.GLiNER, "from_pretrained", _boom)
+        _patch_pretrained_tokenizer_fast(monkeypatch)
+
+        inst = L5Layer(model_name="gliner-load-fail")
+        # NER 전용 입력 (Regex 미매칭) → fail-open 이므로 허용
+        result = await inst.check(_req("홍길동이 서울에 산다"))
+
+        assert result.allowed is True
+        assert inst._adapter is None
+        assert inst._ner_model is None
+
+
+# ──────────────────────────────────────────────
+# 9.J. 회귀 방지 — 기존 hf-pipeline / hf-charlevel 통합
+# ──────────────────────────────────────────────
+
+
+class TestGLinerRegression:
+    """GLiNER 추가가 기존 어댑터 dispatch 에 영향을 미치지 않는지."""
+
+    def test_ner_ko_still_dispatches_to_pipeline(self, monkeypatch):
+        # 실제 ner-ko 모델 폴더 — 여전히 _HFPipelineAdapter 로 분기
+        _patch_pipeline(monkeypatch)
+
+        inst = L5Layer(model_name="ner-ko")
+
+        assert isinstance(inst._adapter, l5_mod._HFPipelineAdapter)
+
+    def test_pii_model_v11_still_dispatches_to_charlevel(
+        self, tmp_path, monkeypatch
+    ):
+        # pii_model_v11 같은 charlevel 어댑터 분기 회귀 없음
+        _write_charlevel_model_dir(
+            tmp_path,
+            name="charlevel-regression",
+            adapter="hf-charlevel",
+        )
+        monkeypatch.setattr(l5_mod, "_MODEL_BASE_DIR", tmp_path)
+        _patch_pipeline(monkeypatch)
+        fake_tokenizer = MagicMock()
+        fake_tokenizer.add_tokens = MagicMock(return_value=1)
+        fake_model = MagicMock()
+        fake_model.eval = MagicMock(return_value=fake_model)
+        fake_model.resize_token_embeddings = MagicMock()
+        monkeypatch.setattr(
+            l5_mod,
+            "AutoTokenizer",
+            MagicMock(from_pretrained=MagicMock(return_value=fake_tokenizer)),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            l5_mod,
+            "AutoModelForTokenClassification",
+            MagicMock(from_pretrained=MagicMock(return_value=fake_model)),
+            raising=False,
+        )
+
+        inst = L5Layer(model_name="charlevel-regression")
+
+        assert isinstance(inst._adapter, l5_mod._HFCharLevelAdapter)
