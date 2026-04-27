@@ -1,0 +1,40 @@
+{
+  "adapter": "hf-pipeline",
+  "label_map": {
+    "이름": "person",
+    "전화번호": "phone_number",
+    "휴대전화번호": "mobile_number",
+    "주민등록번호": "resident_id",
+    "계좌번호": "account_number",
+    "카드번호": "card_number",
+    "여권번호": "passport_number",
+    "운전면허번호": "driver_license",
+    "전자메일": "email",
+    "로그인ID": "login_id",
+    "상세주소": "address",
+    "우편번호": "zip_code",
+    "가맹점명": "merchant",
+    "결제금액": "payment_amount",
+    "신용점수": "credit_score"
+  },
+  "block_singletons": [
+    "person",
+    "phone_number",
+    "mobile_number",
+    "resident_id",
+    "account_number",
+    "card_number",
+    "passport_number",
+    "driver_license",
+    "email",
+    "login_id",
+    "address",
+    "zip_code",
+    "merchant",
+    "payment_amount",
+    "credit_score"
+  ],
+  "block_combinations": [],
+  "min_score": 0.7,
+  "aggregation_strategy": "simple"
+}
