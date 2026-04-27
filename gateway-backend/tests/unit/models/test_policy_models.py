@@ -148,3 +148,46 @@ def test_all_disabled_sets_outbound_false():
     """`all_disabled()` 헬퍼는 outbound 까지 False 로 세팅한다."""
     policy = GuardrailPolicy.all_disabled()
     assert policy.outbound is False
+
+
+def test_from_layer_indices_subset():
+    """레이어 인덱스 셋과 outbound 플래그로 정책을 생성할 수 있다."""
+    policy = GuardrailPolicy.from_layer_indices({1, 4, 5}, outbound=True)
+    assert policy.enabled_layers() == [1, 4, 5]
+    assert policy.l1 is True
+    assert policy.l2 is False
+    assert policy.l3 is False
+    assert policy.l4 is True
+    assert policy.l5 is True
+    assert policy.l6 is False
+    assert policy.outbound is True
+
+
+def test_from_layer_indices_empty_disables_outbound_when_requested():
+    """빈 인덱스 셋과 outbound=False 면 모든 레이어가 비활성이다."""
+    policy = GuardrailPolicy.from_layer_indices(set(), outbound=False)
+    assert policy.enabled_layers() == []
+    assert policy.outbound is False
+
+
+def test_from_layer_indices_accepts_all_six():
+    """1~6 전체 인덱스를 받아 all_enabled 와 동등한 정책을 만든다."""
+    policy = GuardrailPolicy.from_layer_indices(
+        {1, 2, 3, 4, 5, 6}, outbound=True
+    )
+    assert policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
+    assert policy.outbound is True
+
+
+@pytest.mark.parametrize("invalid_index", [0, 7, -1, 100])
+def test_from_layer_indices_rejects_out_of_range(invalid_index: int):
+    """1~6 외 인덱스는 ValueError 를 발생시킨다."""
+    with pytest.raises(ValueError, match="layer"):
+        GuardrailPolicy.from_layer_indices({invalid_index}, outbound=True)
+
+
+def test_from_layer_indices_accepts_iterable_with_duplicates():
+    """중복이 있는 iterable 도 set 처럼 처리되어 정책이 만들어진다."""
+    policy = GuardrailPolicy.from_layer_indices([1, 1, 3, 3], outbound=False)
+    assert policy.enabled_layers() == [1, 3]
+    assert policy.outbound is False

@@ -1,5 +1,7 @@
 """보안 정책 Pydantic 모델."""
 
+from collections.abc import Iterable
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -84,6 +86,49 @@ class GuardrailPolicy(BaseModel):
             l5=True,
             l6=True,
             outbound=True,
+        )
+
+    @classmethod
+    def from_layer_indices(
+        cls,
+        layers: Iterable[int],
+        *,
+        outbound: bool,
+    ) -> GuardrailPolicy:
+        """레이어 인덱스 셋과 outbound 플래그로 정책을 만든다.
+
+        SKIP_POLICY_FETCH 보조 환경변수(`SKIP_POLICY_FETCH_INPUT_LAYERS` /
+        `SKIP_POLICY_FETCH_OUTPUT_LAYERS`)에서 파싱된 인덱스 집합을 그대로
+        정책 객체로 변환하기 위한 팩토리. admin-backend 응답을 거치지 않으므로
+        `l5_setting` 은 항상 None 이다.
+
+        Args:
+            layers: 활성화할 레이어 인덱스의 iterable. 1~6 범위만 허용.
+                중복은 무시된다.
+            outbound: 출력 가드레일 파이프라인 활성화 여부. 빈 인덱스 셋과
+                outbound=False 를 함께 넘기면 출력 검사가 통째로 생략된다.
+
+        Returns:
+            지정한 레이어만 활성화된 GuardrailPolicy 인스턴스.
+
+        Raises:
+            ValueError: 1~6 외 인덱스가 포함된 경우.
+        """
+        wanted = set(layers)
+        invalid = {idx for idx in wanted if idx not in {1, 2, 3, 4, 5, 6}}
+        if invalid:
+            raise ValueError(
+                f"layer 인덱스는 1~6 만 허용됩니다. 잘못된 값: "
+                f"{sorted(invalid)}"
+            )
+        return cls(
+            l1=1 in wanted,
+            l2=2 in wanted,
+            l3=3 in wanted,
+            l4=4 in wanted,
+            l5=5 in wanted,
+            l6=6 in wanted,
+            outbound=outbound,
         )
 
     def enabled_layers(self) -> list[int]:
