@@ -1328,6 +1328,26 @@
         }
       }
 
+      // APP_ENV=dev 에서 PLAYGROUND_DEFAULT_API_KEY /
+      // PLAYGROUND_DEFAULT_HMAC_SECRET 가 설정돼 있으면 두 입력 칸을
+      // 자동으로 채운다. prod 에서는 서버가 빈 문자열을 내려주므로
+      // 자동 채움이 비활성화된다 (placeholder 동작 유지).
+      async function loadPlaygroundDefaults() {
+        try {
+          const res = await fetch("/v1/playground/defaults");
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.api_key && !apiKeyInput.value) {
+            apiKeyInput.value = data.api_key;
+          }
+          if (data.hmac_secret && !secretInput.value) {
+            secretInput.value = data.hmac_secret;
+          }
+        } catch {
+          // 조용히 무시 — 기존 placeholder 동작 유지
+        }
+      }
+
       document.querySelectorAll(".provider-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
           modelInput.value = btn.dataset.model;
@@ -1352,6 +1372,7 @@
 
       warnIfInsecureContext();
       loadDefaultModel();
+      loadPlaygroundDefaults();
       loadSpec();
     </script>
   </body>
