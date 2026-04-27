@@ -6,8 +6,8 @@ NER 판정 로직은 모델 폴더 내 ``pii_labels.json`` 스펙에서 읽어
 데이터 드리븐으로 결정하며, JSON 이 없으면 ``config.json`` 의
 ``id2label`` 로 관대 폴백한다.
 모델 학습 방식별 로딩·추론 차이는 ``_HFPipelineAdapter`` /
-``_HFCharLevelAdapter`` 어댑터 클래스로 캡슐화하며,
-``pii_labels.json`` 의 ``adapter`` 필드로 분기한다.
+``_HFCharLevelAdapter`` / ``_GLinerAdapter`` 어댑터 클래스로
+캡슐화하며, ``pii_labels.json`` 의 ``adapter`` 필드로 분기한다.
 fail-open 원칙: 모델 미로드, 추론 예외, JSON 파싱 실패 시 허용.
 """
 
@@ -42,6 +42,12 @@ _SENTENCE_BOUNDARIES: frozenset[str] = frozenset({".", "!", "?", "\n"})
 # charlevel 어댑터 청크 크기 비율 (max_length 대비)
 _CHUNK_RATIO: float = 0.8
 
+# GLiNER 어댑터 기본 설정값
+_GLINER_DEFAULT_PRE_THRESHOLD: float = 0.4
+_GLINER_DEFAULT_THRESHOLD: float = 0.75
+_GLINER_DEFAULT_TEXT_WINDOW_OVERLAP: int = 64
+_GLINER_DEFAULT_MAX_TYPES: int = 10
+
 # 기본 Regex 패턴: (패턴이름, 컴파일된 정규식)
 _DEFAULT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -69,6 +75,182 @@ _DEFAULT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"Bearer\s+[a-zA-Z0-9._\-]+"),
     ),
 )
+
+
+# ──────────────────────────────────────────────
+# GLiNER 후처리 오탐 필터 — 한국어 PII 특화 정규식
+# ──────────────────────────────────────────────
+
+# PERSON 으로 잡혔지만 사람이 아닌 패턴 (조직 접미사/일반명사/단위어 등)
+_PERSON_NOT_RE = re.compile(
+    r"^\d|^[가-힣][실관층호]$|^[가-힣]+에서$|^[가-힣]{1}$"
+    r"|[클컨센](?:럽|터|트리)$"
+    r"|(?:주식회사|재단|법인|협회|학교|대학|병원|은행)$"
+    r"|^(?:박사|석사|이사|감사|위원|간사|총장|학장|교장|원장)$"
+    r"|^(?:기술|기관|기업|기획|기간|기사|기록|기준|기타|배송|배달|배치|배경"
+    r"|최근|최초|최대|최소|최고|최저|최종|최신|최적|최선|최상|최악"
+    r"|선고|선정|선택|선발|성과|성명|성별|성공"
+    r"|원본|원칙|원인|원금|원래|원리)$"
+)
+
+# PERSON 뒤에 붙는 한국어 조사/어미 — trim 대상
+_PERSON_TRIM_SUFFIX_RE = re.compile(
+    r"^([가-힣]{2,4})"
+    r"(?:이지|이야|이다|이고|이랑|이는|이가|이를|이에게|이한테|이의"
+    r"|에게|한테|은|는|이|가|를|을|의|도|만|와|과|랑|씩|께"
+    r"|입니다|입니까|이요|이며|이라고|이라는|이라서|이니까|이잖아)$"
+)
+
+# ADDRESS 단독 광역 지명 — 주소로 보기에 부족
+_STANDALONE_PLACE_RE = re.compile(
+    r"^(?:한국|대한민국|서울|부산|대구|인천|광주|대전|울산|세종"
+    r"|경기|강원|충북|충남|전북|전남|경북|경남|제주)$"
+)
+
+# ORGANIZATION 으로 잡혔지만 일반명사 / 단독 단어 등 → 거름
+_NOT_ORG_RE = re.compile(
+    r"^(?:우리|하나|국민|신한|농협|기업)$"
+    r"|^[가-힣]{1}$"
+    r"|^(?:회사|기관|단체|부서|팀|조직|기업|사업|업무|서비스|시스템|프로그램)$"
+)
+
+# JOB_TITLE 끝에 조사가 붙은 케이스 — 거름
+_JOB_TITLE_JOSA_RE = re.compile(r"[를을은는이가의도]$")
+
+# 공통 — 특수문자/공백만 → 거름
+_ONLY_SPECIAL_CHARS_RE = re.compile(r"^[\s\W]+$")
+
+# JOB_TITLE 에 포함되면 안 되는 보조 문자 (괄호류, 따옴표류, "이하")
+# 풀폭 괄호와 스마트 따옴표는 RUF001 경고 회피를 위해 unicode escape 로 명시.
+_JOB_TITLE_FORBIDDEN_RE = re.compile(
+    "[()\uff08\uff09\"'\u201c\u201d\u2018\u2019]|이하",
+)
+
+# 라벨별 최소 길이 — 너무 짧은 매칭은 오탐 가능성이 높다
+_MIN_VALUE_LENGTH: dict[str, int] = {
+    "person": 2,
+    "address": 5,
+    "organization": 2,
+    "job_title": 2,
+    "location": 2,
+    "transaction": 3,
+    "loan": 3,
+    "income_property": 3,
+    "it_system": 3,
+    "credit_rating": 3,
+}
+
+
+def _trim_person_suffix(ent: dict[str, Any]) -> dict[str, Any]:
+    """PERSON 엔티티 끝의 한국어 조사/어미를 잘라낸다."""
+    word = str(ent.get("word", ""))
+    match = _PERSON_TRIM_SUFFIX_RE.match(word)
+    if match is None:
+        return ent
+    name = match.group(1)
+    new_ent = dict(ent)
+    new_ent["word"] = name
+    start = int(ent.get("start", 0))
+    new_ent["end"] = start + len(name)
+    return new_ent
+
+
+def _is_false_positive(
+    ent: dict[str, Any],
+    normalized_label: str,
+) -> bool:
+    """엔티티가 라벨별 정책상 오탐인지 판별한다."""
+    val = str(ent.get("word", "")).strip()
+
+    # 공통 — 특수문자/공백만으로 구성된 값은 오탐
+    if _ONLY_SPECIAL_CHARS_RE.match(val):
+        return True
+
+    # 라벨별 최소 길이 미달은 오탐 (정책 상 선언된 라벨에만 적용)
+    min_len = _MIN_VALUE_LENGTH.get(normalized_label, 1)
+    if len(val) < min_len:
+        return True
+
+    if normalized_label == "person":
+        # 사람 이름이 5글자를 넘는 경우는 한국어 환경에서 매우 드물다
+        if len(val) > 5:
+            return True
+        if _PERSON_NOT_RE.search(val):
+            return True
+
+    if normalized_label == "address" and _STANDALONE_PLACE_RE.match(val):
+        return True
+
+    if normalized_label == "organization" and _NOT_ORG_RE.match(val):
+        return True
+
+    if normalized_label == "job_title":
+        if _JOB_TITLE_JOSA_RE.search(val):
+            return True
+        if _JOB_TITLE_FORBIDDEN_RE.search(val):
+            return True
+
+    return False
+
+
+def _post_filter_gliner(
+    entities: list[dict[str, Any]],
+    label_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """GLiNER 출력에 한국어 PII 특화 오탐 필터를 적용한다.
+
+    Args:
+        entities: 어댑터 정규화 형식의 엔티티 리스트. ``entity`` 키는
+            이미 정규화된 PII 타입 또는 원본 라벨이어도 동일하게 동작
+            한다(``label_map`` self-key 미존재 시 fallback).
+        label_map: 모델 라벨(``entity``) → 정규화 PII 타입 매핑.
+
+    Returns:
+        필터를 통과한 엔티티 리스트.
+    """
+    out: list[dict[str, Any]] = []
+    for ent in entities:
+        raw_label = str(ent.get("entity", ""))
+        normalized = label_map.get(raw_label, raw_label).lower()
+        if normalized == "person":
+            ent = _trim_person_suffix(ent)
+        if _is_false_positive(ent, normalized):
+            continue
+        out.append(ent)
+    return out
+
+
+# ──────────────────────────────────────────────
+# DeBERTa-v3 tokenizer 호환 레이어 (idempotent 패치)
+# ──────────────────────────────────────────────
+
+_BASE_GLINER_TOKENIZER_PATCHED: bool = False
+
+
+def _patch_base_gliner_tokenizer_loader() -> None:
+    """``BaseGLiNER._load_tokenizer`` 를 PreTrainedTokenizerFast 우회로 교체.
+
+    DeBERTa-v3 한국어 tokenizer 가 transformers/tokenizers 호환 이슈로
+    ``AutoTokenizer`` 경유 시 로드 실패할 수 있어, 직접
+    ``PreTrainedTokenizerFast`` 로 우회 로드한다. idempotent — 이미
+    패치돼 있으면 중복 적용하지 않는다.
+    """
+    global _BASE_GLINER_TOKENIZER_PATCHED
+    if _BASE_GLINER_TOKENIZER_PATCHED:
+        return
+    from gliner.model import BaseGLiNER
+    from transformers import PreTrainedTokenizerFast
+
+    def _patched_load(
+        cls: Any,
+        config: Any,
+        model_dir: Any,
+        cache_dir: Any = None,
+    ) -> Any:
+        return PreTrainedTokenizerFast.from_pretrained(str(model_dir))
+
+    BaseGLiNER._load_tokenizer = classmethod(_patched_load)
+    _BASE_GLINER_TOKENIZER_PATCHED = True
 
 
 def _strip_bio_prefix(label: str) -> str:
@@ -377,6 +559,265 @@ class _HFCharLevelAdapter:
         return self._decode_bio(text, all_labels)
 
 
+class _GLinerAdapter:
+    """GLiNER (zero-shot NER) 모델 전용 어댑터.
+
+    원본 ``korean_pii.detection.HybridPIIDetector`` 의 운영 패턴을
+    어댑터로 통합한다. 6 개선안:
+        1. ``inference_labels`` 가 ``max_types`` 를 초과하면 라벨 청크
+           단위로 ``predict_entities`` 를 분할 호출.
+        2. 카테고리별 차등 임계값(``category_thresholds``) 과
+           ``default_threshold`` 적용.
+        3. 이중 단계 임계값 — 1차 ``pre_threshold`` 로 후보를 모으고,
+           2차 카테고리 cut 으로 다시 거른다.
+        4. 후처리 오탐 필터(:func:`_post_filter_gliner`) 로 한국어
+           PII 특화 오탐을 제거.
+        5. 슬라이딩 윈도우 텍스트 청크 — 윈도우별 추론 후 전역 좌표
+           으로 매핑.
+        6. 윈도우 결과 ``(start, end)`` span dedup — 최고 score 라벨만
+           남긴다.
+    """
+
+    def __init__(self, model_path: Path, spec: dict[str, Any]) -> None:
+        """GLiNER 모델을 즉시 로드한다.
+
+        Args:
+            model_path: 모델 폴더 경로.
+            spec: ``pii_labels.json`` 파싱 결과.
+
+        Raises:
+            ValueError: ``inference_labels`` 가 비었거나 누락된 경우.
+            Exception: GLiNER 로드 실패 시 그대로 전파(fail-open 처리는
+                상위 ``_load_ner_model`` 이 담당).
+        """
+        labels = spec.get("inference_labels")
+        if not labels:
+            msg = "GLiNER 어댑터: inference_labels 가 비어 있거나 누락됨"
+            raise ValueError(msg)
+
+        self._inference_labels: list[str] = list(labels)
+        self._pre_threshold: float = float(
+            spec.get("pre_threshold", _GLINER_DEFAULT_PRE_THRESHOLD),
+        )
+        self._default_threshold: float = float(
+            spec.get("default_threshold", _GLINER_DEFAULT_THRESHOLD),
+        )
+        self._category_thresholds: dict[str, float] = {
+            str(k): float(v)
+            for k, v in dict(spec.get("category_thresholds", {})).items()
+        }
+        self._max_length: int = int(spec.get("max_length", 256))
+        self._text_window_max_len: int = int(
+            spec.get("text_window_max_len", self._max_length),
+        )
+        self._text_window_overlap: int = int(
+            spec.get(
+                "text_window_overlap",
+                _GLINER_DEFAULT_TEXT_WINDOW_OVERLAP,
+            ),
+        )
+        self._max_types: int = self._read_max_types(model_path)
+        self._label_map: dict[str, str] = dict(spec.get("label_map", {}))
+
+        # DeBERTa-v3 호환 레이어를 모델 로드 전에 설치
+        _patch_base_gliner_tokenizer_loader()
+
+        from gliner import GLiNER
+
+        self._model: Any = GLiNER.from_pretrained(
+            str(model_path),
+            local_files_only=True,
+        )
+
+        # words_splitter override (선택)
+        splitter_kind = spec.get("words_splitter")
+        if splitter_kind:
+            from gliner.data_processing import WordsSplitter
+
+            try:
+                self._model.data_processor.words_splitter = WordsSplitter(
+                    splitter_kind,
+                )
+            except Exception as exc:
+                # splitter 교체 실패는 추론 자체를 막을 정도는 아니다
+                logger.debug(
+                    "words_splitter override 실패 (%s): %s",
+                    splitter_kind,
+                    exc,
+                )
+
+        # L5Layer 의 ``_ner_model`` 호환성 유지를 위한 내부 모델 핸들
+        self.model: Any = self._model
+
+    @staticmethod
+    def _read_max_types(model_path: Path) -> int:
+        """``gliner_config.json`` 의 ``max_types`` 를 읽는다.
+
+        파일이 없거나 파싱 실패 시 기본값 10 을 반환한다.
+        """
+        config_path = model_path / "gliner_config.json"
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            value = int(data.get("max_types", _GLINER_DEFAULT_MAX_TYPES))
+            return max(1, value)
+        except OSError, json.JSONDecodeError, TypeError, ValueError:
+            return _GLINER_DEFAULT_MAX_TYPES
+
+    @staticmethod
+    def _split_into_text_windows(
+        text: str,
+        max_len: int,
+        overlap: int,
+    ) -> list[tuple[int, int]]:
+        """긴 입력을 max_len + overlap 슬라이딩 윈도우로 분할.
+
+        Args:
+            text: 분할 대상 텍스트.
+            max_len: 윈도우 최대 길이.
+            overlap: 인접 윈도우가 겹치는 글자 수.
+
+        Returns:
+            ``(start, end)`` 튜플 리스트. ``len(text) <= max_len`` 이면
+            ``[(0, len(text))]`` 단일 윈도우.
+        """
+        if len(text) <= max_len:
+            return [(0, len(text))]
+        # overlap 이 max_len 이상이면 무한 루프 방지를 위해 1 보장
+        step = max(1, max_len - overlap)
+        windows: list[tuple[int, int]] = []
+        start = 0
+        while start < len(text):
+            end = min(start + max_len, len(text))
+            windows.append((start, end))
+            if end == len(text):
+                break
+            start += step
+        return windows
+
+    def _predict_chunk_labels(
+        self,
+        chunk_text: str,
+    ) -> list[dict[str, Any]]:
+        """단일 텍스트 청크에 대한 GLiNER 추론 (라벨 청크 폴백 포함).
+
+        ``len(inference_labels) <= max_types`` 이면 한 번에 호출하고,
+        아니면 ``max_types`` 단위로 나눠 여러 번 호출해 결과를 합친다.
+        """
+        if len(self._inference_labels) <= self._max_types:
+            return list(
+                self._model.predict_entities(
+                    chunk_text,
+                    labels=self._inference_labels,
+                    threshold=self._pre_threshold,
+                ),
+            )
+        merged: list[dict[str, Any]] = []
+        for i in range(0, len(self._inference_labels), self._max_types):
+            sub_labels = self._inference_labels[i : i + self._max_types]
+            merged.extend(
+                self._model.predict_entities(
+                    chunk_text,
+                    labels=sub_labels,
+                    threshold=self._pre_threshold,
+                ),
+            )
+        return merged
+
+    def _collect_raw_entities(
+        self,
+        text: str,
+        windows: list[tuple[int, int]],
+    ) -> list[dict[str, Any]]:
+        """모든 윈도우에 대한 raw 엔티티 수집 (전역 좌표 매핑 포함).
+
+        윈도우 단위 fail-open: ``predict_entities`` 가 예외를 던지면
+        해당 윈도우만 스킵하고 다른 윈도우는 계속 처리한다.
+        """
+        raw_all: list[dict[str, Any]] = []
+        for ws, we in windows:
+            chunk_text = text[ws:we]
+            try:
+                raw_chunk = self._predict_chunk_labels(chunk_text)
+            except Exception as exc:
+                logger.debug(
+                    "GLiNER predict_entities 실패, 윈도우 fail-open: %s",
+                    exc,
+                )
+                continue
+            for ent in raw_chunk:
+                raw_all.append(
+                    {
+                        "label": str(ent.get("label", "")),
+                        "text": str(ent.get("text", "")),
+                        "start": int(ent.get("start", 0)) + ws,
+                        "end": int(ent.get("end", 0)) + ws,
+                        "score": float(ent.get("score", 0.0)),
+                    },
+                )
+        return raw_all
+
+    def _apply_category_cuts(
+        self,
+        raw_entities: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """라벨별 차등 임계값(2차 cut) 을 적용한다."""
+        kept: list[dict[str, Any]] = []
+        for ent in raw_entities:
+            label_norm = self._label_map.get(ent["label"], ent["label"])
+            cut = self._category_thresholds.get(
+                label_norm,
+                self._default_threshold,
+            )
+            if ent["score"] >= cut:
+                kept.append(ent)
+        return kept
+
+    @staticmethod
+    def _dedup_by_span(
+        entities: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """``(start, end)`` 가 같은 엔티티 중 최고 score 만 남긴다."""
+        by_span: dict[tuple[int, int], dict[str, Any]] = {}
+        for ent in entities:
+            key = (int(ent["start"]), int(ent["end"]))
+            existing = by_span.get(key)
+            if existing is None or ent["score"] > existing["score"]:
+                by_span[key] = ent
+        return list(by_span.values())
+
+    def predict(self, text: str) -> list[dict[str, Any]]:
+        """슬라이딩 윈도우 + 6 개선안을 통합 적용해 엔티티를 반환한다.
+
+        Args:
+            text: 분석 대상 텍스트.
+
+        Returns:
+            ``{"entity", "word", "start", "end", "score"}`` 키를 가진
+            dict 목록 (후처리 오탐 필터 적용 후).
+        """
+        windows = self._split_into_text_windows(
+            text,
+            self._text_window_max_len,
+            self._text_window_overlap,
+        )
+        raw_all = self._collect_raw_entities(text, windows)
+        filtered = self._apply_category_cuts(raw_all)
+        deduped = self._dedup_by_span(filtered)
+
+        # entity 키는 정규화된 PII 타입을 노출한다(매핑 부재 시 raw 그대로).
+        normalized: list[dict[str, Any]] = [
+            {
+                "entity": self._label_map.get(ent["label"], ent["label"]),
+                "word": ent["text"],
+                "start": ent["start"],
+                "end": ent["end"],
+                "score": round(ent["score"], 4),
+            }
+            for ent in deduped
+        ]
+        return _post_filter_gliner(normalized, label_map=self._label_map)
+
+
 class L5Layer(BaseLayer):
     """PII/민감정보 2단계 탐지 레이어.
 
@@ -415,7 +856,9 @@ class L5Layer(BaseLayer):
         self._min_score: float = 0.0
         self._aggregation_strategy: str = "simple"
         # NER 어댑터 (None 이면 fail-open)
-        self._adapter: _HFPipelineAdapter | _HFCharLevelAdapter | None = None
+        self._adapter: (
+            _HFPipelineAdapter | _HFCharLevelAdapter | _GLinerAdapter | None
+        ) = None
         self._ner_model: Any = self._load_ner_model(model_name)
 
     def _load_ner_model(self, model_name: str) -> Any:
@@ -465,12 +908,16 @@ class L5Layer(BaseLayer):
                 spec_path,
             )
 
-        adapter: _HFPipelineAdapter | _HFCharLevelAdapter | None
+        adapter: (
+            _HFPipelineAdapter | _HFCharLevelAdapter | _GLinerAdapter | None
+        )
         try:
             if adapter_kind == "hf-pipeline":
                 adapter = _HFPipelineAdapter(model_path, spec)
             elif adapter_kind == "hf-charlevel":
                 adapter = _HFCharLevelAdapter(model_path, spec)
+            elif adapter_kind == "gliner":
+                adapter = _GLinerAdapter(model_path, spec)
             else:
                 logger.debug(
                     "알 수 없는 adapter 값, fail-open: %s",
@@ -508,7 +955,7 @@ class L5Layer(BaseLayer):
         else:
             self._min_score = float(spec.get("min_score", 0.0))
         self._aggregation_strategy = str(
-            spec.get("aggregation_strategy", "simple")
+            spec.get("aggregation_strategy", "simple"),
         )
 
     def _apply_fallback_spec(
@@ -638,8 +1085,16 @@ class L5Layer(BaseLayer):
                 continue
             raw_label = entity.get("entity") or entity.get("entity_group") or ""
             clean_label = _strip_bio_prefix(str(raw_label))
-            pii_type = self._label_map.get(clean_label)
-            if pii_type is None:
+            # 어댑터 출력이 정규화된 entity 키를 노출할 수도 있으므로
+            # label_map 미존재 시 clean_label 자체를 정규화 타입으로 사용.
+            mapped = self._label_map.get(clean_label)
+            if mapped is not None:
+                pii_type: str = mapped
+            elif clean_label in self._block_singletons or any(
+                clean_label in rule for rule in self._block_combinations
+            ):
+                pii_type = clean_label
+            else:
                 continue
             if pii_type not in detected_set:
                 detected_set.add(pii_type)
