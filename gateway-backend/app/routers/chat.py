@@ -513,7 +513,8 @@ async def _run_observe_mode_pipeline(
     session_id: str,
     t_request: float,
     timings: dict[str, float],
-    policy: GuardrailPolicy,
+    input_policy: GuardrailPolicy,
+    output_policy: GuardrailPolicy,
     security_service: SecurityLayerService,
     provider_router: ProviderRouter,
 ) -> ChatResponse | StreamingResponse:
@@ -529,7 +530,8 @@ async def _run_observe_mode_pipeline(
         session_id: 세션 UUID.
         t_request: 요청 시작 시각(perf_counter).
         timings: 단계별 소요 시간을 누적하는 딕셔너리.
-        policy: 적용할 보안 정책.
+        input_policy: 입력 가드레일에 적용할 보안 정책.
+        output_policy: 출력 가드레일에 적용할 보안 정책.
         security_service: 보안 레이어 서비스.
         provider_router: LLM provider 라우터.
 
@@ -540,7 +542,7 @@ async def _run_observe_mode_pipeline(
     t0 = time.perf_counter()
     input_results = await security_service.check_input_all(
         messages=request.messages,
-        policy=policy,
+        policy=input_policy,
         timings=timings,
     )
     input_guardrail_ms = _record_timing(timings, "input_guardrail", t0)
@@ -585,7 +587,7 @@ async def _run_observe_mode_pipeline(
     # outbound 스위치가 꺼져 있으면 관찰 모드에서도 출력 파이프라인을 생략한다.
     # 이 경우 `guardrail_reports.output` 은 빈 배열로 응답에 실린다.
     t0 = time.perf_counter()
-    if not policy.outbound:
+    if not output_policy.outbound:
         output_results: list[GuardrailResult] = []
         logger.info(
             "[%s] (관찰) 4단계 출력 검사 생략: outboundEnabled=false",
@@ -594,7 +596,7 @@ async def _run_observe_mode_pipeline(
     else:
         output_results = await security_service.check_output_all(
             content=content,
-            policy=policy,
+            policy=output_policy,
             timings=timings,
         )
     output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
@@ -1031,19 +1033,25 @@ async def chat_completions(
     t0 = time.perf_counter()
     if settings.skip_policy_fetch:
         # 정책 조회는 생략하되 L1~L6 전체 레이어를 강제로 실행한다.
-        policy = GuardrailPolicy.all_enabled()
+        input_policy = GuardrailPolicy.all_enabled()
+        output_policy = GuardrailPolicy.all_enabled()
     else:
-        policy = await policy_service.verify_and_fetch_policy(
+        fetched_policy = await policy_service.verify_and_fetch_policy(
             session_id=session_id,
             headers=verified_headers,
             body_hash=body_hash,
         )
+        input_policy = fetched_policy
+        output_policy = fetched_policy
     policy_fetch_ms = _record_timing(timings, "policy_fetch", t0)
     logger.info(
-        "[%s] 1단계 정책 조회 완료: %.1fms enabled_layers=%s",
+        "[%s] 1단계 정책 조회 완료: %.1fms "
+        "enabled_layers=input=%s output=%s outbound=%s",
         session_id,
         policy_fetch_ms,
-        policy.enabled_layers(),
+        input_policy.enabled_layers(),
+        output_policy.enabled_layers(),
+        output_policy.outbound,
     )
 
     # 관찰(데모) 모드: BLOCK 이 있어도 파이프라인을 끝까지 실행하고
@@ -1054,7 +1062,8 @@ async def chat_completions(
             session_id=session_id,
             t_request=t_request,
             timings=timings,
-            policy=policy,
+            input_policy=input_policy,
+            output_policy=output_policy,
             security_service=security_service,
             provider_router=provider_router,
         )
@@ -1063,7 +1072,7 @@ async def chat_completions(
     t0 = time.perf_counter()
     input_result = await security_service.check_input(
         messages=request.messages,
-        policy=policy,
+        policy=input_policy,
         timings=timings,
     )
     input_guardrail_ms = _record_timing(timings, "input_guardrail", t0)
@@ -1147,10 +1156,10 @@ async def chat_completions(
     )
 
     # 4단계: 출력 결과 보안 검사 — 사용자 전송 이전에 선행하여 유출 방지.
-    # `policy.outbound=False` 면 L1~L6 활성 레이어와 무관하게 출력 파이프라인을
-    # 통째로 생략하고 LLM 응답을 그대로 통과시킨다.
+    # `output_policy.outbound=False` 면 L1~L6 활성 레이어와 무관하게 출력
+    # 파이프라인을 통째로 생략하고 LLM 응답을 그대로 통과시킨다.
     t0 = time.perf_counter()
-    if not policy.outbound:
+    if not output_policy.outbound:
         output_result = GuardrailResult(status=CheckStatus.PASS)
         logger.info(
             "[%s] 4단계 출력 검사 생략: outboundEnabled=false",
@@ -1159,7 +1168,7 @@ async def chat_completions(
     else:
         output_result = await security_service.check_output(
             content=content,
-            policy=policy,
+            policy=output_policy,
             timings=timings,
         )
     output_guardrail_ms = _record_timing(timings, "output_guardrail", t0)
