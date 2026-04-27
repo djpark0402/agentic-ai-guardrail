@@ -309,6 +309,34 @@ async def default_model() -> dict[str, str]:
     return {"default_model": settings.llm_model}
 
 
+@app.get(
+    "/v1/playground/defaults",
+    tags=["meta"],
+    summary="Playground 기본 입력값 조회",
+    include_in_schema=False,
+)
+async def playground_defaults() -> dict[str, str]:
+    """Playground 페이지의 X-API-Key / HMAC SECRET 기본값을 반환한다.
+
+    `APP_ENV=dev` 일 때만 환경변수 값을 반환하고, 그 외(`prod`) 에서는
+    빈 문자열을 반환해 브라우저로 시크릿이 새지 않게 한다.
+
+    Returns:
+        `api_key` / `hmac_secret` 두 개의 문자열을 담은 딕셔너리.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    if settings.app_env != "dev":
+        return {"api_key": "", "hmac_secret": ""}
+    return {
+        "api_key": settings.playground_default_api_key,
+        "hmac_secret": (
+            settings.playground_default_hmac_secret.get_secret_value()
+        ),
+    }
+
+
 @app.exception_handler(openai.APIError)
 async def solar_error_handler(
     request: Request, exc: openai.APIError
