@@ -1,4 +1,6 @@
 {
+  "adapter": "hf-charlevel",
+  "max_length": 256,
   "label_map": {
     "PS": "person",
     "PHONE": "phone_number",
