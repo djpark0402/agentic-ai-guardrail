@@ -29,6 +29,14 @@ class Settings(BaseSettings):
             레이어가 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에
             `guardrail_reports` 를 첨부한다. `app_env="dev"` 일 때만
             True 허용 — 그 외 환경에서 True 는 ValidationError.
+        playground_default_api_key: `/playground/` 페이지의 `X-API-Key`
+            입력 칸에 자동 채워질 데모용 키. `app_env="dev"` 에서만
+            응답에 노출되며, `prod` 에서는 값이 있어도 빈 문자열로
+            대체된다 (시크릿이 브라우저로 새지 않게 차단).
+        playground_default_hmac_secret: `/playground/` 페이지의
+            `HMAC SECRET` 입력 칸에 자동 채워질 데모용 서명 시크릿.
+            동일하게 `app_env="dev"` 에서만 노출. SecretStr 로 보관해
+            로그·repr 에 노출되지 않게 한다.
     """
 
     model_config = SettingsConfigDict(
@@ -63,6 +71,12 @@ class Settings(BaseSettings):
     # 첨부한다. False (기본) 면 기존 동작 유지(첫 BLOCK 시 즉시 차단 응답).
     # `app_env="dev"` 일 때만 True 허용 (model_validator 로 강제).
     continue_on_layer_failure: bool = False
+
+    # Playground (/playground/) 기본 입력값 — APP_ENV=dev 에서만 노출.
+    # prod 환경에서 값이 설정되어 있어도 /v1/playground/defaults 응답은
+    # 빈 문자열로 대체되어 시크릿이 브라우저로 새지 않는다.
+    playground_default_api_key: str = ""
+    playground_default_hmac_secret: SecretStr = SecretStr("")
 
     @field_validator("admin_api_key", mode="before")
     @classmethod
