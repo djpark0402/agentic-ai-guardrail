@@ -66,7 +66,7 @@ gateway-backend/
 |------|------|
 | `uv sync` | `pyproject.toml` 과 `uv.lock` 기준으로 가상환경에 의존성 설치 |
 | `uv run pytest` | 가상환경 안에서 pytest 실행 |
-| `uv run uvicorn app.main:app --reload` | 개발 서버 기동 (코드 변경 시 자동 재시작) |
+| `uv run uvicorn app.main:app --reload --port 8000` | 개발 서버 기동 (코드 변경 시 자동 재시작) |
 
 핵심은 `pyproject.toml` 에서 `core-secure-layer` 가 **editable 로컬 경로 패키지**로 등록되어 있다는 점이다. `uv sync` 하면 PyPI 가 아니라 형제 디렉터리에서 바로 설치한다.
 
@@ -158,7 +158,7 @@ routers/ ──▶ services/ ──▶ 외부 (admin-backend, core_secure_layer,
 
 ## 4. 엔트리 포인트 읽기 — `app/main.py`
 
-개발 서버는 `uv run uvicorn app.main:app --reload` 로 뜬다. uvicorn 이 `app.main` 모듈을 import 한 뒤 그 안의 `app` 변수를 ASGI 애플리케이션으로 받아 간다.
+개발 서버는 `uv run uvicorn app.main:app --reload --port 8000` 로 뜬다. uvicorn 이 `app.main` 모듈을 import 한 뒤 그 안의 `app` 변수를 ASGI 애플리케이션으로 받아 간다.
 
 `app/main.py` — `FastAPI(...)` 초기화
 
@@ -227,12 +227,16 @@ sequenceDiagram
     end
     S-->>R: GuardrailResult (PASS/BLOCK)
     alt 입력 BLOCK
-        R-->>C: content_filter 응답
+        R-->>C: 차단 안내문 응답 (finish_reason=stop)
     else 입력 PASS
         R->>LLM: chat(messages, ...)
         LLM-->>R: completion
-        R->>S: check_output(content, policy)
-        S-->>R: GuardrailResult
+        alt policy.outbound == false
+            Note over R: 출력 가드레일 스킵 (outboundEnabled=false)
+        else policy.outbound == true
+            R->>S: check_output(content, policy)
+            S-->>R: GuardrailResult
+        end
         R-->>C: OpenAI 호환 응답 (JSON 또는 SSE)
     end
 ```
@@ -263,7 +267,9 @@ from core_secure_layer.layers.types import GuardrailRequest, LayerResult
 
 ### 5.3 레이어 레지스트리 — 숫자 ↔ 레이어 객체
 
-정책은 `l1Enabled`~`l6Enabled` 라는 불리언 여섯 개로 내려온다. 이걸 실제 레이어 객체로 바꿔 주는 "전화번호부" 가 `layer_registry.py` 다.
+정책은 `l1Enabled`~`l6Enabled` 라는 불리언 여섯 개와 L5 전용
+`l5Setting` 으로 내려온다. 이걸 실제 레이어 객체로 바꿔 주는
+"전화번호부" 가 `layer_registry.py` 다.
 
 `app/services/layer_registry.py:14-33`
 
@@ -280,11 +286,24 @@ _LAYER_MAP: dict[int, BaseLayer] = {
 
 def get_layer(layer_index: int) -> BaseLayer | None:
     return _LAYER_MAP.get(layer_index)
+
+
+def get_l5_layer(
+    *,
+    model_name: str | None,
+    threshold: float | None,
+) -> BaseLayer:
+    ...
 ```
 
 포인트:
 - 모듈이 import 되는 순간 `L1Layer()` ~ `L6Layer()` 가 **한 번씩만** 인스턴스화된다(파이썬에서 모듈은 최초 import 때 한 번만 실행되므로 자동 싱글턴).
 - 매 요청마다 새로 만드는 비용이 없고, 내부적으로 모델 가중치 등을 한 번만 로드하면 재사용된다.
+- L5 는 예외적으로 ADMIN 의 `l5Setting.model` 과
+  `l5Setting.threshold` 조합별 `L5Layer(model_name=..., min_score=...)`
+  인스턴스를 캐시한다. `model` 은
+  `core_secure_layer/layers/l5/model/<model>` 폴더명 그대로 해석된다.
+- `l5Setting` 이 없으면 기존 `_LAYER_MAP[5]` 기본 싱글턴을 사용한다.
 - 매핑이 없거나 `NotImplementedError` 를 던지는 레이어는 PASS 로 취급한다 (아래 5.5 참조).
 
 ### 5.4 정책 받아오기 — `PolicyService`
@@ -293,9 +312,9 @@ def get_layer(layer_index: int) -> BaseLayer | None:
 
 - 요청 body: 사용자의 4개 헤더 값(`apiKey`/`timestamp`/`nonce`/`signature`) + 게이트웨이가 계산한 `bodyHash` (SHA-256 hex). 상수 `_VERIFY_PATH = "/api/v1/gateway/verify"` 로 경로가 고정돼 있다.
 - 요청 헤더: 게이트웨이 자신의 `ADMIN_API_KEY` 를 `X-API-Key` 헤더로 함께 싣는다. 사용자의 `X-API-Key` 와는 별개 — 사용자 키는 body 의 `apiKey` 필드에만 들어간다.
-- 응답: ADMIN 이 정책을 **바로 내려줄 수도**, 검증 메타(valid/clientName 등) 를 최상위에 둔 **envelope 로 감싸 내려줄 수도** 있다. `_extract_policy_dict` 가 최상위 `l1Enabled` 존재 / `policy`·`data`·`result`·`payload` 같은 envelope 키 / 최상위 nested dict 순으로 탐색해 정책 dict 를 추출한 뒤, `GuardrailPolicy.model_validate(...)` 로 Pydantic 모델에 바인딩한다.
+- 응답: ADMIN 이 정책을 **바로 내려줄 수도**, 검증 메타(valid/clientName 등) 를 최상위에 둔 **envelope 로 감싸 내려줄 수도** 있다. `_extract_policy_dict` 가 최상위 `l1Enabled` 존재 / `policy`·`data`·`result`·`payload` 같은 envelope 키 / 최상위 nested dict 순으로 탐색해 정책 dict 를 추출한 뒤, `GuardrailPolicy.model_validate(...)` 로 Pydantic 모델에 바인딩한다. 정책 안의 `l5Setting` 은 L5 모델 폴더명과 NER threshold 로 보존된다.
 
-`app/models/policy.py:22-29`
+`app/models/policy.py`
 
 ```python
 model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -305,11 +324,15 @@ l2: bool = Field(alias="l2Enabled")
 l3: bool = Field(alias="l3Enabled")
 l4: bool = Field(alias="l4Enabled")
 l5: bool = Field(alias="l5Enabled")
+l5_setting: L5Setting | None = Field(default=None, alias="l5Setting")
 l6: bool = Field(alias="l6Enabled")
+outbound: bool = Field(default=True, alias="outboundEnabled")
 ```
 
 - admin-backend 응답의 camelCase 키(`l1Enabled`) 를 alias 로 받고, 내부에서는 snake_case 짧은 이름(`l1`) 을 쓴다.
 - `extra="ignore"` 덕분에 `name`, `id`, `createdAt` 같은 모르는 필드는 무시된다.
+- **`outbound`** 는 출력 가드레일 파이프라인 전체 on/off 스위치다. False 면 L1~L6 활성 레이어와 무관하게 `check_output` 단계를 통째로 생략한다. ADMIN 응답에 `outboundEnabled` 키가 없으면 기본값 `True` 로 간주되어 기존 동작을 유지한다(하위 호환).
+- **`l5_setting`** 은 `model` 과 `threshold` 를 담는다. `threshold` 는 0.0~1.0 범위만 허용하며, `model` 은 L5 모델 폴더명으로 사용된다.
 
 `app/models/policy.py:66-73`
 
@@ -345,7 +368,7 @@ async def check_input(
 실제 호출 지점은 같은 파일의 private 헬퍼 `_run_layer_input` 이며, 네 단계로 요약된다:
 
 1. `get_layer(idx)` 로 core_secure_layer 싱글턴을 받아 온다. 매핑이 없으면 결과에 `layer="L{idx}"` 를 찍은 채 PASS.
-2. `messages_to_request(messages)` 로 `Message[]` → `GuardrailRequest` 변환 (user 메시지 본문만 `\n\n` 으로 연결, `app/services/guardrail_converter.py` 참조).
+2. `messages_to_request(messages)` 로 `Message[]` → `GuardrailRequest` 변환. 이번 턴의 **가장 최근 user 메시지 하나만** 추출해 `user_input` 으로 직렬화한다. 과거 user 턴은 이미 그 시점에 한 번 검사된 이력이므로, 히스토리 누적에 의한 중복 차단을 방지하기 위해 재검사 대상에서 제외된다 (`app/services/guardrail_converter.py` 참조).
 3. `await layer.check(request)` — **여기가 core_secure_layer 를 실제로 호출하는 유일한 라인**이다. 레이어가 `NotImplementedError` 를 던지면 PASS 로 처리하면서 `layer=layer.name` 을 스탬프.
 4. `LayerResult` 를 `layer_result_to_guardrail_result` 로 gateway 내부 모델로 역변환한 뒤 `_with_layer_name` 으로 레이어 이름을 보강.
 
@@ -372,17 +395,18 @@ completion = await llm_service.chat(messages=api_messages, **passthrough)
 
 > **관찰 모드 전용 대응 메서드**: `check_input_all` / `check_output_all` 은 같은 내부 헬퍼(`_run_layer_input`/`_run_layer_output`) 를 재사용해 BLOCK 이 나와도 루프를 끊지 않고 **활성 레이어 개수만큼의 결과 리스트**를 반환한다. 각 결과는 `_with_layer_name` 으로 `layer="L{idx}"` 가 보강돼 정책 순서 그대로 클라이언트 응답의 `guardrail_reports` 에 실린다. `CONTINUE_ON_LAYER_FAILURE=true` 인 관찰 모드 경로에서만 호출된다.
 
-### 5.8 차단되면 어떻게 응답하는가 (OpenAI `content_filter` 규격)
+### 5.8 차단되면 어떻게 응답하는가 (정상 LLM 응답 shape + 차단 안내문)
 
-가드레일이 BLOCK 을 내면 HTTP 상태코드는 여전히 **200** 이다. 대신 OpenAI 모더레이션 관례를 따라 `finish_reason="content_filter"` 와 비표준 `error` 블록을 채워 돌려준다. 스트리밍/비스트리밍 모두 스키마가 동일하다.
+가드레일이 BLOCK 을 내면 HTTP 상태코드는 **200** 이다. 클라이언트 입장에서는 정상 LLM 응답과 동일한 shape (`finish_reason="stop"`, 비표준 `error` 필드 없음) 을 받는다. 차단 사실은 `choices[0].message.content` 에 **몇 번째 레이어에서 어떤 사유로 차단됐는지** 한글 안내문으로 담겨 노출된다.
 
-응답을 빌드하는 세 함수 — 모두 `app/routers/chat.py` 안에 있다:
+응답을 빌드하는 두 함수 — 모두 `app/routers/chat.py` 안에 있다:
 
 | 함수 | 역할 |
 |------|------|
-| `_build_block_error` | 스트리밍·비스트리밍 공용 `error` 블록 dict 조립 (`type`/`stage`/`message`/`layer`/`reason`/`severity`/`confidence`/`tags`) |
-| `_stream_guardrail_block` | SSE 한 프레임 + `data: [DONE]` 방출 |
-| `_build_block_response` | 비스트리밍 `ChatResponse` 객체 조립 |
+| `_build_block_content` | "요청이 가드레일 L*x*(입력/출력 보안) 단계에서 차단되었습니다\n사유: *reason*\n다른 표현으로 다시 시도해 주세요." 형태의 다라인 문자열 조립. 스트리밍·비스트리밍 공용. |
+| `_build_block_response` | 비스트리밍 `ChatResponse` 객체 조립. `message.content` 에 위 안내문을 담고 `finish_reason="stop"`, `usage=None`. |
+
+스트리밍 차단은 별도 헬퍼 없이 정상 응답용 `_stream_openai_chunks` 를 재사용한다. `chunk_size=1`(문자 단위), `inter_chunk_delay=GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS`(기본 20ms) 를 주어 실제 LLM 토큰 스트림처럼 프레임이 흘러나오게 한다.
 
 **입력 BLOCK 분기** (`chat_completions` 내부):
 
@@ -390,8 +414,17 @@ completion = await llm_service.chat(messages=api_messages, **passthrough)
 if input_result.status == CheckStatus.BLOCK:
     ...
     if request.stream:
+        block_content = _build_block_content(
+            "input", input_result.layer, input_result.reason
+        )
         return StreamingResponse(
-            _stream_guardrail_block(input_result, stage="input", ...),
+            _stream_openai_chunks(
+                block_content,
+                chunk_id=..., created=..., model=...,
+                finish_reason="stop",
+                chunk_size=_BLOCK_STREAM_CHUNK_SIZE,
+                inter_chunk_delay=GUARDRAIL_BLOCK_STREAM_DELAY_SECONDS,
+            ),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -400,9 +433,9 @@ if input_result.status == CheckStatus.BLOCK:
 
 **출력 BLOCK 분기** — LLM 호출이 끝난 뒤의 동일한 갈림길:
 
-- 스트리밍 요청이면 `_stream_guardrail_block(..., stage="output", ...)` 로 SSE 한 프레임만 보내고 `[DONE]`.
+- 스트리밍 요청이면 `_build_block_content("output", ...)` → `_stream_openai_chunks(...)` 로 정상 스트림과 동일한 3-part SSE 시퀀스를 방출.
 - 비스트리밍이면 `_build_block_response(..., stage="output", ...)` 로 JSON 하나.
-- 두 경로 모두 원본 LLM 응답 텍스트는 유출하지 않는다 (`content=""` 고정).
+- 두 경로 모두 원본 LLM 응답 텍스트는 유출하지 않는다. `content` 필드는 `_build_block_content()` 가 생성한 안내문으로 교체된다.
 
 비스트리밍 BLOCK `ChatResponse` 뼈대 (`_build_block_response`):
 
@@ -415,16 +448,18 @@ return ChatResponse(
     choices=[
         ChatResponseChoice(
             index=0,
-            message=ChatResponseMessage(role="assistant", content=""),
-            finish_reason="content_filter",
+            message=ChatResponseMessage(
+                role="assistant",
+                content=_build_block_content(stage, result.layer, result.reason),
+            ),
+            finish_reason="stop",
         )
     ],
     usage=None,
-    error=_build_block_error(result, stage),
 )
 ```
 
-관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`) 경로는 `_run_observe_mode_pipeline` 이 별도로 타며, 차단 응답 대신 `_build_guardrail_reports` 로 `{mode: "observe", input: [...], output: [...]}` 를 응답 본문에 끼워 넣는다.
+관찰 모드(`CONTINUE_ON_LAYER_FAILURE=true`) 경로는 `_run_observe_mode_pipeline` 이 별도로 타며, 차단 안내문 재작성 대신 `_build_guardrail_reports` 로 `{mode: "observe", input: [...], output: [...]}` 를 응답 본문에 끼워 넣고 원본 LLM 응답을 그대로 전달한다.
 
 ---
 
@@ -496,7 +531,7 @@ async def chat_completions(
 ```bash
 uv run pytest                                                   # 전체
 uv run pytest tests/unit/services/test_security_layer_service.py -v   # 단일 파일
-uv run pytest -k "content_filter"                               # 키워드 매칭
+uv run pytest -k "blocked"                                      # 키워드 매칭
 ```
 
 ---

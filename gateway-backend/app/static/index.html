@@ -752,10 +752,15 @@
               <span class="arrow">→</span>
               <span>LLM (non-stream)</span>
               <span class="arrow">→</span>
-              <span>output check</span>
+              <span>output check*</span>
               <span class="arrow">→</span>
               <span>user (stream 선택)</span>
             </div>
+            <p class="helper-text">
+              * ADMIN 정책의 <code>outboundEnabled=false</code> 이면
+              <code>output check</code> 단계는 통째로 생략되고 LLM 원본
+              응답이 그대로 전달됩니다.
+            </p>
           </div>
           <aside class="hero-note">
             <h2>Provider 라우팅 가이드</h2>
@@ -889,7 +894,7 @@
 
       // --- HMAC 서명 헬퍼 (Web Crypto + pure-JS 폴백) ----------------------
       // Web Crypto 의 SubtleCrypto 는 secure context (HTTPS · localhost ·
-      // 127.0.0.1) 에서만 노출된다. http://0.0.0.0:8000 또는 LAN IP 로 접속한
+      // 127.0.0.1) 에서만 노출된다. http://0.0.0.0:54088 또는 LAN IP 로 접속한
       // 경우 통째로 undefined 가 되므로 pure-JS SHA-256/HMAC 폴백을 둔다.
       const _textEncoder = new TextEncoder();
       const _hasSubtleCrypto =
@@ -1323,6 +1328,26 @@
         }
       }
 
+      // APP_ENV=dev 에서 PLAYGROUND_DEFAULT_API_KEY /
+      // PLAYGROUND_DEFAULT_HMAC_SECRET 가 설정돼 있으면 두 입력 칸을
+      // 자동으로 채운다. prod 에서는 서버가 빈 문자열을 내려주므로
+      // 자동 채움이 비활성화된다 (placeholder 동작 유지).
+      async function loadPlaygroundDefaults() {
+        try {
+          const res = await fetch("/v1/playground/defaults");
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.api_key && !apiKeyInput.value) {
+            apiKeyInput.value = data.api_key;
+          }
+          if (data.hmac_secret && !secretInput.value) {
+            secretInput.value = data.hmac_secret;
+          }
+        } catch {
+          // 조용히 무시 — 기존 placeholder 동작 유지
+        }
+      }
+
       document.querySelectorAll(".provider-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
           modelInput.value = btn.dataset.model;
@@ -1331,7 +1356,7 @@
 
       function warnIfInsecureContext() {
         if (_hasSubtleCrypto) return;
-        const port = location.port || "8000";
+        const port = location.port || "54088";
         const msg =
           "[참고] 비-보안 컨텍스트 (" +
           location.origin +
@@ -1347,6 +1372,7 @@
 
       warnIfInsecureContext();
       loadDefaultModel();
+      loadPlaygroundDefaults();
       loadSpec();
     </script>
   </body>

@@ -10,7 +10,7 @@ from app.models.policy import GuardrailPolicy
 from app.services.security_layer_service import SecurityLayerService
 
 
-def _policy(**overrides: bool) -> GuardrailPolicy:
+def _policy(**overrides: object) -> GuardrailPolicy:
     """기본 전체 활성 정책에서 일부 레이어를 덮어쓴다."""
     base = {f"l{i}": True for i in range(1, 7)}
     base.update(overrides)
@@ -25,13 +25,19 @@ class _SpyService(SecurityLayerService):
         self.output_calls: list[int] = []
 
     async def _run_layer_input(
-        self, layer_idx: int, messages: list[Message]
+        self,
+        layer_idx: int,
+        messages: list[Message],
+        policy: GuardrailPolicy,
     ) -> GuardrailResult:
         self.input_calls.append(layer_idx)
         return GuardrailResult(status=CheckStatus.PASS)
 
     async def _run_layer_output(
-        self, layer_idx: int, content: str
+        self,
+        layer_idx: int,
+        content: str,
+        policy: GuardrailPolicy,
     ) -> GuardrailResult:
         self.output_calls.append(layer_idx)
         return GuardrailResult(status=CheckStatus.PASS)
@@ -65,6 +71,20 @@ async def test_check_input_runs_only_enabled_layers():
     messages = [Message(role="user", content="hi")]
     await spy.check_input(messages=messages, policy=policy)
     assert spy.input_calls == [1, 3, 5, 6]
+
+
+async def test_check_input_records_layer_timings():
+    """입력 검사 요약 로그용 레이어별 소요 시간을 기록한다."""
+    spy = _SpyService()
+    policy = _policy(l2=False, l4=False, l5=False, l6=False)
+    timings: dict[str, float] = {}
+    messages = [Message(role="user", content="hi")]
+
+    await spy.check_input(messages=messages, policy=policy, timings=timings)
+
+    assert spy.input_calls == [1, 3]
+    assert set(timings) == {"input_guardrail_L1", "input_guardrail_L3"}
+    assert all(elapsed >= 0 for elapsed in timings.values())
 
 
 async def test_check_output_runs_only_enabled_layers():
@@ -120,7 +140,7 @@ async def test_check_input_logs_layer_block_reason(service, mocker, caplog):
         )
 
     assert "입력 레이어 결과" in caplog.text
-    assert "layer=L1" in caplog.text
+    assert "layer=L1(인코딩 검사)" in caplog.text
     assert "status=block" in caplog.text
     assert "reason=injection detected" in caplog.text
 
@@ -154,7 +174,7 @@ async def test_run_layer_output_logs_not_implemented_reason(
         await service._run_layer_output(4, "응답 텍스트")
 
     assert "출력 레이어 결과" in caplog.text
-    assert "layer=L4" in caplog.text
+    assert "layer=L4(정책 위반 검사)" in caplog.text
     assert "status=pass" in caplog.text
     assert "note=미구현" in caplog.text
 
@@ -213,6 +233,66 @@ async def test_run_layer_input_block_propagates(service, mocker):
     assert result.status == CheckStatus.BLOCK
     assert result.reason == "injection detected"
     assert result.layer == "L1"
+
+
+async def test_run_layer_input_uses_l5_policy_setting(service, mocker):
+    """L5 입력 검사는 ADMIN 정책의 model/threshold 로 레이어를 고른다."""
+    from core_secure_layer.layers.types import LayerResult
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L5"
+    mock_layer.check.return_value = LayerResult(name="L5", allowed=True)
+    get_l5_layer = mocker.patch(
+        "app.services.security_layer_service.get_l5_layer",
+        return_value=mock_layer,
+    )
+    get_layer = mocker.patch("app.services.security_layer_service.get_layer")
+
+    policy = _policy(
+        l5Setting={
+            "model": "pii_model_v11",
+            "threshold": 0.82,
+        }
+    )
+    result = await service._run_layer_input(
+        5,
+        [Message(role="user", content="정상 입력")],
+        policy,
+    )
+
+    assert result.status == CheckStatus.PASS
+    get_l5_layer.assert_called_once_with(
+        model_name="pii_model_v11",
+        threshold=0.82,
+    )
+    get_layer.assert_not_called()
+
+
+async def test_run_layer_output_uses_l5_policy_setting(service, mocker):
+    """L5 출력 검사도 ADMIN 정책의 model/threshold 를 적용한다."""
+    from core_secure_layer.layers.types import LayerResult
+
+    mock_layer = mocker.AsyncMock()
+    mock_layer.name = "L5"
+    mock_layer.check.return_value = LayerResult(name="L5", allowed=True)
+    get_l5_layer = mocker.patch(
+        "app.services.security_layer_service.get_l5_layer",
+        return_value=mock_layer,
+    )
+
+    policy = _policy(
+        l5Setting={
+            "model": "pii_model_v11",
+            "threshold": 0.82,
+        }
+    )
+    result = await service._run_layer_output(5, "정상 출력", policy)
+
+    assert result.status == CheckStatus.PASS
+    get_l5_layer.assert_called_once_with(
+        model_name="pii_model_v11",
+        threshold=0.82,
+    )
 
 
 async def test_run_layer_input_pass_propagates(service, mocker):
@@ -414,4 +494,47 @@ async def test_check_input_short_circuits_on_block(mocker):
 
     assert result.status == CheckStatus.BLOCK
     assert call_log == ["L1"]
+    mock_l2.check.assert_not_called()
+
+
+async def test_check_input_records_timing_only_for_executed_layers(mocker):
+    """BLOCK 으로 중단되면 실행된 입력 레이어 시간만 기록한다."""
+    from core_secure_layer.layers.types import (
+        LayerResult,
+        Severity,
+    )
+
+    mock_l1 = mocker.MagicMock()
+    mock_l1.name = "L1"
+    mock_l1.check = mocker.AsyncMock(
+        return_value=LayerResult(
+            name="L1",
+            allowed=False,
+            reason="blocked",
+            severity=Severity.HIGH,
+        )
+    )
+    mock_l2 = mocker.MagicMock()
+    mock_l2.name = "L2"
+    mock_l2.check = mocker.AsyncMock()
+
+    def fake_get_layer(idx):
+        return {1: mock_l1, 2: mock_l2}.get(idx)
+
+    mocker.patch(
+        "app.services.security_layer_service.get_layer",
+        side_effect=fake_get_layer,
+    )
+
+    service = SecurityLayerService()
+    policy = _policy(l3=False, l4=False, l5=False, l6=False)
+    timings: dict[str, float] = {}
+    result = await service.check_input(
+        messages=[Message(role="user", content="test")],
+        policy=policy,
+        timings=timings,
+    )
+
+    assert result.status == CheckStatus.BLOCK
+    assert set(timings) == {"input_guardrail_L1"}
     mock_l2.check.assert_not_called()

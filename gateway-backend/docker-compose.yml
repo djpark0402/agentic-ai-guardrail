@@ -1,0 +1,54 @@
+services:
+  gateway-backend:
+    build:
+      # 빌드 컨텍스트는 monorepo 루트 — core-secure-layer/ 를 함께 포함해야
+      # editable path-dep (../core-secure-layer) 이 컨테이너 안에서 resolve 된다.
+      context: ..
+      dockerfile: gateway-backend/Dockerfile
+      # 팀 개발 서버가 x86_64 Linux 이므로 Apple Silicon 맥북에서도 x86 이미지로 빌드.
+      platforms:
+        - linux/amd64
+    image: agentic-gateway-backend:latest
+    container_name: gateway-backend
+    # 실행 시 타겟 플랫폼 고정 (ARM 호스트에서는 QEMU 에뮬레이션으로 동작)
+    platform: linux/amd64
+    # 컨테이너 내부 타임존을 KST 로 고정 — docker logs 출력 시각을 한국 시간으로.
+    # Dockerfile 의 ENV TZ=Asia/Seoul 이미 있지만 compose 에서도 명시해
+    # .env 에 다른 TZ 가 들어오더라도 KST 가 우선 적용되도록 한다.
+    environment:
+      TZ: Asia/Seoul
+    env_file:
+      - .env
+    ports:
+      - "54088:8000"
+    # Linux 개발 서버에서 컨테이너가 호스트 프로세스 (예: admin-backend) 에
+    # 접근할 수 있도록 host.docker.internal 별칭을 게이트웨이로 매핑.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # 모델 로드(L2~L5 합산 최대 3분) 동안 healthy 전이 유예.
+      start_period: 300s
+    # ⚠️ core-secure-layer 디렉토리 전체(/app/core-secure-layer)를 마운트하지 말 것.
+    #    editable install 이 해당 경로를 .pth 절대경로로 가리키므로 전체를 덮어쓰면
+    #    vectordb/policies/patterns 리소스가 사라지고 import 가 깨진다.
+    #    대신 아래처럼 layers/*/model 서브디렉터리만 overlay 하면 editable 트리는
+    #    그대로 유지되고 무거운 모델 파일만 호스트에서 공급된다 (이미지 ~7GB 감소).
+    volumes:
+      # 호스트의 core-secure-layer 모델을 read-only 로 overlay.
+      # 이미지에는 .dockerignore 로 layers/*/model/ 이 빠져 있으므로
+      # 이 mount 가 없으면 L2~L5 가 모델 로드 실패(fail-open, effective=False).
+      - ../core-secure-layer/core_secure_layer/layers/l2/model:/app/core-secure-layer/core_secure_layer/layers/l2/model:ro
+      - ../core-secure-layer/core_secure_layer/layers/l3/model:/app/core-secure-layer/core_secure_layer/layers/l3/model:ro
+      - ../core-secure-layer/core_secure_layer/layers/l4/model:/app/core-secure-layer/core_secure_layer/layers/l4/model:ro
+      - ../core-secure-layer/core_secure_layer/layers/l5/model:/app/core-secure-layer/core_secure_layer/layers/l5/model:ro
+      # L6 kanana-safeguard-8b 는 아직 호스트에 없으므로 마운트하지 않는다.
+      # 모델이 준비되면 위와 동일 패턴으로 한 줄 추가할 것.

@@ -9,7 +9,7 @@
 | `uv run pytest tests/path/test_x.py -v` | 단일 파일 테스트 |
 | `uv run ruff check .` | 린트 검사 |
 | `uv run ruff format .` | 코드 포맷 |
-| `uv run uvicorn app.main:app --reload` | 개발 서버 실행 |
+| `uv run uvicorn app.main:app --reload --port 8000` | 개발 서버 실행 |
 
 ## TDD 워크플로우 (필수)
 

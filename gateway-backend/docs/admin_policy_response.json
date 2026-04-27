@@ -1,0 +1,19 @@
+{
+  "valid": true,
+  "clientName": "고객사A",
+  "agentKeyId": 12,
+  "policy": {
+    "id": 3,
+    "name": "default-strict",
+    "l1Enabled": true,
+    "l2Enabled": true,
+    "l3Enabled": false,
+    "l4Enabled": false,
+    "l5Enabled": true,
+    "l6Enabled": true,
+    "l5Setting": {
+      "model": "pii_model_v11",
+      "threshold": 0.82
+    }
+  }
+}

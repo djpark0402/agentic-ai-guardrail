@@ -351,7 +351,7 @@ class _HFCharLevelAdapter:
         # id2label 은 BIO 디코딩 시 라벨 인덱스를 문자열로 매핑하는 데 사용
         try:
             self._id2label: dict[int, str] = dict(self._model.config.id2label)
-        except AttributeError, TypeError:
+        except (AttributeError, TypeError):
             self._id2label = {}
 
     @staticmethod
@@ -660,7 +660,7 @@ class _GLinerAdapter:
             data = json.loads(config_path.read_text(encoding="utf-8"))
             value = int(data.get("max_types", _GLINER_DEFAULT_MAX_TYPES))
             return max(1, value)
-        except OSError, json.JSONDecodeError, TypeError, ValueError:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return _GLINER_DEFAULT_MAX_TYPES
 
     @staticmethod
@@ -832,7 +832,11 @@ class L5Layer(BaseLayer):
         self,
         model_name: str = "ner-ko",
         extra_patterns: list[str] | None = None,
+        *,
         min_score: float | None = None,
+        label_map: dict[str, str] | None = None,
+        block_singletons: list[str] | None = None,
+        aggregation_strategy: str | None = None,
     ) -> None:
         """L5Layer 초기화.
 
@@ -842,6 +846,12 @@ class L5Layer(BaseLayer):
             min_score: NER 엔티티 신뢰도 임계값. ``None`` 이면
                 ``pii_labels.json`` 의 값을 사용하고, 값이 주어지면
                 JSON 스펙을 override 한다.
+            label_map: 모델 라벨을 정규화 PII 타입으로 매핑하는 규칙.
+                ``None`` 이면 ``pii_labels.json`` 의 값을 사용한다.
+            block_singletons: 단일 검출로 차단할 정규화 타입 목록.
+                ``None`` 이면 ``pii_labels.json`` 의 값을 사용한다.
+            aggregation_strategy: HuggingFace NER aggregation 전략.
+                ``None`` 이면 ``pii_labels.json`` 의 값을 사용한다.
         """
         self.model_name = model_name
         self.extra_patterns: list[str] = (
@@ -849,6 +859,9 @@ class L5Layer(BaseLayer):
         )
         # 생성자 override 값(로딩 후 스펙에 최우선 적용)
         self._min_score_override: float | None = min_score
+        self._label_map_override: dict[str, str] | None = label_map
+        self._block_singletons_override: list[str] | None = block_singletons
+        self._aggregation_strategy_override: str | None = aggregation_strategy
         # pii_labels 스펙 속성(로딩 과정에서 채워짐)
         self._label_map: dict[str, str] = {}
         self._block_singletons: list[str] = []
@@ -860,6 +873,42 @@ class L5Layer(BaseLayer):
             _HFPipelineAdapter | _HFCharLevelAdapter | _GLinerAdapter | None
         ) = None
         self._ner_model: Any = self._load_ner_model(model_name)
+
+    @property
+    def min_score(self) -> float:
+        """현재 NER 스코어 컷오프."""
+        return self._min_score
+
+    @min_score.setter
+    def min_score(self, value: float) -> None:
+        self._min_score = float(value)
+
+    @property
+    def label_map(self) -> dict[str, str]:
+        """현재 라벨 정규화 맵."""
+        return self._label_map
+
+    @label_map.setter
+    def label_map(self, value: dict[str, str]) -> None:
+        self._label_map = dict(value)
+
+    @property
+    def block_singletons(self) -> list[str]:
+        """단일 검출만으로 차단할 PII 타입 목록."""
+        return self._block_singletons
+
+    @block_singletons.setter
+    def block_singletons(self, value: list[str]) -> None:
+        self._block_singletons = list(value)
+
+    @property
+    def aggregation_strategy(self) -> str:
+        """현재 HuggingFace NER aggregation 전략."""
+        return self._aggregation_strategy
+
+    @aggregation_strategy.setter
+    def aggregation_strategy(self, value: str) -> None:
+        self._aggregation_strategy = str(value)
 
     def _load_ner_model(self, model_name: str) -> Any:
         """NER 어댑터와 ``pii_labels.json`` 스펙을 로드한다.
@@ -945,8 +994,16 @@ class L5Layer(BaseLayer):
 
         생성자에서 ``min_score`` 가 주어진 경우 JSON 값을 덮어쓴다.
         """
-        self._label_map = dict(spec.get("label_map", {}))
-        self._block_singletons = list(spec.get("block_singletons", []))
+        self._label_map = dict(
+            spec.get("label_map", {})
+            if self._label_map_override is None
+            else self._label_map_override,
+        )
+        self._block_singletons = list(
+            spec.get("block_singletons", [])
+            if self._block_singletons_override is None
+            else self._block_singletons_override,
+        )
         self._block_combinations = [
             list(rule) for rule in spec.get("block_combinations", [])
         ]
@@ -955,7 +1012,9 @@ class L5Layer(BaseLayer):
         else:
             self._min_score = float(spec.get("min_score", 0.0))
         self._aggregation_strategy = str(
-            spec.get("aggregation_strategy", "simple"),
+            spec.get("aggregation_strategy", "simple")
+            if self._aggregation_strategy_override is None
+            else self._aggregation_strategy_override,
         )
 
     def _apply_fallback_spec(
@@ -973,10 +1032,10 @@ class L5Layer(BaseLayer):
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
             id2label = dict(config.get("id2label", {}))
-        except OSError, json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             try:
                 id2label = dict(ner_model.model.config.id2label)
-            except AttributeError, TypeError:
+            except (AttributeError, TypeError):
                 id2label = {}
 
         label_map: dict[str, str] = {}
@@ -986,14 +1045,26 @@ class L5Layer(BaseLayer):
                 continue
             label_map[clean] = clean
 
-        self._label_map = label_map
-        self._block_singletons = list(label_map.keys())
+        self._label_map = (
+            label_map
+            if self._label_map_override is None
+            else dict(self._label_map_override)
+        )
+        self._block_singletons = (
+            list(label_map.keys())
+            if self._block_singletons_override is None
+            else list(self._block_singletons_override)
+        )
         self._block_combinations = []
         if self._min_score_override is not None:
             self._min_score = float(self._min_score_override)
         else:
             self._min_score = 0.0
-        self._aggregation_strategy = "simple"
+        self._aggregation_strategy = (
+            "simple"
+            if self._aggregation_strategy_override is None
+            else str(self._aggregation_strategy_override)
+        )
 
     def _ner_predict(self, text: str) -> list[dict[str, Any]]:
         """NER 어댑터로 엔티티를 추론한다.
