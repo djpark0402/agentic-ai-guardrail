@@ -426,6 +426,7 @@ aggregation 전략(`aggregation_strategy`) 을 선언한다. 상태 API 는 이
 |---|---|---|
 | POST | `/v1/chat/completions` | OpenAI/Solar 호환 채팅 완성 (stream 지원) |
 | GET | `/v1/models/default` | `.env` 의 `LLM_MODEL` 로 설정된 기본 모델명 반환 |
+| GET | `/v1/playground/defaults` | playground 입력 자동완성용 메타. `APP_ENV=dev` 일 때만 `PLAYGROUND_DEFAULT_API_KEY` / `PLAYGROUND_DEFAULT_HMAC_SECRET` 값 노출, prod 에서는 빈 문자열 (Swagger 비노출) |
 | GET | `/v1/layers/status` | L1~L6 각 레이어의 모델 로드 여부 + 실제 BLOCK 가능 여부(`effective`) + 레이어별 `signals` 진단 조회 (아래 _레이어 진단_ 참고) |
 | GET | `/health` | 헬스체크 |
 | GET | `/docs` | 커스텀 Swagger UI (상단 바 + `static/docs-overrides.css`) |
@@ -475,6 +476,7 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 - `/openapi.json`에서 스펙을 동적으로 로드하여 요청/응답 스키마 표시
 - messages 행 추가·제거, `stream` 토글, SSE 청크 실시간 누적
 - BLOCK 시 상태 코드와 본문을 그대로 노출
+- `PLAYGROUND_DEFAULT_API_KEY` / `PLAYGROUND_DEFAULT_HMAC_SECRET` 가 설정된 경우(`APP_ENV=dev` 한정) 페이지 로딩 시 두 입력 칸이 자동으로 채워져 즉시 메시지 전송 테스트가 가능 — `prod` 에서는 자동 채움이 비활성화되어 시크릿이 브라우저로 새지 않는다
 
 ## 개발 환경 (uv)
 
@@ -512,6 +514,10 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 - `SKIP_HEADER_VERIFICATION` — `true`로 설정하면 사용자 4개 헤더 검증을 건너뛴다. 로컬·데모용이며 `SKIP_POLICY_FETCH` 와 독립 동작 (기본 `false`)
 - `SKIP_POLICY_FETCH` — `true`로 설정하면 admin-backend 정책 조회를 생략하고 **L1~L6 전체 레이어를 강제 실행**. admin-backend 없이 로컬 풀 파이프라인을 검증할 때 사용 (기본 `false`)
 - `CONTINUE_ON_LAYER_FAILURE` — `true`로 설정하면 가드레일이 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에 `guardrail_reports` 블록을 첨부한다(**관찰 모드**, 위 섹션 참고). 데모·디버깅 전용. **`APP_ENV=dev` 일 때만 `true` 허용**되며, 그 외 환경에서 `true` 로 설정하면 기동 시 `ValidationError` 로 실패한다 (기본 `false`)
+
+**Playground (선택)**
+- `PLAYGROUND_DEFAULT_API_KEY` — `/playground/` 페이지의 `X-API-Key` 입력 칸에 자동으로 채워지는 데모용 키. **`APP_ENV=dev` 일 때만 `/v1/playground/defaults` 응답에 노출**되며, `prod` 에서는 값이 있어도 빈 문자열로 대체된다 (기본 빈 값)
+- `PLAYGROUND_DEFAULT_HMAC_SECRET` — `/playground/` 페이지의 `HMAC SECRET` 입력 칸에 자동으로 채워지는 데모용 서명 시크릿. 동일하게 `APP_ENV=dev` 한정 노출 (기본 빈 값). **시크릿이므로 운영 환경의 `.env` 에는 실제 값을 넣지 말 것** — 데모/로컬 검증 편의용 자동완성 채널이다
 
 > `.env` 파일은 **절대 커밋하지 않는다.** 새 환경 변수가 필요하면
 > `.env.example`에 먼저 추가한다.
