@@ -51,6 +51,7 @@ public class VerifyController {
         map.put("l4Enabled", policy.isL4Enabled());
         map.put("l5Enabled", policy.isL5Enabled());
         map.put("l6Enabled", policy.isL6Enabled());
+        map.put("outboundEnabled", policy.isOutboundEnabled());
         return map;
     }
 }

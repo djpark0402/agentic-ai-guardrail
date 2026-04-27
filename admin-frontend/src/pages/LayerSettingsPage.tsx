@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 
-const LAYER_KEYS = ['l1Enabled', 'l2Enabled', 'l3Enabled', 'l4Enabled', 'l5Enabled', 'l6Enabled'] as const;
+const LAYER_KEYS = ['l1Enabled', 'l2Enabled', 'l3Enabled', 'l4Enabled', 'l5Enabled', 'l6Enabled', 'outboundEnabled'] as const;
 type LayerKey = (typeof LAYER_KEYS)[number];
 
 type Policy = {
@@ -13,6 +13,7 @@ type Policy = {
   l4Enabled: boolean;
   l5Enabled: boolean;
   l6Enabled: boolean;
+  outboundEnabled: boolean;
   isUse: boolean;
   createdAt: string;
   updatedAt: string;
@@ -27,6 +28,7 @@ type Draft = {
   l4Enabled: boolean;
   l5Enabled: boolean;
   l6Enabled: boolean;
+  outboundEnabled: boolean;
 };
 
 const EMPTY_DRAFT: Draft = {
@@ -38,11 +40,13 @@ const EMPTY_DRAFT: Draft = {
   l4Enabled: true,
   l5Enabled: true,
   l6Enabled: true,
+  outboundEnabled: false,
 };
 
 const API = '/api/v1/policies';
 
 function layerLabel(key: LayerKey): string {
+  if (key === 'outboundEnabled') return 'OUT';
   return key.slice(0, 2).toUpperCase();
 }
 
@@ -91,6 +95,7 @@ export function LayerSettingsPage() {
       l4Enabled: policy.l4Enabled,
       l5Enabled: policy.l5Enabled,
       l6Enabled: policy.l6Enabled,
+      outboundEnabled: policy.outboundEnabled,
     });
   }
 
@@ -119,6 +124,7 @@ export function LayerSettingsPage() {
           l4Enabled: editDraft.l4Enabled,
           l5Enabled: editDraft.l5Enabled,
           l6Enabled: editDraft.l6Enabled,
+          outboundEnabled: editDraft.outboundEnabled,
         }),
       });
       if (!res.ok) {
@@ -180,6 +186,7 @@ export function LayerSettingsPage() {
           l4Enabled: newDraft.l4Enabled,
           l5Enabled: newDraft.l5Enabled,
           l6Enabled: newDraft.l6Enabled,
+          outboundEnabled: newDraft.outboundEnabled,
         }),
       });
       if (!res.ok) {
