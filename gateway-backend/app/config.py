@@ -1,5 +1,6 @@
 """애플리케이션 설정 모듈."""
 
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -7,6 +8,38 @@ from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AppEnv = Literal["dev", "prod"]
+
+_LAYER_TOKEN_RE = re.compile(r"^[Ll]([1-6])$")
+_DEFAULT_LAYER_INDICES: frozenset[int] = frozenset({1, 2, 3, 4, 5, 6})
+
+
+def _parse_layer_csv(value: str) -> frozenset[int]:
+    """`L1, l3 ,L6` 형태의 CSV 토큰을 정규화한 frozenset[int] 로 변환한다.
+
+    Args:
+        value: 환경변수 원문. 빈 문자열이거나 공백뿐이면 빈 셋 반환.
+
+    Returns:
+        활성 레이어 인덱스 frozenset (예: {1, 3, 6}).
+
+    Raises:
+        ValueError: `L1`~`L6` 외 토큰이 포함된 경우.
+    """
+    if not value or not value.strip():
+        return frozenset()
+    indices: set[int] = set()
+    for raw in value.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        match = _LAYER_TOKEN_RE.match(token)
+        if not match:
+            raise ValueError(
+                "SKIP_POLICY_FETCH_*_LAYERS 토큰은 'L1'~'L6' 만 허용됩니다. "
+                f"잘못된 토큰: {token!r}"
+            )
+        indices.add(int(match.group(1)))
+    return frozenset(indices)
 
 
 class Settings(BaseSettings):
@@ -72,6 +105,15 @@ class Settings(BaseSettings):
     # `app_env="dev"` 일 때만 True 허용 (model_validator 로 강제).
     continue_on_layer_failure: bool = False
 
+    # SKIP_POLICY_FETCH=true 일 때만 의미가 있는 보조 토글.
+    # CSV 형식 `L1,L4` 처럼 활성 레이어를 지정한다. 기본값은 `L1~L6` 전체로
+    # 기존 동작과 동일. 빈 문자열은 해당 방향 가드레일을 빈 셋으로 두며,
+    # 출력 측이 빈 셋이면 outbound 파이프라인 전체가 생략된다.
+    # APP_ENV='dev' 가 아닌데 비기본값을 지정하면 model_validator 가
+    # 기동을 거부한다 (테스트용 환경변수가 prod 로 새지 않게 차단).
+    skip_policy_fetch_input_layers: str = "L1,L2,L3,L4,L5,L6"
+    skip_policy_fetch_output_layers: str = "L1,L2,L3,L4,L5,L6"
+
     # Playground (/playground/) 기본 입력값 — APP_ENV=dev 에서만 노출.
     # prod 환경에서 값이 설정되어 있어도 /v1/playground/defaults 응답은
     # 빈 문자열로 대체되어 시크릿이 브라우저로 새지 않는다.
@@ -86,6 +128,30 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator(
+        "skip_policy_fetch_input_layers",
+        "skip_policy_fetch_output_layers",
+        mode="after",
+    )
+    @classmethod
+    def _validate_layer_csv(cls, value: str) -> str:
+        """CSV 토큰 형식만 검증하고 원문 문자열을 그대로 보존한다."""
+        _parse_layer_csv(value)
+        return value
+
+    @property
+    def input_layer_indices(self) -> frozenset[int]:
+        """`SKIP_POLICY_FETCH=true` 시 입력 가드레일에서 실행할 레이어 셋."""
+        return _parse_layer_csv(self.skip_policy_fetch_input_layers)
+
+    @property
+    def output_layer_indices(self) -> frozenset[int]:
+        """`SKIP_POLICY_FETCH=true` 시 출력 가드레일에서 실행할 레이어 셋.
+
+        빈 셋이면 출력 파이프라인 전체가 생략된다 (outbound=False 동등).
+        """
+        return _parse_layer_csv(self.skip_policy_fetch_output_layers)
+
     @model_validator(mode="after")
     def _observe_mode_requires_dev(self) -> Settings:
         """관찰 모드는 `app_env="dev"` 에서만 허용.
@@ -97,6 +163,28 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CONTINUE_ON_LAYER_FAILURE=true 는 APP_ENV='dev' 에서만 "
                 f"허용됩니다. 현재 APP_ENV={self.app_env!r}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _skip_policy_fetch_layers_require_dev(self) -> Settings:
+        """SKIP_POLICY_FETCH 보조 변수의 비기본값은 dev 에서만 허용.
+
+        SKIP_POLICY_FETCH 자체가 dev 전용 토글이지만, 보조 변수가 prod
+        환경 파일에 잔존해 운영 트래픽에 영향을 주는 사고를 방지하기 위해
+        SKIP_POLICY_FETCH 값과 무관하게 기동 시 가드한다.
+        """
+        if self.app_env == "dev":
+            return self
+        if (
+            self.input_layer_indices != _DEFAULT_LAYER_INDICES
+            or self.output_layer_indices != _DEFAULT_LAYER_INDICES
+        ):
+            raise ValueError(
+                "SKIP_POLICY_FETCH_INPUT_LAYERS / "
+                "SKIP_POLICY_FETCH_OUTPUT_LAYERS 의 비기본값은 "
+                "APP_ENV='dev' 에서만 허용됩니다. "
+                f"현재 APP_ENV={self.app_env!r}."
             )
         return self
 

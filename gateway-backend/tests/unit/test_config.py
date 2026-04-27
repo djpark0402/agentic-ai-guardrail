@@ -219,3 +219,127 @@ def test_observe_mode_off_in_prod_ok(monkeypatch):
     settings = Settings(_env_file=None)
     assert settings.app_env == "prod"
     assert settings.continue_on_layer_failure is False
+
+
+# ---------------------------------------------------------------------------
+# SKIP_POLICY_FETCH 보조 환경변수 — 입력/출력 레이어 선택
+# ---------------------------------------------------------------------------
+
+
+def _base_env(monkeypatch, *, app_env: str = "dev") -> None:
+    """SKIP_POLICY_FETCH_* 테스트용 최소 env 세팅."""
+    monkeypatch.setenv("LLM_MODEL", "solar-pro")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setenv("APP_ENV", app_env)
+
+
+def test_skip_policy_fetch_layers_default_is_all_six(monkeypatch):
+    """미설정 시 입력/출력 모두 L1~L6 전체."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.delenv("SKIP_POLICY_FETCH_INPUT_LAYERS", raising=False)
+    monkeypatch.delenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.input_layer_indices == frozenset({1, 2, 3, 4, 5, 6})
+    assert settings.output_layer_indices == frozenset({1, 2, 3, 4, 5, 6})
+
+
+def test_skip_policy_fetch_input_layers_csv_parsed(monkeypatch):
+    """CSV 토큰을 정규화해 frozenset[int] 로 노출한다."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1, l3 ,L6")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.input_layer_indices == frozenset({1, 3, 6})
+    assert settings.output_layer_indices == frozenset({1, 2, 3, 4, 5, 6})
+
+
+def test_skip_policy_fetch_output_layers_empty_string_disables_all(
+    monkeypatch,
+):
+    """빈 문자열은 출력 레이어를 빈 셋으로 둔다 (outbound 비활성 의도)."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.output_layer_indices == frozenset()
+
+
+def test_skip_policy_fetch_invalid_token_rejected(monkeypatch):
+    """L7 같은 범위 외 토큰은 기동 실패."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,L7")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_skip_policy_fetch_unknown_token_rejected(monkeypatch):
+    """`foo` 같은 비정형 토큰도 기동 실패."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,foo")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_skip_policy_fetch_custom_layers_allowed_in_dev(monkeypatch):
+    """APP_ENV=dev 면 비기본 레이어 셋 허용."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L4")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.input_layer_indices == frozenset({4})
+    assert settings.output_layer_indices == frozenset()
+
+
+def test_skip_policy_fetch_custom_layers_rejected_in_prod(monkeypatch):
+    """APP_ENV=prod 에서 비기본 레이어 셋은 기동 실패."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L4")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_skip_policy_fetch_custom_output_layers_rejected_in_prod(
+    monkeypatch,
+):
+    """APP_ENV=prod 에서 출력 레이어 비기본값도 기동 실패."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_skip_policy_fetch_default_layers_allowed_in_prod(monkeypatch):
+    """APP_ENV=prod 라도 명시 기본값(L1~L6)은 기동 가능."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.input_layer_indices == frozenset({1, 2, 3, 4, 5, 6})
+    assert settings.output_layer_indices == frozenset({1, 2, 3, 4, 5, 6})

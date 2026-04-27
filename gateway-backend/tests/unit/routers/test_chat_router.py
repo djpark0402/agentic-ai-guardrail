@@ -1311,6 +1311,158 @@ def test_skip_policy_fetch_forces_all_layers_enabled(
         app.dependency_overrides.clear()
 
 
+def test_skip_policy_fetch_input_layers_subset(
+    mock_security_service, mock_provider_router
+):
+    """SKIP_POLICY_FETCH_INPUT_LAYERS 로 입력 레이어 부분 활성화."""
+    mock_ps = MagicMock()
+    mock_ps.verify_and_fetch_policy = AsyncMock()
+
+    def _skip_settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=True,
+            skip_header_verification=True,
+            continue_on_layer_failure=False,
+            app_env="dev",
+            skip_policy_fetch_input_layers="L4,L5",
+            skip_policy_fetch_output_layers="L1,L2,L3,L4,L5,L6",
+        )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_ps
+    app.dependency_overrides[get_security_service] = lambda: (
+        mock_security_service
+    )
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _skip_settings
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert resp.status_code == 200
+        input_policy = mock_security_service.check_input.call_args.kwargs[
+            "policy"
+        ]
+        output_policy = mock_security_service.check_output.call_args.kwargs[
+            "policy"
+        ]
+        assert input_policy.enabled_layers() == [4, 5]
+        assert output_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_skip_policy_fetch_output_layers_empty_skips_output_check(
+    mock_security_service, mock_provider_router
+):
+    """OUTPUT_LAYERS='' 면 check_output 호출 없이 LLM 응답을 통과시킨다."""
+    mock_ps = MagicMock()
+    mock_ps.verify_and_fetch_policy = AsyncMock()
+    mock_security_service.check_output.reset_mock()
+
+    def _skip_settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=True,
+            skip_header_verification=True,
+            continue_on_layer_failure=False,
+            app_env="dev",
+            skip_policy_fetch_input_layers="L4",
+            skip_policy_fetch_output_layers="",
+        )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_ps
+    app.dependency_overrides[get_security_service] = lambda: (
+        mock_security_service
+    )
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _skip_settings
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert resp.status_code == 200
+        # 출력 가드레일은 outbound=False 로 통째로 생략되어야 한다.
+        mock_security_service.check_output.assert_not_called()
+        input_policy = mock_security_service.check_input.call_args.kwargs[
+            "policy"
+        ]
+        assert input_policy.enabled_layers() == [4]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_skip_policy_fetch_input_layers_empty_runs_no_input_layers(
+    mock_security_service, mock_provider_router
+):
+    """SKIP_POLICY_FETCH_INPUT_LAYERS='' 면 입력 정책에 활성 레이어가 없다."""
+    mock_ps = MagicMock()
+    mock_ps.verify_and_fetch_policy = AsyncMock()
+
+    def _skip_settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=True,
+            skip_header_verification=True,
+            continue_on_layer_failure=False,
+            app_env="dev",
+            skip_policy_fetch_input_layers="",
+            skip_policy_fetch_output_layers="L1,L2,L3,L4,L5,L6",
+        )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_ps
+    app.dependency_overrides[get_security_service] = lambda: (
+        mock_security_service
+    )
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _skip_settings
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert resp.status_code == 200
+        input_policy = mock_security_service.check_input.call_args.kwargs[
+            "policy"
+        ]
+        output_policy = mock_security_service.check_output.call_args.kwargs[
+            "policy"
+        ]
+        assert input_policy.enabled_layers() == []
+        assert output_policy.enabled_layers() == [1, 2, 3, 4, 5, 6]
+    finally:
+        app.dependency_overrides.clear()
+
+
 # ---------------------------------------------------------------------------
 # 사용자 요청 헤더 검증 (SKIP_HEADER_VERIFICATION=false)
 # ---------------------------------------------------------------------------

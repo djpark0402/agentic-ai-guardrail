@@ -1032,9 +1032,17 @@ async def chat_completions(
     # 1단계: admin-backend에서 보안 정책 조회 (검증 위임)
     t0 = time.perf_counter()
     if settings.skip_policy_fetch:
-        # 정책 조회는 생략하되 L1~L6 전체 레이어를 강제로 실행한다.
-        input_policy = GuardrailPolicy.all_enabled()
-        output_policy = GuardrailPolicy.all_enabled()
+        # 정책 조회는 생략하고 SKIP_POLICY_FETCH_*_LAYERS 로 입력/출력
+        # 활성 레이어를 분리 지정한다. 출력 레이어가 빈 셋이면 outbound
+        # 파이프라인을 통째로 생략한다 (LLM 응답 그대로 통과).
+        input_indices = settings.input_layer_indices
+        output_indices = settings.output_layer_indices
+        input_policy = GuardrailPolicy.from_layer_indices(
+            input_indices, outbound=True
+        )
+        output_policy = GuardrailPolicy.from_layer_indices(
+            output_indices, outbound=bool(output_indices)
+        )
     else:
         fetched_policy = await policy_service.verify_and_fetch_policy(
             session_id=session_id,
