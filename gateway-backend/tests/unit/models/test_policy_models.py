@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models.policy import GuardrailPolicy
+from app.models.policy import GuardrailPolicy, L5Setting
 
 
 def test_guardrail_policy_all_enabled():
@@ -70,6 +70,20 @@ def test_guardrail_policy_defaults_l5_setting_to_none_when_missing():
     """l5Setting 이 없으면 기존 기본 L5 동작을 유지한다."""
     policy = GuardrailPolicy.all_enabled()
     assert policy.l5_setting is None
+
+
+def test_guardrail_policy_from_layer_indices_preserves_l5_setting():
+    """정책 조회 생략용 팩토리도 환경변수 기반 L5 설정을 보존한다."""
+    l5_setting = L5Setting(model="pii_model_v11", threshold=0.82)
+
+    policy = GuardrailPolicy.from_layer_indices(
+        [4, 5],
+        outbound=True,
+        l5_setting=l5_setting,
+    )
+
+    assert policy.enabled_layers() == [4, 5]
+    assert policy.l5_setting == l5_setting
 
 
 @pytest.mark.parametrize("threshold", [-0.01, 1.01])

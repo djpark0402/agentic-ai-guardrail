@@ -343,3 +343,82 @@ def test_skip_policy_fetch_default_layers_allowed_in_prod(monkeypatch):
     settings = Settings(_env_file=None)
     assert settings.input_layer_indices == frozenset({1, 2, 3, 4, 5, 6})
     assert settings.output_layer_indices == frozenset({1, 2, 3, 4, 5, 6})
+
+
+def test_skip_policy_fetch_l5_setting_default_is_none(monkeypatch):
+    """L5 보조 환경변수 미설정 시 기본 L5 설정을 사용한다."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.delenv("SKIP_POLICY_FETCH_L5_MODEL", raising=False)
+    monkeypatch.delenv("SKIP_POLICY_FETCH_L5_THRESHOLD", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.skip_policy_fetch_l5_setting is None
+
+
+def test_skip_policy_fetch_l5_setting_parsed_in_dev(monkeypatch):
+    """APP_ENV=dev 에서는 환경변수로 L5 model/threshold 를 지정할 수 있다."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_MODEL", "pii_model_v11")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", "0.82")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    l5_setting = settings.skip_policy_fetch_l5_setting
+    assert l5_setting is not None
+    assert l5_setting.model == "pii_model_v11"
+    assert l5_setting.threshold == 0.82
+
+
+def test_skip_policy_fetch_l5_threshold_empty_string_is_none(monkeypatch):
+    """빈 threshold 는 None 으로 정규화된다."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_MODEL", "pii_model_v11")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", "")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    l5_setting = settings.skip_policy_fetch_l5_setting
+    assert l5_setting is not None
+    assert l5_setting.model == "pii_model_v11"
+    assert l5_setting.threshold is None
+
+
+@pytest.mark.parametrize("threshold", ["-0.01", "1.01"])
+def test_skip_policy_fetch_l5_threshold_out_of_range_rejected(
+    monkeypatch,
+    threshold: str,
+):
+    """L5 threshold 보조 환경변수도 0.0~1.0 범위만 허용한다."""
+    _base_env(monkeypatch, app_env="dev")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", threshold)
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_skip_policy_fetch_l5_model_rejected_in_prod(monkeypatch):
+    """APP_ENV=prod 에서 L5 model 비기본값은 기동 실패."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_MODEL", "pii_model_v11")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_skip_policy_fetch_l5_threshold_rejected_in_prod(monkeypatch):
+    """APP_ENV=prod 에서 L5 threshold 비기본값은 기동 실패."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", "0.82")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

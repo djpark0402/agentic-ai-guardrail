@@ -1362,6 +1362,61 @@ def test_skip_policy_fetch_input_layers_subset(
         app.dependency_overrides.clear()
 
 
+def test_skip_policy_fetch_l5_setting_applied_to_input_and_output_policy(
+    mock_security_service, mock_provider_router
+):
+    """SKIP_POLICY_FETCH=true 에서 L5 설정 환경변수가 정책에 주입된다."""
+    mock_ps = MagicMock()
+    mock_ps.verify_and_fetch_policy = AsyncMock()
+
+    def _skip_settings():
+        s = get_settings()
+        from app.config import Settings
+
+        return Settings(
+            llm_model=s.llm_model,
+            upstage_api_key=s.upstage_api_key.get_secret_value(),
+            skip_policy_fetch=True,
+            skip_header_verification=True,
+            continue_on_layer_failure=False,
+            app_env="dev",
+            skip_policy_fetch_l5_model="pii_model_v11",
+            skip_policy_fetch_l5_threshold=0.82,
+        )
+
+    app.dependency_overrides[get_policy_service] = lambda: mock_ps
+    app.dependency_overrides[get_security_service] = lambda: (
+        mock_security_service
+    )
+    app.dependency_overrides[get_provider_router] = lambda: mock_provider_router
+    app.dependency_overrides[get_settings] = _skip_settings
+
+    try:
+        c = TestClient(app)
+        resp = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert resp.status_code == 200
+        input_policy = mock_security_service.check_input.call_args.kwargs[
+            "policy"
+        ]
+        output_policy = mock_security_service.check_output.call_args.kwargs[
+            "policy"
+        ]
+        assert input_policy.l5_setting is not None
+        assert input_policy.l5_setting.model == "pii_model_v11"
+        assert input_policy.l5_setting.threshold == 0.82
+        assert output_policy.l5_setting is not None
+        assert output_policy.l5_setting.model == "pii_model_v11"
+        assert output_policy.l5_setting.threshold == 0.82
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_skip_policy_fetch_output_layers_empty_skips_output_check(
     mock_security_service, mock_provider_router
 ):

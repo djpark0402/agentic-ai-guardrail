@@ -94,19 +94,22 @@ class GuardrailPolicy(BaseModel):
         layers: Iterable[int],
         *,
         outbound: bool,
+        l5_setting: L5Setting | None = None,
     ) -> GuardrailPolicy:
         """레이어 인덱스 셋과 outbound 플래그로 정책을 만든다.
 
         SKIP_POLICY_FETCH 보조 환경변수(`SKIP_POLICY_FETCH_INPUT_LAYERS` /
         `SKIP_POLICY_FETCH_OUTPUT_LAYERS`)에서 파싱된 인덱스 집합을 그대로
-        정책 객체로 변환하기 위한 팩토리. admin-backend 응답을 거치지 않으므로
-        `l5_setting` 은 항상 None 이다.
+        정책 객체로 변환하기 위한 팩토리. admin-backend 응답을 거치지 않아도
+        환경변수 기반 L5 설정을 전달할 수 있다.
 
         Args:
             layers: 활성화할 레이어 인덱스의 iterable. 1~6 범위만 허용.
                 중복은 무시된다.
             outbound: 출력 가드레일 파이프라인 활성화 여부. 빈 인덱스 셋과
                 outbound=False 를 함께 넘기면 출력 검사가 통째로 생략된다.
+            l5_setting: L5 모델 폴더명과 threshold 설정. None 이면 기본
+                L5 레이어 설정을 사용한다.
 
         Returns:
             지정한 레이어만 활성화된 GuardrailPolicy 인스턴스.
@@ -127,6 +130,7 @@ class GuardrailPolicy(BaseModel):
             l3=3 in wanted,
             l4=4 in wanted,
             l5=5 in wanted,
+            l5_setting=l5_setting,
             l6=6 in wanted,
             outbound=outbound,
         )

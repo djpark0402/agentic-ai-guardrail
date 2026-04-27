@@ -1037,11 +1037,16 @@ async def chat_completions(
         # 파이프라인을 통째로 생략한다 (LLM 응답 그대로 통과).
         input_indices = settings.input_layer_indices
         output_indices = settings.output_layer_indices
+        l5_setting = settings.skip_policy_fetch_l5_setting
         input_policy = GuardrailPolicy.from_layer_indices(
-            input_indices, outbound=True
+            input_indices,
+            outbound=True,
+            l5_setting=l5_setting,
         )
         output_policy = GuardrailPolicy.from_layer_indices(
-            output_indices, outbound=bool(output_indices)
+            output_indices,
+            outbound=bool(output_indices),
+            l5_setting=l5_setting,
         )
     else:
         fetched_policy = await policy_service.verify_and_fetch_policy(

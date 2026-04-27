@@ -4,8 +4,10 @@ import re
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.models.policy import L5Setting
 
 AppEnv = Literal["dev", "prod"]
 
@@ -113,6 +115,12 @@ class Settings(BaseSettings):
     # 기동을 거부한다 (테스트용 환경변수가 prod 로 새지 않게 차단).
     skip_policy_fetch_input_layers: str = "L1,L2,L3,L4,L5,L6"
     skip_policy_fetch_output_layers: str = "L1,L2,L3,L4,L5,L6"
+    skip_policy_fetch_l5_model: str = ""
+    skip_policy_fetch_l5_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+    )
 
     # Playground (/playground/) 기본 입력값 — APP_ENV=dev 에서만 노출.
     # prod 환경에서 값이 설정되어 있어도 /v1/playground/defaults 응답은
@@ -124,6 +132,14 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_admin_api_key_is_none(cls, value: object) -> object:
         """빈 문자열 `ADMIN_API_KEY` 는 None 으로 정규화한다."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("skip_policy_fetch_l5_threshold", mode="before")
+    @classmethod
+    def _empty_l5_threshold_is_none(cls, value: object) -> object:
+        """빈 L5 threshold 문자열은 None 으로 정규화한다."""
         if isinstance(value, str) and value.strip() == "":
             return None
         return value
@@ -152,6 +168,15 @@ class Settings(BaseSettings):
         """
         return _parse_layer_csv(self.skip_policy_fetch_output_layers)
 
+    @property
+    def skip_policy_fetch_l5_setting(self) -> L5Setting | None:
+        """정책 조회 생략 시 환경변수로 주입할 L5 설정."""
+        model_name = self.skip_policy_fetch_l5_model.strip() or None
+        threshold = self.skip_policy_fetch_l5_threshold
+        if model_name is None and threshold is None:
+            return None
+        return L5Setting(model=model_name, threshold=threshold)
+
     @model_validator(mode="after")
     def _observe_mode_requires_dev(self) -> Settings:
         """관찰 모드는 `app_env="dev"` 에서만 허용.
@@ -179,10 +204,13 @@ class Settings(BaseSettings):
         if (
             self.input_layer_indices != _DEFAULT_LAYER_INDICES
             or self.output_layer_indices != _DEFAULT_LAYER_INDICES
+            or self.skip_policy_fetch_l5_setting is not None
         ):
             raise ValueError(
                 "SKIP_POLICY_FETCH_INPUT_LAYERS / "
-                "SKIP_POLICY_FETCH_OUTPUT_LAYERS 의 비기본값은 "
+                "SKIP_POLICY_FETCH_OUTPUT_LAYERS / "
+                "SKIP_POLICY_FETCH_L5_MODEL / "
+                "SKIP_POLICY_FETCH_L5_THRESHOLD 의 비기본값은 "
                 "APP_ENV='dev' 에서만 허용됩니다. "
                 f"현재 APP_ENV={self.app_env!r}."
             )
