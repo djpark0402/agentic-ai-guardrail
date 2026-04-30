@@ -19,6 +19,29 @@ RUN apt-get update \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# python-mecab-ko 의 C 확장 빌드는 시스템 mecab-ko 의 mecab-config 가 필요하다.
+# Python 3.14 은 아직 python-mecab-ko 의 prebuilt wheel 이 없어 source build 가
+# 강제되므로 mecab-ko 0.9.2 를 소스에서 빌드해 /usr/local 에 설치한다.
+# (사전은 python 패키지 python-mecab-ko-dic 가 wheel 로 제공하므로 시스템 dic 불필요.)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        libtool \
+        make \
+        wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && cd /tmp \
+    && wget -q https://bitbucket.org/eunjeon/mecab-ko/downloads/mecab-0.996-ko-0.9.2.tar.gz \
+    && tar xzf mecab-0.996-ko-0.9.2.tar.gz \
+    && cd mecab-0.996-ko-0.9.2 \
+    && ./configure --prefix=/usr/local --enable-utf8-only \
+    && make -j"$(nproc)" \
+    && make install \
+    && ldconfig \
+    && cd / \
+    && rm -rf /tmp/mecab-0.996-ko-0.9.2 /tmp/mecab-0.996-ko-0.9.2.tar.gz
+
 # uv 바이너리를 공식 이미지에서 복사
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
@@ -84,6 +107,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 appuser \
     && useradd  --system --uid 1000 --gid appuser --home-dir /app appuser
+
+# python-mecab-ko 의 C 확장 (_mecab*.so) 가 dlopen 하는 libmecab.so 와 mecab 의
+# 기본 설정 파일(mecabrc) 만 builder 에서 복사. mecab-config / 헤더는 runtime 에 불필요.
+COPY --from=builder /usr/local/lib/libmecab.so* /usr/local/lib/
+COPY --from=builder /usr/local/etc/mecabrc /usr/local/etc/mecabrc
+RUN ldconfig
 
 # builder 에서 /app 전체 복사 (editable .pth 가 /app/core-secure-layer 를 가리킴)
 COPY --from=builder --chown=appuser:appuser /app /app
