@@ -122,6 +122,14 @@ class Settings(BaseSettings):
         le=1.0,
     )
 
+    # LLM 레이어 대체 옵션. 기본값은 빈 셋이라 기존 core-secure-layer
+    # 실행 경로가 그대로 유지된다. 예: LLM_LAYER_REPLACEMENT_LAYERS=L1,L4,L6.
+    llm_layer_replacement_layers: str = ""
+    llm_layer_base_url: str = ""
+    llm_layer_api_key: SecretStr | None = None
+    llm_layer_model: str = ""
+    llm_layer_timeout_seconds: float = Field(default=15.0, gt=0.0)
+
     # Playground (/playground/) 기본 입력값 — APP_ENV=dev 에서만 노출.
     # prod 환경에서 값이 설정되어 있어도 /v1/playground/defaults 응답은
     # 빈 문자열로 대체되어 시크릿이 브라우저로 새지 않는다.
@@ -132,6 +140,14 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_admin_api_key_is_none(cls, value: object) -> object:
         """빈 문자열 `ADMIN_API_KEY` 는 None 으로 정규화한다."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("llm_layer_api_key", mode="before")
+    @classmethod
+    def _empty_llm_layer_api_key_is_none(cls, value: object) -> object:
+        """빈 문자열 `LLM_LAYER_API_KEY` 는 None 으로 정규화한다."""
         if isinstance(value, str) and value.strip() == "":
             return None
         return value
@@ -147,6 +163,7 @@ class Settings(BaseSettings):
     @field_validator(
         "skip_policy_fetch_input_layers",
         "skip_policy_fetch_output_layers",
+        "llm_layer_replacement_layers",
         mode="after",
     )
     @classmethod
@@ -167,6 +184,11 @@ class Settings(BaseSettings):
         빈 셋이면 출력 파이프라인 전체가 생략된다 (outbound=False 동등).
         """
         return _parse_layer_csv(self.skip_policy_fetch_output_layers)
+
+    @property
+    def llm_layer_replacement_indices(self) -> frozenset[int]:
+        """LLM 판정으로 대체할 레이어 인덱스 셋."""
+        return _parse_layer_csv(self.llm_layer_replacement_layers)
 
     @property
     def skip_policy_fetch_l5_setting(self) -> L5Setting | None:
@@ -213,6 +235,25 @@ class Settings(BaseSettings):
                 "SKIP_POLICY_FETCH_L5_THRESHOLD 의 비기본값은 "
                 "APP_ENV='dev' 에서만 허용됩니다. "
                 f"현재 APP_ENV={self.app_env!r}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _llm_layer_replacement_requires_endpoint(self) -> Settings:
+        """LLM 대체 레이어가 있으면 OpenAI 호환 엔드포인트 설정을 강제."""
+        if not self.llm_layer_replacement_indices:
+            return self
+        missing: list[str] = []
+        if not self.llm_layer_base_url.strip():
+            missing.append("LLM_LAYER_BASE_URL")
+        if self.llm_layer_api_key is None:
+            missing.append("LLM_LAYER_API_KEY")
+        if not self.llm_layer_model.strip():
+            missing.append("LLM_LAYER_MODEL")
+        if missing:
+            raise ValueError(
+                "LLM_LAYER_REPLACEMENT_LAYERS 가 설정된 경우 "
+                f"{', '.join(missing)} 값이 필요합니다."
             )
         return self
 

@@ -422,3 +422,66 @@ def test_skip_policy_fetch_l5_threshold_rejected_in_prod(monkeypatch):
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+# ---------------------------------------------------------------------------
+# LLM 레이어 대체 옵션
+# ---------------------------------------------------------------------------
+
+
+def test_llm_layer_replacement_defaults_to_empty(monkeypatch):
+    """미설정 시 LLM 대체 레이어는 없다."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.delenv("LLM_LAYER_REPLACEMENT_LAYERS", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.llm_layer_replacement_indices == frozenset()
+
+
+def test_llm_layer_replacement_layers_csv_parsed(monkeypatch):
+    """LLM 대체 레이어 CSV 토큰을 frozenset[int] 로 노출한다."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("LLM_LAYER_REPLACEMENT_LAYERS", "L1, l4 ,L6")
+    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.setenv("LLM_LAYER_API_KEY", "test-layer-key")
+    monkeypatch.setenv("LLM_LAYER_MODEL", "guard-model")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.llm_layer_replacement_indices == frozenset({1, 4, 6})
+    assert settings.llm_layer_api_key is not None
+    assert settings.llm_layer_api_key.get_secret_value() == "test-layer-key"
+
+
+def test_llm_layer_replacement_invalid_token_rejected(monkeypatch):
+    """L1~L6 밖의 LLM 대체 토큰은 기동 실패."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("LLM_LAYER_REPLACEMENT_LAYERS", "L1,L7")
+    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.setenv("LLM_LAYER_API_KEY", "test-layer-key")
+    monkeypatch.setenv("LLM_LAYER_MODEL", "guard-model")
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_llm_layer_replacement_requires_endpoint_settings(monkeypatch):
+    """대체 레이어가 있으면 LLM endpoint/model/key 설정이 필수다."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.setenv("LLM_LAYER_REPLACEMENT_LAYERS", "L4")
+    monkeypatch.delenv("LLM_LAYER_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_LAYER_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_LAYER_MODEL", raising=False)
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None)
+    assert "LLM_LAYER_BASE_URL" in str(exc.value)
+    assert "LLM_LAYER_API_KEY" in str(exc.value)
+    assert "LLM_LAYER_MODEL" in str(exc.value)
