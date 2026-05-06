@@ -114,10 +114,14 @@ class LLMLayerGuardService:
             else "dummy"
         )
         self._api_key = api_key
+        # LiteLLM 등 일부 OpenAI 호환 프록시는 표준 `Authorization: Bearer`
+        # 대신 `x-api-key` 헤더로 인증한다. SDK 가 기본으로 보내는 Bearer
+        # 헤더와 함께 x-api-key 도 송신해 양쪽 프록시 모두에서 통하도록 한다.
         self._client = client or AsyncOpenAI(
             api_key=api_key,
             base_url=settings.llm_layer_base_url,
             timeout=settings.llm_layer_timeout_seconds,
+            default_headers={"x-api-key": api_key},
         )
 
     @property

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from pydantic import SecretStr
 
@@ -175,6 +176,24 @@ async def test_llm_layer_guard_falls_back_to_settings_model_when_none() -> (
 
     call = client.completions.calls[0]
     assert call["model"] == "guard-model"
+
+
+def test_llm_layer_guard_passes_x_api_key_default_header() -> None:
+    """AsyncOpenAI 클라이언트 생성 시 x-api-key 기본 헤더를 함께 보낸다.
+
+    LiteLLM 등 일부 OpenAI 호환 프록시는 표준 `Authorization: Bearer`
+    대신 `x-api-key` 헤더로 인증한다. 양쪽 모두를 송신해 호환성을 확보.
+    """
+    with patch(
+        "app.services.llm_layer_guard.AsyncOpenAI"
+    ) as mock_openai:
+        LLMLayerGuardService(_settings())
+
+    assert mock_openai.called
+    kwargs = mock_openai.call_args.kwargs
+    assert kwargs.get("default_headers") == {"x-api-key": "layer-test"}
+    assert kwargs.get("api_key") == "layer-test"
+    assert kwargs.get("base_url") == "http://localhost:4000/v1"
 
 
 async def test_llm_layer_guard_treats_empty_model_override_as_fallback() -> (
