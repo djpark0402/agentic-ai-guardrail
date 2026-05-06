@@ -15,14 +15,22 @@ L1~L6 휴리스틱을 모두 건너뛰고 ``LlmJudgeLayer`` 만 호출해 응답
 import argparse
 import asyncio
 import os
+import sys
+from pathlib import Path
 
-from core_secure_layer.cli import (
+# scripts/ 에서 직접 실행 시 core_secure_layer 패키지를 찾을 수 있도록
+# 프로젝트 루트(core-secure-layer/) 를 sys.path 에 추가한다.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from core_secure_layer.cli import (  # noqa: E402
     _LLM_JUDGE_DEFAULT_PROMPT,
     _build_solar_llm,
     _emit_result,
 )
-from core_secure_layer.layers.llm_judge import LlmJudgeLayer
-from core_secure_layer.layers.types import GuardrailRequest
+from core_secure_layer.layers.llm_judge import LlmJudgeLayer  # noqa: E402
+from core_secure_layer.layers.types import GuardrailRequest  # noqa: E402
 
 
 def _resolve_prompt(cli_prompt: str | None) -> str:
