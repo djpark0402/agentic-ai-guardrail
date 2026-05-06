@@ -135,3 +135,64 @@ async def test_llm_layer_guard_call_error_fails_closed() -> None:
     assert result.layer == "L2"
     assert result.severity == "HIGH"
     assert "boom" in (result.reason or "")
+
+
+async def test_llm_layer_guard_uses_model_override_when_provided() -> None:
+    """`model` 인자가 주어지면 OpenAI payload 의 model 을 그 값으로 호출한다."""
+    client = _FakeClient(
+        '{"allowed":true,"reason":null,"severity":"NONE",'
+        '"confidence":0.5,"tags":[]}'
+    )
+    service = LLMLayerGuardService(_settings(), client=client)  # type: ignore[arg-type]
+
+    await service.check(
+        layer_idx=4,
+        surface="input",
+        content="hi",
+        model="custom-judgment-model",
+    )
+
+    call = client.completions.calls[0]
+    assert call["model"] == "custom-judgment-model"
+
+
+async def test_llm_layer_guard_falls_back_to_settings_model_when_none() -> (
+    None
+):
+    """`model=None` 이면 기존처럼 settings.llm_layer_model 을 사용한다."""
+    client = _FakeClient(
+        '{"allowed":true,"reason":null,"severity":"NONE",'
+        '"confidence":0.5,"tags":[]}'
+    )
+    service = LLMLayerGuardService(_settings(), client=client)  # type: ignore[arg-type]
+
+    await service.check(
+        layer_idx=4,
+        surface="input",
+        content="hi",
+        model=None,
+    )
+
+    call = client.completions.calls[0]
+    assert call["model"] == "guard-model"
+
+
+async def test_llm_layer_guard_treats_empty_model_override_as_fallback() -> (
+    None
+):
+    """빈 문자열 `model=""` 도 None 처럼 처리해 settings 값으로 폴백한다."""
+    client = _FakeClient(
+        '{"allowed":true,"reason":null,"severity":"NONE",'
+        '"confidence":0.5,"tags":[]}'
+    )
+    service = LLMLayerGuardService(_settings(), client=client)  # type: ignore[arg-type]
+
+    await service.check(
+        layer_idx=4,
+        surface="input",
+        content="hi",
+        model="",
+    )
+
+    call = client.completions.calls[0]
+    assert call["model"] == "guard-model"

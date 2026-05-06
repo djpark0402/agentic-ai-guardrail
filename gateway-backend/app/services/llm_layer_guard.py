@@ -136,6 +136,7 @@ class LLMLayerGuardService:
         layer_idx: int,
         surface: _Surface,
         content: str,
+        model: str | None = None,
     ) -> GuardrailResult:
         """단일 레이어 판정을 LLM에 위임하고 GuardrailResult로 변환한다.
 
@@ -146,6 +147,9 @@ class LLMLayerGuardService:
             layer_idx: 대체 실행할 레이어 인덱스.
             surface: 입력/출력 구분.
             content: 검사 대상 텍스트.
+            model: 호출별 모델 오버라이드. 빈 문자열·None 이면
+                `settings.llm_layer_model` 로 폴백한다. 정책 기반
+                `judgmentModel` 을 그대로 전달하기 위한 인자.
 
         Returns:
             LLM 판정 결과를 gateway GuardrailResult 로 변환한 값.
@@ -156,6 +160,7 @@ class LLMLayerGuardService:
                 layer_idx=layer_idx,
                 surface=surface,
                 content=content,
+                model=model,
             )
         except Exception as exc:
             safe_message = _safe_error_message(exc, self._api_key)
@@ -190,10 +195,16 @@ class LLMLayerGuardService:
         layer_idx: int,
         surface: _Surface,
         content: str,
+        model: str | None = None,
     ) -> LLMLayerDecision:
         """OpenAI 호환 Chat Completions 호출 후 JSON 스키마를 검증한다."""
+        effective_model = (
+            model.strip()
+            if isinstance(model, str) and model.strip()
+            else self._settings.llm_layer_model
+        )
         completion = await self._client.chat.completions.create(
-            model=self._settings.llm_layer_model,
+            model=effective_model,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {
