@@ -191,6 +191,18 @@ class Settings(BaseSettings):
         return _parse_layer_csv(self.llm_layer_replacement_layers)
 
     @property
+    def has_llm_layer_endpoint(self) -> bool:
+        """OpenAI 호환 LLM 엔드포인트 (URL + API key) 가 모두 설정됐는지.
+
+        정적 `LLM_LAYER_REPLACEMENT_LAYERS` 와 무관하게, 정책 기반
+        `useLlm=True` 경로를 활성화하기 위해 DI 팩토리가 참조한다.
+        """
+        return bool(
+            self.llm_layer_base_url.strip()
+            and self.llm_layer_api_key is not None
+        )
+
+    @property
     def skip_policy_fetch_l5_setting(self) -> L5Setting | None:
         """정책 조회 생략 시 환경변수로 주입할 L5 설정."""
         model_name = self.skip_policy_fetch_l5_model.strip() or None
@@ -254,6 +266,30 @@ class Settings(BaseSettings):
             raise ValueError(
                 "LLM_LAYER_REPLACEMENT_LAYERS 가 설정된 경우 "
                 f"{', '.join(missing)} 값이 필요합니다."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _llm_layer_endpoint_pair_required(self) -> Settings:
+        """LLM 엔드포인트는 BASE_URL/API_KEY 가 짝으로 설정돼야 한다.
+
+        한쪽만 설정된 채로 기동되면 정책 기반 `useLlm=True` 요청이 들어왔을
+        때 런타임에서야 실패하므로, 부팅 시점에 차단한다. 정적 셋
+        (`LLM_LAYER_REPLACEMENT_LAYERS`) 검증과 중복되지만, 정적 셋 없이
+        엔드포인트만 설정해 정책 기반 경로를 쓰는 신규 운용 방식을 위해
+        별도로 강제한다.
+        """
+        url_set = bool(self.llm_layer_base_url.strip())
+        key_set = self.llm_layer_api_key is not None
+        if url_set and not key_set:
+            raise ValueError(
+                "LLM_LAYER_BASE_URL 가 설정되면 LLM_LAYER_API_KEY 도 "
+                "필요합니다."
+            )
+        if key_set and not url_set:
+            raise ValueError(
+                "LLM_LAYER_API_KEY 가 설정되면 LLM_LAYER_BASE_URL 도 "
+                "필요합니다."
             )
         return self
 

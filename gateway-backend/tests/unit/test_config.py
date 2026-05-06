@@ -485,3 +485,68 @@ def test_llm_layer_replacement_requires_endpoint_settings(monkeypatch):
     assert "LLM_LAYER_BASE_URL" in str(exc.value)
     assert "LLM_LAYER_API_KEY" in str(exc.value)
     assert "LLM_LAYER_MODEL" in str(exc.value)
+
+
+def test_llm_layer_endpoint_without_replacement_set_is_valid(monkeypatch):
+    """정적 셋이 비어있어도 BASE_URL+API_KEY 만으로 정책 기반 사용을 허용한다.
+
+    `LLM_LAYER_MODEL` 은 정책이 단일 출처이므로 정적 셋이 없을 때는
+    검증에서 강제하지 않는다.
+    """
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.delenv("LLM_LAYER_REPLACEMENT_LAYERS", raising=False)
+    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.setenv("LLM_LAYER_API_KEY", "test-layer-key")
+    monkeypatch.delenv("LLM_LAYER_MODEL", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.llm_layer_replacement_indices == frozenset()
+    assert settings.llm_layer_base_url == "http://localhost:4000/v1"
+    assert settings.llm_layer_model == ""
+
+
+def test_llm_layer_endpoint_url_only_requires_api_key(monkeypatch):
+    """BASE_URL 만 있고 API_KEY 가 없으면 기동 실패."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.delenv("LLM_LAYER_REPLACEMENT_LAYERS", raising=False)
+    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.delenv("LLM_LAYER_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_LAYER_MODEL", raising=False)
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None)
+    assert "LLM_LAYER_API_KEY" in str(exc.value)
+
+
+def test_llm_layer_has_endpoint_property_reports_true_when_url_and_key(
+    monkeypatch,
+):
+    """`has_llm_layer_endpoint` 는 URL+KEY 가 있으면 True 를 반환한다."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.delenv("LLM_LAYER_REPLACEMENT_LAYERS", raising=False)
+    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.setenv("LLM_LAYER_API_KEY", "test-layer-key")
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.has_llm_layer_endpoint is True
+
+
+def test_llm_layer_has_endpoint_property_reports_false_when_missing(
+    monkeypatch,
+):
+    """엔드포인트 미설정이면 has_llm_layer_endpoint 는 False."""
+    _base_env(monkeypatch, app_env="prod")
+    monkeypatch.delenv("LLM_LAYER_REPLACEMENT_LAYERS", raising=False)
+    monkeypatch.delenv("LLM_LAYER_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_LAYER_API_KEY", raising=False)
+
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.has_llm_layer_endpoint is False
