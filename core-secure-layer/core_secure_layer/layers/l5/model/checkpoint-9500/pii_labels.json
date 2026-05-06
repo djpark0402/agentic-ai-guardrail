@@ -1,0 +1,56 @@
+{
+  "adapter": "gliner",
+  "words_splitter": "mecab",
+  "max_length": 256,
+  "inference_labels": [
+    "사람 이름",
+    "기관명",
+    "주소",
+    "위치명",
+    "직업명",
+    "거래내역",
+    "대출정보",
+    "신용등급",
+    "재산및소득정보",
+    "IT시스템정보"
+  ],
+  "label_map": {
+    "사람 이름": "person",
+    "기관명": "organization",
+    "주소": "address",
+    "위치명": "location",
+    "직업명": "job_title",
+    "거래내역": "transaction",
+    "대출정보": "loan",
+    "신용등급": "credit_rating",
+    "재산및소득정보": "income_property",
+    "IT시스템정보": "it_system"
+  },
+  "category_thresholds": {
+    "person": 0.65,
+    "organization": 0.70,
+    "address": 0.70,
+    "location": 0.75,
+    "job_title": 0.80,
+    "transaction": 0.80,
+    "loan": 0.80,
+    "credit_rating": 0.85,
+    "income_property": 0.80,
+    "it_system": 0.80
+  },
+  "default_threshold": 0.75,
+  "pre_threshold": 0.4,
+  "block_singletons": [
+    "person",
+    "address",
+    "transaction",
+    "loan",
+    "credit_rating",
+    "income_property",
+    "it_system"
+  ],
+  "block_combinations": [],
+  "min_score": 0.0,
+  "text_window_max_len": 256,
+  "text_window_overlap": 64
+}
