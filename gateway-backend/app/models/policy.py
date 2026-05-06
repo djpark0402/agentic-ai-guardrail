@@ -38,6 +38,12 @@ class GuardrailPolicy(BaseModel):
             False 이면 L1~L6 활성 레이어와 무관하게 출력 검사를 통째로
             생략한다. ADMIN 응답에 키가 없으면 기존 동작(출력 검사 수행)을
             유지하도록 기본값은 True.
+        use_llm: True 면 활성 레이어의 검증 로직을 OpenAI 호환 LLM 호출로
+            대체한다. ADMIN 응답에 키가 없으면 기본값 False — 기존
+            core-secure-layer 경로가 그대로 유지된다.
+        judgment_model: `use_llm=True` 일 때 호출할 OpenAI 호환 LLM 모델
+            이름. 빈 문자열·None 이면 SecurityLayerService 가 fail-closed
+            BLOCK 으로 처리한다 (정책이 모델명의 단일 출처).
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -50,6 +56,8 @@ class GuardrailPolicy(BaseModel):
     l5_setting: L5Setting | None = Field(default=None, alias="l5Setting")
     l6: bool = Field(alias="l6Enabled")
     outbound: bool = Field(default=True, alias="outboundEnabled")
+    use_llm: bool = Field(default=False, alias="useLlm")
+    judgment_model: str | None = Field(default=None, alias="judgmentModel")
 
     @classmethod
     def all_disabled(cls) -> GuardrailPolicy:

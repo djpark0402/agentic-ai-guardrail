@@ -205,3 +205,74 @@ def test_from_layer_indices_accepts_iterable_with_duplicates():
     policy = GuardrailPolicy.from_layer_indices([1, 1, 3, 3], outbound=False)
     assert policy.enabled_layers() == [1, 3]
     assert policy.outbound is False
+
+
+# ── useLlm / judgmentModel (LLM 판정 정책) ─────────────────────────
+
+
+def test_guardrail_policy_parses_use_llm_and_judgment_model():
+    """ADMIN 응답의 useLlm/judgmentModel 을 alias 로 파싱한다."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+        "useLlm": True,
+        "judgmentModel": "solar-pro",
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.use_llm is True
+    assert policy.judgment_model == "solar-pro"
+
+
+def test_guardrail_policy_defaults_use_llm_to_false_when_missing():
+    """useLlm 키가 없으면 기본값 False 로 기존 동작을 유지한다."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.use_llm is False
+    assert policy.judgment_model is None
+
+
+def test_guardrail_policy_judgment_model_alone_keeps_use_llm_false():
+    """judgmentModel 만 와도 useLlm 기본값(False)이 적용된다."""
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+        "judgmentModel": "solar-pro",
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.use_llm is False
+    assert policy.judgment_model == "solar-pro"
+
+
+def test_guardrail_policy_use_llm_true_without_model_keeps_field_none():
+    """useLlm=true 인데 judgmentModel 누락이면 judgment_model 은 None.
+
+    SecurityLayerService 단계에서 fail-closed BLOCK 으로 변환할 책임을
+    가지므로, 모델 단계에서는 필수 검증을 하지 않고 그대로 통과시킨다.
+    """
+    payload = {
+        "l1Enabled": True,
+        "l2Enabled": True,
+        "l3Enabled": True,
+        "l4Enabled": True,
+        "l5Enabled": True,
+        "l6Enabled": True,
+        "useLlm": True,
+    }
+    policy = GuardrailPolicy.model_validate(payload)
+    assert policy.use_llm is True
+    assert policy.judgment_model is None
