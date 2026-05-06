@@ -42,7 +42,14 @@ def _get_configured_l5_layer(
         kwargs["model_name"] = model_name
     if threshold is not None:
         kwargs["min_score"] = threshold
-    return L5Layer(**kwargs)
+    layer = L5Layer(**kwargs)
+    if threshold is not None and layer.min_score != threshold:
+        # 일부 테스트/장애 상황처럼 L5 모델 로딩이 fail-open 되면
+        # core-secure-layer 내부 계약 적용 단계가 스킵될 수 있다. ADMIN 이
+        # 명시한 threshold 는 로딩 성공 여부와 무관하게 레이어 설정으로
+        # 보존되어야 하므로 gateway 레지스트리에서 한 번 더 고정한다.
+        layer._min_score = threshold
+    return layer
 
 
 def get_layer(layer_index: int) -> BaseLayer | None:

@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app.services.layer_registry import _LAYER_MAP
 
@@ -390,6 +391,9 @@ _PROBES: dict[int, _ProbeFn] = {
 
 def collect_layer_statuses(
     layer_map: dict[int, Any] | None = None,
+    llm_replacement_layers: frozenset[int] | None = None,
+    llm_layer_model: str | None = None,
+    llm_layer_base_url: str | None = None,
 ) -> list[LayerStatus]:
     """레이어 매핑을 순회하며 로드/동작 상태를 수집한다.
 
@@ -397,14 +401,31 @@ def collect_layer_statuses(
         layer_map: 인덱스→레이어 인스턴스 매핑. 기본값은
             ``app.services.layer_registry._LAYER_MAP``. 테스트에서
             가짜 레이어를 주입할 때 사용.
+        llm_replacement_layers: LLM 으로 대체되는 레이어 인덱스.
+        llm_layer_model: LLM 대체 레이어 모델 이름.
+        llm_layer_base_url: LLM 대체 레이어 OpenAI 호환 base URL.
 
     Returns:
         정책 인덱스 오름차순으로 정렬된 ``LayerStatus`` 리스트.
     """
     source = layer_map if layer_map is not None else _LAYER_MAP
+    replacement_layers = (
+        llm_replacement_layers
+        if llm_replacement_layers is not None
+        else _settings_replacement_layers(layer_map)
+    )
     statuses: list[LayerStatus] = []
     for index in sorted(source):
         layer = source[index]
+        if index in replacement_layers:
+            statuses.append(
+                _llm_replacement_status(
+                    index=index,
+                    model=llm_layer_model,
+                    base_url=llm_layer_base_url,
+                )
+            )
+            continue
         probe = _PROBES.get(index)
         if probe is None:
             statuses.append(
@@ -422,6 +443,69 @@ def collect_layer_statuses(
             continue
         statuses.append(probe(layer))
     return statuses
+
+
+def _settings_replacement_layers(
+    layer_map: dict[int, Any] | None,
+) -> frozenset[int]:
+    """기본 레이어 맵 진단 시 현재 Settings 의 LLM 대체 셋을 읽는다."""
+    if layer_map is not None:
+        return frozenset()
+    try:
+        from app.config import get_settings
+
+        return get_settings().llm_layer_replacement_indices
+    except Exception:
+        return frozenset()
+
+
+def _llm_replacement_status(
+    *,
+    index: int,
+    model: str | None,
+    base_url: str | None,
+) -> LayerStatus:
+    """LLM 대체 레이어의 진단 상태를 생성한다."""
+    if model is None or base_url is None:
+        try:
+            from app.config import get_settings
+
+            settings = get_settings()
+            model = model if model is not None else settings.llm_layer_model
+            base_url = (
+                base_url
+                if base_url is not None
+                else settings.llm_layer_base_url
+            )
+        except Exception:
+            model = model or ""
+            base_url = base_url or ""
+
+    endpoint = _safe_endpoint_hint(base_url)
+    return LayerStatus(
+        index=index,
+        name=f"L{index}",
+        class_name="LLMLayerGuardService",
+        model_loaded=True,
+        effective=True,
+        signals={
+            "replaced_by_llm": True,
+            "model_name": model,
+            "endpoint": endpoint,
+        },
+        model_paths=[],
+        detail="LLM 대체 모드 — core-secure-layer 로컬 모델을 사용하지 않음",
+    )
+
+
+def _safe_endpoint_hint(base_url: str | None) -> str:
+    """API key 없이 scheme/netloc/path 수준의 endpoint 힌트만 반환한다."""
+    if not base_url:
+        return ""
+    parsed = urlparse(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return base_url
+    return parsed._replace(params="", query="", fragment="").geturl()
 
 
 def _format_signals_kv(signals: dict[str, Any]) -> str:

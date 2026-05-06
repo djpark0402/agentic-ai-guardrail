@@ -413,6 +413,24 @@ def test_collect_uses_layer_registry_by_default(
     assert result[0].effective is True
 
 
+def test_collect_marks_llm_replacement_layer_effective() -> None:
+    """LLM 대체 레이어는 core 모델 상태 대신 대체 신호를 노출한다."""
+    statuses = collect_layer_statuses(
+        {1: _FakeL1(), 4: _FakeL4()},
+        llm_replacement_layers=frozenset({4}),
+        llm_layer_model="guard-model",
+        llm_layer_base_url="http://localhost:4000/v1?debug=true",
+    )
+
+    l4 = next(s for s in statuses if s.index == 4)
+    assert l4.class_name == "LLMLayerGuardService"
+    assert l4.model_loaded is True
+    assert l4.effective is True
+    assert l4.signals["replaced_by_llm"] is True
+    assert l4.signals["model_name"] == "guard-model"
+    assert l4.signals["endpoint"] == "http://localhost:4000/v1"
+
+
 # ---------- log_layer_statuses ----------
 
 

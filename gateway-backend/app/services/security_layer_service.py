@@ -14,6 +14,7 @@ from app.services.guardrail_converter import (
     messages_to_request,
 )
 from app.services.layer_registry import get_l5_layer, get_layer
+from app.services.llm_layer_guard import LLMLayerGuardService
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,33 @@ class SecurityLayerService:
     실행한다. 미구현 레이어(``NotImplementedError``)는 PASS 로
     처리하여 구현 완료된 레이어만 실제 검사를 수행한다.
     """
+
+    def __init__(
+        self,
+        *,
+        llm_layer_guard: LLMLayerGuardService | None = None,
+        llm_layer_replacement_layers: frozenset[int] | None = None,
+    ) -> None:
+        """SecurityLayerService 를 초기화한다.
+
+        Args:
+            llm_layer_guard: LLM 레이어 대체 서비스. None 이면 모든 레이어가
+                기존 core-secure-layer 경로로 실행된다.
+            llm_layer_replacement_layers: LLM 으로 대체 실행할 레이어 인덱스.
+        """
+        self._llm_layer_guard = llm_layer_guard
+        self._llm_layer_replacement_layers = (
+            llm_layer_replacement_layers or frozenset()
+        )
+
+    def _should_use_llm_layer(self, layer_idx: int) -> bool:
+        """해당 레이어를 LLM 대체 경로로 실행해야 하는지 반환한다."""
+        replacement_layers = getattr(
+            self,
+            "_llm_layer_replacement_layers",
+            frozenset(),
+        )
+        return layer_idx in replacement_layers
 
     async def check_input(
         self,
@@ -282,6 +310,32 @@ class SecurityLayerService:
         Returns:
             레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
+        if self._should_use_llm_layer(layer_idx):
+            llm_guard = getattr(self, "_llm_layer_guard", None)
+            if llm_guard is None:
+                result = GuardrailResult(
+                    status=CheckStatus.BLOCK,
+                    reason="LLM 레이어 대체 서비스가 설정되지 않았습니다.",
+                    layer=f"L{layer_idx}",
+                    severity="HIGH",
+                    confidence=1.0,
+                    tags=["llm_layer_misconfigured"],
+                )
+            else:
+                request = messages_to_request(messages)
+                result = await llm_guard.check(
+                    layer_idx=layer_idx,
+                    surface="input",
+                    content=request.user_input,
+                )
+            _log_layer_result(
+                "input",
+                result,
+                layer_name=result.layer or f"L{layer_idx}",
+                note="LLM 대체",
+            )
+            return result
+
         layer = _get_policy_layer(layer_idx, policy)
         if layer is None:
             result = GuardrailResult(
@@ -340,6 +394,31 @@ class SecurityLayerService:
         Returns:
             레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
+        if self._should_use_llm_layer(layer_idx):
+            llm_guard = getattr(self, "_llm_layer_guard", None)
+            if llm_guard is None:
+                result = GuardrailResult(
+                    status=CheckStatus.BLOCK,
+                    reason="LLM 레이어 대체 서비스가 설정되지 않았습니다.",
+                    layer=f"L{layer_idx}",
+                    severity="HIGH",
+                    confidence=1.0,
+                    tags=["llm_layer_misconfigured"],
+                )
+            else:
+                result = await llm_guard.check(
+                    layer_idx=layer_idx,
+                    surface="output",
+                    content=content,
+                )
+            _log_layer_result(
+                "output",
+                result,
+                layer_name=result.layer or f"L{layer_idx}",
+                note="LLM 대체",
+            )
+            return result
+
         layer = _get_policy_layer(layer_idx, policy)
         if layer is None:
             result = GuardrailResult(

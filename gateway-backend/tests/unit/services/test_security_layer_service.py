@@ -538,3 +538,97 @@ async def test_check_input_records_timing_only_for_executed_layers(mocker):
     assert result.status == CheckStatus.BLOCK
     assert set(timings) == {"input_guardrail_L1"}
     mock_l2.check.assert_not_called()
+
+
+class _FakeLLMLayerGuard:
+    """LLM 대체 경로 호출 인자를 기록하는 테스트 더블."""
+
+    def __init__(self, result: GuardrailResult) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    async def check(
+        self,
+        *,
+        layer_idx: int,
+        surface: str,
+        content: str,
+    ) -> GuardrailResult:
+        self.calls.append(
+            {"layer_idx": layer_idx, "surface": surface, "content": content}
+        )
+        return self.result
+
+
+async def test_run_layer_input_uses_llm_replacement_instead_of_core(mocker):
+    """LLM 대체 대상 입력 레이어는 core-secure-layer 를 호출하지 않는다."""
+    llm_guard = _FakeLLMLayerGuard(
+        GuardrailResult(status=CheckStatus.PASS, layer="L5")
+    )
+    service = SecurityLayerService(
+        llm_layer_guard=llm_guard,  # type: ignore[arg-type]
+        llm_layer_replacement_layers=frozenset({5}),
+    )
+    get_l5_layer = mocker.patch(
+        "app.services.security_layer_service.get_l5_layer"
+    )
+
+    result = await service._run_layer_input(
+        5,
+        [
+            Message(role="user", content="old"),
+            Message(role="assistant", content="ok"),
+            Message(role="user", content="latest"),
+        ],
+        _policy(),
+    )
+
+    assert result.status == CheckStatus.PASS
+    assert llm_guard.calls == [
+        {"layer_idx": 5, "surface": "input", "content": "latest"}
+    ]
+    get_l5_layer.assert_not_called()
+
+
+async def test_run_layer_output_uses_llm_replacement_instead_of_core(mocker):
+    """LLM 대체 대상 출력 레이어는 core-secure-layer 를 호출하지 않는다."""
+    llm_guard = _FakeLLMLayerGuard(
+        GuardrailResult(
+            status=CheckStatus.BLOCK,
+            layer="L4",
+            reason="정책 위반",
+            severity="HIGH",
+        )
+    )
+    service = SecurityLayerService(
+        llm_layer_guard=llm_guard,  # type: ignore[arg-type]
+        llm_layer_replacement_layers=frozenset({4}),
+    )
+    get_layer = mocker.patch("app.services.security_layer_service.get_layer")
+
+    result = await service._run_layer_output(4, "unsafe output", _policy())
+
+    assert result.status == CheckStatus.BLOCK
+    assert result.reason == "정책 위반"
+    assert llm_guard.calls == [
+        {"layer_idx": 4, "surface": "output", "content": "unsafe output"}
+    ]
+    get_layer.assert_not_called()
+
+
+async def test_llm_replacement_without_guard_fails_closed():
+    """대체 레이어 설정만 있고 서비스가 없으면 fail-closed BLOCK."""
+    service = SecurityLayerService(
+        llm_layer_replacement_layers=frozenset({1}),
+    )
+
+    result = await service._run_layer_input(
+        1,
+        [Message(role="user", content="test")],
+        _policy(),
+    )
+
+    assert result.status == CheckStatus.BLOCK
+    assert result.layer == "L1"
+    assert result.severity == "HIGH"
+    assert "설정되지 않았습니다" in (result.reason or "")

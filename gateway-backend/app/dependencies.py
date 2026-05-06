@@ -7,6 +7,7 @@ import httpx
 from fastapi import Depends
 
 from app.config import Settings, get_settings
+from app.services.llm_layer_guard import LLMLayerGuardService
 from app.services.policy_service import PolicyService
 from app.services.provider_router import ProviderRouter
 from app.services.request_verifier import NonceStore
@@ -77,13 +78,24 @@ def get_policy_service(
     )
 
 
-def get_security_service() -> SecurityLayerService:
+def get_security_service(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> SecurityLayerService:
     """SecurityLayerService 인스턴스를 반환한다.
+
+    Args:
+        settings: 주입된 애플리케이션 설정.
 
     Returns:
         SecurityLayerService 인스턴스.
     """
-    return SecurityLayerService()
+    replacement_layers = settings.llm_layer_replacement_indices
+    if not replacement_layers:
+        return SecurityLayerService()
+    return SecurityLayerService(
+        llm_layer_guard=LLMLayerGuardService(settings),
+        llm_layer_replacement_layers=replacement_layers,
+    )
 
 
 def get_solar_service(

@@ -221,6 +221,29 @@ LLM 토큰 스트리밍과 유사한 타이핑 UX 를 준다. 지연은 환경�
 레이어(`NotImplementedError`)는 자동으로 PASS 처리된다.
 레이어 구현이 완료되면 gateway 변경 없이 즉시 활성화된다.
 
+#### LLM 레이어 대체 옵션
+
+기본값은 비활성이다. `LLM_LAYER_REPLACEMENT_LAYERS` 에 `L1,L4` 처럼
+레이어 CSV 를 지정하면 해당 레이어만 `core-secure-layer` 대신 OpenAI
+호환 LLM 판정으로 대체한다. 입력/출력 검사와 관찰 모드 모두 동일하게
+적용된다.
+
+```env
+LLM_LAYER_REPLACEMENT_LAYERS="L4,L6"
+LLM_LAYER_BASE_URL="http://localhost:4000/v1"
+LLM_LAYER_API_KEY="..."
+LLM_LAYER_MODEL="guard-model"
+LLM_LAYER_TIMEOUT_SECONDS=15
+```
+
+- 지정하지 않은 레이어는 기존 로컬/core 레이어 경로를 그대로 사용한다.
+- 대체 LLM 은 사용자 요청에 답하지 않고 `allowed`, `reason`, `severity`,
+  `confidence`, `tags` JSON 만 반환해야 한다.
+- LLM 호출 실패, 빈 응답, JSON 파싱 실패, 스키마 불일치는 모두
+  fail-closed `BLOCK` 으로 처리된다.
+- `/v1/layers/status` 는 대체 레이어의 `signals.replaced_by_llm=true`,
+  모델명, endpoint 힌트를 노출한다. API key 는 노출하지 않는다.
+
 #### 파이프라인 스위치 — `outboundEnabled`
 
 | 플래그 | 대상 | 동작 |
