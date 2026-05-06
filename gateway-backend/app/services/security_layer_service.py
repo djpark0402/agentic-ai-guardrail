@@ -184,20 +184,6 @@ class SecurityLayerService:
         normalized = raw.strip()
         return normalized or None
 
-    @staticmethod
-    def _misconfigured_judgment_model_result(
-        layer_idx: int,
-    ) -> GuardrailResult:
-        """`useLlm=True` 인데 judgmentModel 미지정인 경우의 BLOCK 결과."""
-        return GuardrailResult(
-            status=CheckStatus.BLOCK,
-            reason="judgmentModel 미지정",
-            layer=f"L{layer_idx}",
-            severity="HIGH",
-            confidence=1.0,
-            tags=["llm_layer_misconfigured"],
-        )
-
     async def _call_llm_replacement(
         self,
         *,
@@ -382,22 +368,14 @@ class SecurityLayerService:
             레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
         # 정책 기반 LLM 대체 (useLlm=True) 가 정적 셋보다 우선한다.
+        # judgmentModel 누락/공백은 None 으로 정규화되어 LLMLayerGuardService
+        # 가 settings.llm_layer_model 로 폴백한다.
         if policy is not None and policy.use_llm:
-            judgment_model = self._resolve_judgment_model(policy)
-            if judgment_model is None:
-                result = self._misconfigured_judgment_model_result(layer_idx)
-                _log_layer_result(
-                    "input",
-                    result,
-                    layer_name=f"L{layer_idx}",
-                    note="LLM 대체 (judgmentModel 미지정)",
-                )
-                return result
             return await self._call_llm_replacement(
                 layer_idx=layer_idx,
                 surface="input",
                 content=messages_to_request(messages).user_input,
-                model=judgment_model,
+                model=self._resolve_judgment_model(policy),
             )
 
         if self._should_use_llm_layer(layer_idx):
@@ -468,21 +446,11 @@ class SecurityLayerService:
         """
         # 정책 기반 LLM 대체 (useLlm=True) 가 정적 셋보다 우선한다.
         if policy is not None and policy.use_llm:
-            judgment_model = self._resolve_judgment_model(policy)
-            if judgment_model is None:
-                result = self._misconfigured_judgment_model_result(layer_idx)
-                _log_layer_result(
-                    "output",
-                    result,
-                    layer_name=f"L{layer_idx}",
-                    note="LLM 대체 (judgmentModel 미지정)",
-                )
-                return result
             return await self._call_llm_replacement(
                 layer_idx=layer_idx,
                 surface="output",
                 content=content,
-                model=judgment_model,
+                model=self._resolve_judgment_model(policy),
             )
 
         if self._should_use_llm_layer(layer_idx):

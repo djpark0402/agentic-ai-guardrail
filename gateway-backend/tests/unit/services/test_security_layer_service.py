@@ -701,17 +701,20 @@ async def test_check_output_routes_all_enabled_layers_to_llm_when_use_llm():
     assert all(call["surface"] == "output" for call in llm_guard.calls)
 
 
-async def test_use_llm_without_judgment_model_fails_closed_block(mocker):
-    """use_llm=True 인데 judgmentModel 누락 시 fail-closed BLOCK."""
+async def test_use_llm_without_judgment_model_falls_back_to_settings(mocker):
+    """use_llm=True + judgmentModel 누락 시 settings.llm_layer_model 폴백.
+
+    LLMLayerGuardService 측이 model=None 을 받아 settings.llm_layer_model
+    을 사용해 호출한다. SecurityLayerService 는 폴백 결정에 관여하지 않고
+    그대로 None 을 전달한다.
+    """
     llm_guard = _FakeLLMLayerGuard(
         GuardrailResult(status=CheckStatus.PASS)
     )
     service = SecurityLayerService(
         llm_layer_guard=llm_guard,  # type: ignore[arg-type]
     )
-    get_layer = mocker.patch(
-        "app.services.security_layer_service.get_layer"
-    )
+    mocker.patch("app.services.security_layer_service.get_layer")
     policy = _policy(useLlm=True)  # judgmentModel 누락 → None
 
     result = await service.check_input(
@@ -719,17 +722,14 @@ async def test_use_llm_without_judgment_model_fails_closed_block(mocker):
         policy=policy,
     )
 
-    assert result.status == CheckStatus.BLOCK
-    assert result.severity == "HIGH"
-    assert result.tags == ["llm_layer_misconfigured"]
-    assert "judgmentModel" in (result.reason or "")
-    # 첫 활성 레이어에서 즉시 BLOCK — LLM 호출도, core-secure-layer 호출도 없다.
-    assert llm_guard.calls == []
-    get_layer.assert_not_called()
+    assert result.status == CheckStatus.PASS
+    # 활성 레이어 전체가 LLM 으로 위임되었고, model 인자는 None 으로 전달.
+    assert [call["layer_idx"] for call in llm_guard.calls] == [1, 2, 3, 4, 5, 6]
+    assert all(call["model"] is None for call in llm_guard.calls)
 
 
-async def test_use_llm_with_empty_judgment_model_fails_closed_block(mocker):
-    """judgmentModel='' (빈 문자열) 도 미지정으로 간주해 BLOCK."""
+async def test_use_llm_with_empty_judgment_model_falls_back_to_settings(mocker):
+    """judgmentModel='   ' (공백만) 도 None 처럼 처리해 settings 폴백."""
     llm_guard = _FakeLLMLayerGuard(
         GuardrailResult(status=CheckStatus.PASS)
     )
@@ -744,9 +744,8 @@ async def test_use_llm_with_empty_judgment_model_fails_closed_block(mocker):
         policy=policy,
     )
 
-    assert result.status == CheckStatus.BLOCK
-    assert result.tags == ["llm_layer_misconfigured"]
-    assert llm_guard.calls == []
+    assert result.status == CheckStatus.PASS
+    assert all(call["model"] is None for call in llm_guard.calls)
 
 
 async def test_use_llm_false_preserves_static_replacement_path(mocker):
