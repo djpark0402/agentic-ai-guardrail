@@ -75,6 +75,7 @@ async def _check_once(judge: LlmJudgeLayer, text: str) -> None:
     """
     request = GuardrailRequest(user_input=text)
     result = await judge.check(request)
+    print(f"result : {result}")
     _emit_result(judge.name, result)
 
 
