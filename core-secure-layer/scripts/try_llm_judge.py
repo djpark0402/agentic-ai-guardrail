@@ -10,10 +10,14 @@ L1~L6 휴리스틱을 모두 건너뛰고 ``LlmJudgeLayer`` 만 호출해 응답
     LLM_JUDGE_TEST_PROMPT="..." uv run python scripts/try_llm_judge.py
 
 종료: 빈 입력 또는 ``Ctrl+C``.
+
+부작용: ``llm_judge`` 의 raw LLM 응답을 ``[llm_raw]`` 접두로 stdout 에
+함께 출력한다 (디버그 로거를 명시적으로 활성화).
 """
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
@@ -31,6 +35,21 @@ from core_secure_layer.cli import (  # noqa: E402
 )
 from core_secure_layer.layers.llm_judge import LlmJudgeLayer  # noqa: E402
 from core_secure_layer.layers.types import GuardrailRequest  # noqa: E402
+
+
+def _setup_raw_response_logging() -> None:
+    """llm_judge 의 raw LLM 응답을 stdout 으로 흘리는 디버그 로거 설정.
+
+    ``core_secure_layer.layers.llm_judge`` 로거만 ``DEBUG`` 레벨로 올리고
+    별도 핸들러로 stdout 에 ``[llm_raw]`` 접두를 붙여 찍는다.
+    다른 모듈의 로깅은 영향받지 않는다.
+    """
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("  [llm_raw] %(message)s"))
+    logger = logging.getLogger("core_secure_layer.layers.llm_judge")
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    logger.propagate = False
 
 
 def _resolve_prompt(cli_prompt: str | None) -> str:
@@ -70,6 +89,8 @@ def main() -> None:
         help="system_prompt 본문을 직접 주입 (지정 안 하면 cli 기본값 사용)",
     )
     args = parser.parse_args()
+
+    _setup_raw_response_logging()
 
     llm = _build_solar_llm()
     system_prompt = _resolve_prompt(args.prompt)

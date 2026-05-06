@@ -109,6 +109,7 @@ class LlmJudgeLayer(BaseLayer):
             return self._fail_open()
 
         content = self._response_text(response)
+        logger.debug("llm_judge raw response: %s", content)
         verdict = self._parse_verdict(content)
         if verdict is None:
             logger.warning(
