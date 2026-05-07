@@ -80,8 +80,8 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
     "python-dotenv>=1.0.0",
-    "openai>=1.0.0",
-    "langchain-openai>=0.3.0",
+    "openai>=2.26.0",
+    "litellm==1.83.14",
     "core-secure-layer",
 ]
 ```
@@ -111,7 +111,7 @@ FastAPI 프로젝트에서 흔히 쓰이는 3계층 구조를 그대로 따른�
 | `app/main.py` | `FastAPI()` 인스턴스 생성, 미들웨어·라우터·예외 핸들러 조립 |
 | `app/config.py` | `.env` 를 읽는 `Settings` 클래스 (pydantic-settings) |
 | `app/dependencies.py` | `Depends()` 에 꽂히는 팩토리 함수 모음 |
-| `app/errors.py` | 업스트림(Solar / LangChain / admin) 예외를 JSON 으로 변환 |
+| `app/errors.py` | 업스트림(LLM / admin) 예외를 JSON 으로 변환 |
 
 ### 3.2 routers/ — HTTP 엔드포인트 계층
 
@@ -166,7 +166,7 @@ routers/ ──▶ services/ ──▶ 외부 (admin-backend, core_secure_layer,
 app = FastAPI(
     title="Agentic AI Guardrail Gateway",
     description=(
-        "LangChain 기반 Multi-provider LLM Gateway. **OpenAI "
+        "LiteLLM 기반 Multi-provider LLM Gateway. **OpenAI "
         "`/v1/chat/completions` 호환** 엔드포인트를 제공하며, ..."
     ),
     version="0.2.0",
@@ -196,7 +196,7 @@ app.mount(
 3. `include_router(chat.router, prefix="/v1")` — 이 한 줄로 `/v1/chat/completions` 가 살아난다.
 4. `docs_url=None` 으로 기본 Swagger 를 끄고, `custom_swagger_docs` 핸들러가 `/docs` 에서 커스텀 상단 바 + `static/docs-overrides.css` 를 입혀 렌더한다.
 5. `/playground` 정적 파일, `/health`, `/v1/models/default` 도 이 파일에서 붙는다.
-6. 업스트림 예외 3종(`openai.APIError`, `httpx.HTTPError`, `langchain_core.exceptions.LangChainException`) 을 `@app.exception_handler` 로 잡아 `app/errors.py` 의 매퍼로 구조화 JSON 응답을 내려준다.
+6. 업스트림 예외 2종(`openai.APIError`, `httpx.HTTPError`) 을 `@app.exception_handler` 로 잡아 `app/errors.py` 의 매퍼로 구조화 JSON 응답을 내려준다.
 
 ---
 
@@ -387,7 +387,7 @@ completion = await llm_service.chat(messages=api_messages, **passthrough)
 ```
 
 - provider 는 세 가지: **Solar** (기본), **OpenAI** (`gpt-*`, `o1-*`, `o3-*`, `ft:gpt-*`, `chatgpt-*` 자동 감지), **Ollama** (`ollama/...` 접두사로 명시).
-- `LLMService` 는 LangChain `ChatOpenAI` 를 감싼 단일 클래스다. `ProviderRouter._create_service` 가 provider 마다 다른 `api_key`/`base_url`/`model` 을 주입해 인스턴스를 만든 뒤 `get_service` 에서 캐싱한다. `solar_service.py` 의 `SolarService` 만 Solar 전용 얇은 상속 래퍼로 유지된다.
+- `LLMService` 는 LiteLLM `acompletion` 을 감싼 단일 클래스다. `ProviderRouter._create_service` 가 provider 마다 다른 `api_key`/`base_url`/`model` 을 주입해 인스턴스를 만든 뒤 `get_service` 에서 캐싱한다. `solar_service.py` 의 `SolarService` 만 Solar 전용 얇은 상속 래퍼로 유지된다.
 
 ### 5.7 출력 검사 — `check_output`
 

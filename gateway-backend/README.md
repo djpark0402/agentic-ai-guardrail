@@ -1,6 +1,6 @@
 # gateway-backend
 
-Agentic AI Guardrail의 API Gateway. **LangChain** 기반으로 Upstage Solar(Pro) 호출을
+Agentic AI Guardrail의 API Gateway. **LiteLLM** 기반으로 Upstage Solar(Pro) 호출을
 프록시하면서 `core-secure-layer`의 보안 검증을 입·출력 양방향에 적용한다.
 외부 API는 OpenAI 호환 형식(`/v1/chat/completions`)을 유지한다.
 
@@ -690,12 +690,12 @@ app/
 ├── main.py              # FastAPI 진입점 + 커스텀 /docs + StaticFiles 마운트
 ├── config.py            # pydantic-settings 기반 Settings
 ├── dependencies.py      # DI factory 함수
-├── errors.py            # 업스트림(Solar/admin/LangChain) 예외 → JSON 매퍼
+├── errors.py            # 업스트림(LLM/admin) 예외 → JSON 매퍼
 ├── models/              # Pydantic 모델 (chat, guardrail, policy)
 ├── routers/
 │   └── chat.py          # /v1/chat/completions 가드레일 파이프라인
 ├── services/
-│   ├── llm_service.py         # 범용 LLM 서비스 (LangChain ChatOpenAI 기반)
+│   ├── llm_service.py         # 범용 LLM 서비스 (LiteLLM SDK 기반)
 │   ├── solar_service.py       # Solar 전용 래퍼 (LLMService 상속)
 │   ├── provider_router.py     # 모델명 기반 provider 자동 라우팅
 │   ├── security_layer_service.py  # core-secure-layer 연동 보안 검사
