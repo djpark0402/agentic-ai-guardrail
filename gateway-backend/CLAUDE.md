@@ -61,5 +61,8 @@ def fetch_guardrail_result(prompt: str, model: str) -> dict[str, Any]:
 
 ## Environment Variables
 - **DO NOT** read or modify `.env` files directly.
-- Refer to `.env.example` for the required environment variable structure.
-- If a new environment variable is needed, add it to `.env.example` first.
+- 환경변수는 두 파일로 나뉘어 있다:
+  - `.env.example` — prod 운영용 필수/선택 변수 (Solar, Admin, LLM 레이어, 추가 LLM 제공자).
+  - `.env.dev.example` — 개발/로컬 전용 토글 (헤더·정책 우회, 관찰 모드, Playground 자동 채움). `APP_ENV=dev` 에서만 의미를 가진다.
+- 새 환경변수를 추가할 때는 prod 운영에 필요한지 dev 전용인지에 따라 둘 중 하나에 먼저 적는다.
+- dev 전용 토글을 prod 환경에서 비기본값으로 설정하면 기동이 거부된다 (safe-by-default).
