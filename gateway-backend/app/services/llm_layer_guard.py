@@ -125,11 +125,6 @@ class LLMLayerGuardService:
         )
 
     @property
-    def model(self) -> str:
-        """레이어 판정에 사용할 LLM 모델 이름."""
-        return self._settings.llm_layer_model
-
-    @property
     def base_url(self) -> str:
         """레이어 판정 LLM의 base URL."""
         return self._settings.llm_layer_base_url
@@ -140,25 +135,37 @@ class LLMLayerGuardService:
         layer_idx: int,
         surface: _Surface,
         content: str,
-        model: str | None = None,
+        model: str | None,
     ) -> GuardrailResult:
         """단일 레이어 판정을 LLM에 위임하고 GuardrailResult로 변환한다.
 
-        LLM 호출 실패, 빈 응답, JSON 파싱 실패, 스키마 검증 실패는 모두
-        fail-closed BLOCK 으로 반환한다.
+        LLM 호출 실패, 빈 응답, JSON 파싱 실패, 스키마 검증 실패, 그리고
+        모델 이름 누락은 모두 fail-closed BLOCK 으로 반환한다.
 
         Args:
             layer_idx: 대체 실행할 레이어 인덱스.
             surface: 입력/출력 구분.
             content: 검사 대상 텍스트.
-            model: 호출별 모델 오버라이드. 빈 문자열·None 이면
-                `settings.llm_layer_model` 로 폴백한다. 정책 기반
-                `judgmentModel` 을 그대로 전달하기 위한 인자.
+            model: 정책 응답의 `judgmentModel` 을 그대로 전달한다.
+                빈 문자열·None 이면 fail-closed BLOCK 처리한다.
 
         Returns:
             LLM 판정 결과를 gateway GuardrailResult 로 변환한 값.
         """
         layer_name = f"L{layer_idx}"
+        if not isinstance(model, str) or not model.strip():
+            logger.warning(
+                "%s LLM 대체 레이어 호출 누락: judgmentModel 미지정",
+                layer_name,
+            )
+            return GuardrailResult(
+                status=CheckStatus.BLOCK,
+                reason="LLM 레이어 판정 실패: judgmentModel 미지정",
+                layer=layer_name,
+                severity="HIGH",
+                confidence=1.0,
+                tags=["llm_layer_misconfigured"],
+            )
         try:
             decision = await self._classify(
                 layer_idx=layer_idx,
@@ -199,16 +206,11 @@ class LLMLayerGuardService:
         layer_idx: int,
         surface: _Surface,
         content: str,
-        model: str | None = None,
+        model: str,
     ) -> LLMLayerDecision:
         """OpenAI 호환 Chat Completions 호출 후 JSON 스키마를 검증한다."""
-        effective_model = (
-            model.strip()
-            if isinstance(model, str) and model.strip()
-            else self._settings.llm_layer_model
-        )
         completion = await self._client.chat.completions.create(
-            model=effective_model,
+            model=model.strip(),
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {

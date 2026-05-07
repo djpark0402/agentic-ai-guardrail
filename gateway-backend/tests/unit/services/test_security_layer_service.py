@@ -566,98 +566,12 @@ class _FakeLLMLayerGuard:
         return self.result
 
 
-async def test_run_layer_input_uses_llm_replacement_instead_of_core(mocker):
-    """LLM 대체 대상 입력 레이어는 core-secure-layer 를 호출하지 않는다."""
-    llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(status=CheckStatus.PASS, layer="L5")
-    )
-    service = SecurityLayerService(
-        llm_layer_guard=llm_guard,  # type: ignore[arg-type]
-        llm_layer_replacement_layers=frozenset({5}),
-    )
-    get_l5_layer = mocker.patch(
-        "app.services.security_layer_service.get_l5_layer"
-    )
-
-    result = await service._run_layer_input(
-        5,
-        [
-            Message(role="user", content="old"),
-            Message(role="assistant", content="ok"),
-            Message(role="user", content="latest"),
-        ],
-        _policy(),
-    )
-
-    assert result.status == CheckStatus.PASS
-    assert llm_guard.calls == [
-        {
-            "layer_idx": 5,
-            "surface": "input",
-            "content": "latest",
-            "model": None,
-        }
-    ]
-    get_l5_layer.assert_not_called()
-
-
-async def test_run_layer_output_uses_llm_replacement_instead_of_core(mocker):
-    """LLM 대체 대상 출력 레이어는 core-secure-layer 를 호출하지 않는다."""
-    llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(
-            status=CheckStatus.BLOCK,
-            layer="L4",
-            reason="정책 위반",
-            severity="HIGH",
-        )
-    )
-    service = SecurityLayerService(
-        llm_layer_guard=llm_guard,  # type: ignore[arg-type]
-        llm_layer_replacement_layers=frozenset({4}),
-    )
-    get_layer = mocker.patch("app.services.security_layer_service.get_layer")
-
-    result = await service._run_layer_output(4, "unsafe output", _policy())
-
-    assert result.status == CheckStatus.BLOCK
-    assert result.reason == "정책 위반"
-    assert llm_guard.calls == [
-        {
-            "layer_idx": 4,
-            "surface": "output",
-            "content": "unsafe output",
-            "model": None,
-        }
-    ]
-    get_layer.assert_not_called()
-
-
-async def test_llm_replacement_without_guard_fails_closed():
-    """대체 레이어 설정만 있고 서비스가 없으면 fail-closed BLOCK."""
-    service = SecurityLayerService(
-        llm_layer_replacement_layers=frozenset({1}),
-    )
-
-    result = await service._run_layer_input(
-        1,
-        [Message(role="user", content="test")],
-        _policy(),
-    )
-
-    assert result.status == CheckStatus.BLOCK
-    assert result.layer == "L1"
-    assert result.severity == "HIGH"
-    assert "설정되지 않았습니다" in (result.reason or "")
-
-
 # ── 정책 기반 useLlm / judgmentModel 분기 ─────────────────────────
 
 
 async def test_check_input_routes_all_enabled_layers_to_llm_when_use_llm():
     """policy.use_llm=True 면 활성 레이어 전부가 LLM 대체 경로로 흐른다."""
-    llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(status=CheckStatus.PASS)
-    )
+    llm_guard = _FakeLLMLayerGuard(GuardrailResult(status=CheckStatus.PASS))
     service = SecurityLayerService(
         llm_layer_guard=llm_guard,  # type: ignore[arg-type]
     )
@@ -681,9 +595,7 @@ async def test_check_input_routes_all_enabled_layers_to_llm_when_use_llm():
 
 async def test_check_output_routes_all_enabled_layers_to_llm_when_use_llm():
     """출력 측에서도 use_llm=True 면 활성 레이어가 모두 LLM 으로 위임된다."""
-    llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(status=CheckStatus.PASS)
-    )
+    llm_guard = _FakeLLMLayerGuard(GuardrailResult(status=CheckStatus.PASS))
     service = SecurityLayerService(
         llm_layer_guard=llm_guard,  # type: ignore[arg-type]
     )
@@ -701,16 +613,13 @@ async def test_check_output_routes_all_enabled_layers_to_llm_when_use_llm():
     assert all(call["surface"] == "output" for call in llm_guard.calls)
 
 
-async def test_use_llm_without_judgment_model_falls_back_to_settings(mocker):
-    """use_llm=True + judgmentModel 누락 시 settings.llm_layer_model 폴백.
+async def test_use_llm_without_judgment_model_passes_none(mocker):
+    """useLlm=True + judgmentModel 누락 시 model=None 으로 그대로 전달.
 
-    LLMLayerGuardService 측이 model=None 을 받아 settings.llm_layer_model
-    을 사용해 호출한다. SecurityLayerService 는 폴백 결정에 관여하지 않고
-    그대로 None 을 전달한다.
+    SecurityLayerService 는 폴백을 결정하지 않는다. LLMLayerGuardService
+    측에서 None 을 받으면 fail-closed BLOCK 으로 처리한다.
     """
-    llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(status=CheckStatus.PASS)
-    )
+    llm_guard = _FakeLLMLayerGuard(GuardrailResult(status=CheckStatus.PASS))
     service = SecurityLayerService(
         llm_layer_guard=llm_guard,  # type: ignore[arg-type]
     )
@@ -728,11 +637,9 @@ async def test_use_llm_without_judgment_model_falls_back_to_settings(mocker):
     assert all(call["model"] is None for call in llm_guard.calls)
 
 
-async def test_use_llm_with_empty_judgment_model_falls_back_to_settings(mocker):
-    """judgmentModel='   ' (공백만) 도 None 처럼 처리해 settings 폴백."""
-    llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(status=CheckStatus.PASS)
-    )
+async def test_use_llm_with_blank_judgment_model_passes_none(mocker):
+    """judgmentModel='   ' (공백만) 도 None 으로 정규화되어 전달된다."""
+    llm_guard = _FakeLLMLayerGuard(GuardrailResult(status=CheckStatus.PASS))
     service = SecurityLayerService(
         llm_layer_guard=llm_guard,  # type: ignore[arg-type]
     )
@@ -748,16 +655,15 @@ async def test_use_llm_with_empty_judgment_model_falls_back_to_settings(mocker):
     assert all(call["model"] is None for call in llm_guard.calls)
 
 
-async def test_use_llm_false_preserves_static_replacement_path(mocker):
-    """policy.use_llm=False 면 기존 정적 셋 경로 동작이 유지된다."""
+async def test_use_llm_false_uses_core_secure_layer(mocker):
+    """use_llm=False 면 활성 레이어가 core-secure-layer 로 흐른다."""
     from core_secure_layer.layers.types import LayerResult
 
     llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(status=CheckStatus.PASS, layer="L4")
+        GuardrailResult(status=CheckStatus.PASS, layer="L1")
     )
     service = SecurityLayerService(
         llm_layer_guard=llm_guard,  # type: ignore[arg-type]
-        llm_layer_replacement_layers=frozenset({4}),
     )
     mock_layer = mocker.AsyncMock()
     mock_layer.name = "L1"
@@ -768,25 +674,22 @@ async def test_use_llm_false_preserves_static_replacement_path(mocker):
     )
 
     policy = _policy(
-        l2=False, l3=False, l5=False, l6=False, useLlm=False
-    )  # L1 + L4 활성, 정적 셋이 L4 만 대체
+        l2=False, l3=False, l4=False, l5=False, l6=False, useLlm=False
+    )  # L1 만 활성
     result = await service.check_input(
         messages=[Message(role="user", content="hi")],
         policy=policy,
     )
 
     assert result.status == CheckStatus.PASS
-    # L4 만 LLM 대체로 호출되고 L1 은 core-secure-layer 경로로 흐른다.
-    assert [call["layer_idx"] for call in llm_guard.calls] == [4]
-    # 정적 경로에서는 model 오버라이드 없이 기본 settings 모델 사용 (None 전달).
-    assert llm_guard.calls[0]["model"] is None
+    # LLM 대체 경로는 호출되지 않고 core-secure-layer 만 호출된다.
+    assert llm_guard.calls == []
+    mock_layer.check.assert_awaited()
 
 
 async def test_use_llm_only_runs_enabled_layers(mocker):
     """use_llm=True + 일부 레이어만 활성화면 그 레이어들만 LLM 호출된다."""
-    llm_guard = _FakeLLMLayerGuard(
-        GuardrailResult(status=CheckStatus.PASS)
-    )
+    llm_guard = _FakeLLMLayerGuard(GuardrailResult(status=CheckStatus.PASS))
     service = SecurityLayerService(
         llm_layer_guard=llm_guard,  # type: ignore[arg-type]
     )
@@ -813,9 +716,7 @@ async def test_use_llm_only_runs_enabled_layers(mocker):
 async def test_use_llm_without_guard_service_fails_closed(mocker):
     """use_llm=True 인데 LLMLayerGuardService 미주입이면 misconfigured BLOCK."""
     service = SecurityLayerService()  # llm_layer_guard 미설정
-    get_layer = mocker.patch(
-        "app.services.security_layer_service.get_layer"
-    )
+    get_layer = mocker.patch("app.services.security_layer_service.get_layer")
     policy = _policy(useLlm=True, judgmentModel="solar-pro")
 
     result = await service.check_input(

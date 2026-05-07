@@ -18,10 +18,8 @@ def _settings() -> Settings:
         _env_file=None,
         llm_model="solar-pro",
         upstage_api_key=SecretStr("upstage-test"),
-        llm_layer_replacement_layers="L4",
         llm_layer_base_url="http://localhost:4000/v1",
         llm_layer_api_key=SecretStr("layer-test"),
-        llm_layer_model="guard-model",
     )
 
 
@@ -66,6 +64,7 @@ async def test_llm_layer_guard_allowed_json_returns_pass() -> None:
         layer_idx=4,
         surface="input",
         content="정상 요청",
+        model="guard-model",
     )
 
     assert result.status == CheckStatus.PASS
@@ -91,6 +90,7 @@ async def test_llm_layer_guard_block_json_returns_block() -> None:
         layer_idx=4,
         surface="output",
         content="unsafe",
+        model="guard-model",
     )
 
     assert result.status == CheckStatus.BLOCK
@@ -110,6 +110,7 @@ async def test_llm_layer_guard_invalid_json_fails_closed() -> None:
         layer_idx=6,
         surface="input",
         content="anything",
+        model="guard-model",
     )
 
     assert result.status == CheckStatus.BLOCK
@@ -130,6 +131,7 @@ async def test_llm_layer_guard_call_error_fails_closed() -> None:
         layer_idx=2,
         surface="input",
         content="anything",
+        model="guard-model",
     )
 
     assert result.status == CheckStatus.BLOCK
@@ -138,8 +140,8 @@ async def test_llm_layer_guard_call_error_fails_closed() -> None:
     assert "boom" in (result.reason or "")
 
 
-async def test_llm_layer_guard_uses_model_override_when_provided() -> None:
-    """`model` 인자가 주어지면 OpenAI payload 의 model 을 그 값으로 호출한다."""
+async def test_llm_layer_guard_uses_model_argument_for_payload() -> None:
+    """`model` 인자가 OpenAI payload 의 model 로 그대로 전달된다."""
     client = _FakeClient(
         '{"allowed":true,"reason":null,"severity":"NONE",'
         '"confidence":0.5,"tags":[]}'
@@ -157,25 +159,48 @@ async def test_llm_layer_guard_uses_model_override_when_provided() -> None:
     assert call["model"] == "custom-judgment-model"
 
 
-async def test_llm_layer_guard_falls_back_to_settings_model_when_none() -> (
-    None
-):
-    """`model=None` 이면 기존처럼 settings.llm_layer_model 을 사용한다."""
+async def test_llm_layer_guard_missing_model_fails_closed() -> None:
+    """`model=None` (정책의 judgmentModel 누락) 이면 fail-closed BLOCK."""
     client = _FakeClient(
         '{"allowed":true,"reason":null,"severity":"NONE",'
         '"confidence":0.5,"tags":[]}'
     )
     service = LLMLayerGuardService(_settings(), client=client)  # type: ignore[arg-type]
 
-    await service.check(
+    result = await service.check(
         layer_idx=4,
         surface="input",
         content="hi",
         model=None,
     )
 
-    call = client.completions.calls[0]
-    assert call["model"] == "guard-model"
+    assert result.status == CheckStatus.BLOCK
+    assert result.layer == "L4"
+    assert result.severity == "HIGH"
+    assert result.tags == ["llm_layer_misconfigured"]
+    assert "judgmentModel" in (result.reason or "")
+    # LLM 호출이 발생하지 않아야 한다.
+    assert client.completions.calls == []
+
+
+async def test_llm_layer_guard_blank_model_fails_closed() -> None:
+    """공백·빈 문자열 model 도 judgmentModel 미지정으로 BLOCK 된다."""
+    client = _FakeClient(
+        '{"allowed":true,"reason":null,"severity":"NONE",'
+        '"confidence":0.5,"tags":[]}'
+    )
+    service = LLMLayerGuardService(_settings(), client=client)  # type: ignore[arg-type]
+
+    result = await service.check(
+        layer_idx=4,
+        surface="input",
+        content="hi",
+        model="   ",
+    )
+
+    assert result.status == CheckStatus.BLOCK
+    assert result.tags == ["llm_layer_misconfigured"]
+    assert client.completions.calls == []
 
 
 def test_llm_layer_guard_passes_x_api_key_default_header() -> None:
@@ -184,9 +209,7 @@ def test_llm_layer_guard_passes_x_api_key_default_header() -> None:
     LiteLLM 등 일부 OpenAI 호환 프록시는 표준 `Authorization: Bearer`
     대신 `x-api-key` 헤더로 인증한다. 양쪽 모두를 송신해 호환성을 확보.
     """
-    with patch(
-        "app.services.llm_layer_guard.AsyncOpenAI"
-    ) as mock_openai:
+    with patch("app.services.llm_layer_guard.AsyncOpenAI") as mock_openai:
         LLMLayerGuardService(_settings())
 
     assert mock_openai.called
@@ -194,24 +217,3 @@ def test_llm_layer_guard_passes_x_api_key_default_header() -> None:
     assert kwargs.get("default_headers") == {"x-api-key": "layer-test"}
     assert kwargs.get("api_key") == "layer-test"
     assert kwargs.get("base_url") == "http://localhost:4000/v1"
-
-
-async def test_llm_layer_guard_treats_empty_model_override_as_fallback() -> (
-    None
-):
-    """빈 문자열 `model=""` 도 None 처럼 처리해 settings 값으로 폴백한다."""
-    client = _FakeClient(
-        '{"allowed":true,"reason":null,"severity":"NONE",'
-        '"confidence":0.5,"tags":[]}'
-    )
-    service = LLMLayerGuardService(_settings(), client=client)  # type: ignore[arg-type]
-
-    await service.check(
-        layer_idx=4,
-        surface="input",
-        content="hi",
-        model="",
-    )
-
-    call = client.completions.calls[0]
-    assert call["model"] == "guard-model"

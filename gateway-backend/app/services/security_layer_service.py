@@ -86,9 +86,7 @@ def _log_layer_result(
         fields.append(f"tags={list(result.tags)}")
 
     log_fn = (
-        logger.warning
-        if result.status is CheckStatus.BLOCK
-        else logger.info
+        logger.warning if result.status is CheckStatus.BLOCK else logger.info
     )
     log_fn(
         "%s 레이어 결과: %s",
@@ -142,32 +140,14 @@ class SecurityLayerService:
         self,
         *,
         llm_layer_guard: LLMLayerGuardService | None = None,
-        llm_layer_replacement_layers: frozenset[int] | None = None,
     ) -> None:
         """SecurityLayerService 를 초기화한다.
 
         Args:
             llm_layer_guard: LLM 레이어 대체 서비스. None 이면 모든 레이어가
                 기존 core-secure-layer 경로로 실행된다.
-            llm_layer_replacement_layers: LLM 으로 대체 실행할 레이어 인덱스.
         """
         self._llm_layer_guard = llm_layer_guard
-        self._llm_layer_replacement_layers = (
-            llm_layer_replacement_layers or frozenset()
-        )
-
-    def _should_use_llm_layer(self, layer_idx: int) -> bool:
-        """해당 레이어를 정적 LLM 대체 경로로 실행해야 하는지 반환한다.
-
-        정적 환경변수 `LLM_LAYER_REPLACEMENT_LAYERS` 기반 분기로,
-        정책 기반 `use_llm` 분기와는 별도이다.
-        """
-        replacement_layers = getattr(
-            self,
-            "_llm_layer_replacement_layers",
-            frozenset(),
-        )
-        return layer_idx in replacement_layers
 
     @staticmethod
     def _resolve_judgment_model(policy: GuardrailPolicy | None) -> str | None:
@@ -367,23 +347,14 @@ class SecurityLayerService:
         Returns:
             레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
-        # 정책 기반 LLM 대체 (useLlm=True) 가 정적 셋보다 우선한다.
-        # judgmentModel 누락/공백은 None 으로 정규화되어 LLMLayerGuardService
-        # 가 settings.llm_layer_model 로 폴백한다.
+        # 정책의 useLlm=True 면 활성 레이어를 LLM 판정으로 위임한다.
+        # judgmentModel 누락/공백은 LLMLayerGuardService 가 fail-closed BLOCK.
         if policy is not None and policy.use_llm:
             return await self._call_llm_replacement(
                 layer_idx=layer_idx,
                 surface="input",
                 content=messages_to_request(messages).user_input,
                 model=self._resolve_judgment_model(policy),
-            )
-
-        if self._should_use_llm_layer(layer_idx):
-            return await self._call_llm_replacement(
-                layer_idx=layer_idx,
-                surface="input",
-                content=messages_to_request(messages).user_input,
-                model=None,
             )
 
         layer = _get_policy_layer(layer_idx, policy)
@@ -444,21 +415,13 @@ class SecurityLayerService:
         Returns:
             레이어 실행 결과. 미구현·미매핑 레이어는 PASS.
         """
-        # 정책 기반 LLM 대체 (useLlm=True) 가 정적 셋보다 우선한다.
+        # 정책의 useLlm=True 면 활성 레이어를 LLM 판정으로 위임한다.
         if policy is not None and policy.use_llm:
             return await self._call_llm_replacement(
                 layer_idx=layer_idx,
                 surface="output",
                 content=content,
                 model=self._resolve_judgment_model(policy),
-            )
-
-        if self._should_use_llm_layer(layer_idx):
-            return await self._call_llm_replacement(
-                layer_idx=layer_idx,
-                surface="output",
-                content=content,
-                model=None,
             )
 
         layer = _get_policy_layer(layer_idx, policy)

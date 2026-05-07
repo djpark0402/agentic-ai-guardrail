@@ -83,10 +83,9 @@ def get_security_service(
 ) -> SecurityLayerService:
     """SecurityLayerService 인스턴스를 반환한다.
 
-    LLMLayerGuardService 는 다음 둘 중 하나라도 만족하면 생성한다:
-      - 정적 `LLM_LAYER_REPLACEMENT_LAYERS` 셋이 비어있지 않다 (역호환).
-      - LLM 엔드포인트(`LLM_LAYER_BASE_URL` + `LLM_LAYER_API_KEY`) 가
-        설정돼 있다 (정책 기반 `useLlm=true` 경로 활성화).
+    LLMLayerGuardService 는 LLM 엔드포인트
+    (`LLM_LAYER_BASE_URL` + `LLM_LAYER_API_KEY`) 가 설정돼 있을 때만
+    생성한다 — 정책 기반 `useLlm=true` 경로 활성화 조건.
 
     Args:
         settings: 주입된 애플리케이션 설정.
@@ -94,12 +93,10 @@ def get_security_service(
     Returns:
         SecurityLayerService 인스턴스.
     """
-    replacement_layers = settings.llm_layer_replacement_indices
-    if not replacement_layers and not settings.has_llm_layer_endpoint:
+    if not settings.has_llm_layer_endpoint:
         return SecurityLayerService()
     return SecurityLayerService(
         llm_layer_guard=LLMLayerGuardService(settings),
-        llm_layer_replacement_layers=replacement_layers,
     )
 
 
