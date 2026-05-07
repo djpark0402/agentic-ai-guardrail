@@ -108,9 +108,10 @@ class LLMLayerGuardService:
             client: 테스트용 OpenAI 호환 async client.
         """
         self._settings = settings
+        layer_cfg = settings.llm_layer
         api_key = (
-            settings.llm_layer_api_key.get_secret_value()
-            if settings.llm_layer_api_key is not None
+            layer_cfg.api_key.get_secret_value()
+            if layer_cfg.api_key is not None
             else "dummy"
         )
         self._api_key = api_key
@@ -119,15 +120,15 @@ class LLMLayerGuardService:
         # 헤더와 함께 x-api-key 도 송신해 양쪽 프록시 모두에서 통하도록 한다.
         self._client = client or AsyncOpenAI(
             api_key=api_key,
-            base_url=settings.llm_layer_base_url,
-            timeout=settings.llm_layer_timeout_seconds,
+            base_url=layer_cfg.base_url,
+            timeout=layer_cfg.timeout_seconds,
             default_headers={"x-api-key": api_key},
         )
 
     @property
     def base_url(self) -> str:
         """레이어 판정 LLM의 base URL."""
-        return self._settings.llm_layer_base_url
+        return self._settings.llm_layer.base_url
 
     async def check(
         self,

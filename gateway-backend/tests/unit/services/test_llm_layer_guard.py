@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from pydantic import SecretStr
 
-from app.config import Settings
+from app.config import LlmLayerSettings, Settings
 from app.models.guardrail import CheckStatus
 from app.services.llm_layer_guard import LLMLayerGuardService
 
@@ -18,8 +18,10 @@ def _settings() -> Settings:
         _env_file=None,
         llm_model="solar-pro",
         upstage_api_key=SecretStr("upstage-test"),
-        llm_layer_base_url="http://localhost:4000/v1",
-        llm_layer_api_key=SecretStr("layer-test"),
+        llm_layer=LlmLayerSettings(
+            base_url="http://localhost:4000/v1",
+            api_key=SecretStr("layer-test"),
+        ),
     )
 
 

@@ -236,8 +236,8 @@ def _base_env(monkeypatch, *, app_env: str = "dev") -> None:
 def test_skip_policy_fetch_layers_default_is_all_six(monkeypatch):
     """미설정 시 입력/출력 모두 L1~L6 전체."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.delenv("SKIP_POLICY_FETCH_INPUT_LAYERS", raising=False)
-    monkeypatch.delenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", raising=False)
+    monkeypatch.delenv("SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", raising=False)
+    monkeypatch.delenv("SKIP_POLICY_FETCH_CONFIG__OUTPUT_LAYERS", raising=False)
 
     from app.config import Settings
 
@@ -249,8 +249,10 @@ def test_skip_policy_fetch_layers_default_is_all_six(monkeypatch):
 def test_skip_policy_fetch_input_layers_csv_parsed(monkeypatch):
     """CSV 토큰을 정규화해 frozenset[int] 로 노출한다."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1, l3 ,L6")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", "L1, l3 ,L6")
+    monkeypatch.setenv(
+        "SKIP_POLICY_FETCH_CONFIG__OUTPUT_LAYERS", "L1,L2,L3,L4,L5,L6"
+    )
 
     from app.config import Settings
 
@@ -264,8 +266,10 @@ def test_skip_policy_fetch_output_layers_empty_string_disables_all(
 ):
     """빈 문자열은 출력 레이어를 빈 셋으로 둔다 (outbound 비활성 의도)."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "")
+    monkeypatch.setenv(
+        "SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", "L1,L2,L3,L4,L5,L6"
+    )
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__OUTPUT_LAYERS", "")
 
     from app.config import Settings
 
@@ -276,7 +280,7 @@ def test_skip_policy_fetch_output_layers_empty_string_disables_all(
 def test_skip_policy_fetch_invalid_token_rejected(monkeypatch):
     """L7 같은 범위 외 토큰은 기동 실패."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,L7")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", "L1,L7")
 
     from app.config import Settings
 
@@ -287,7 +291,7 @@ def test_skip_policy_fetch_invalid_token_rejected(monkeypatch):
 def test_skip_policy_fetch_unknown_token_rejected(monkeypatch):
     """`foo` 같은 비정형 토큰도 기동 실패."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,foo")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", "L1,foo")
 
     from app.config import Settings
 
@@ -298,8 +302,8 @@ def test_skip_policy_fetch_unknown_token_rejected(monkeypatch):
 def test_skip_policy_fetch_custom_layers_allowed_in_dev(monkeypatch):
     """APP_ENV=dev 면 비기본 레이어 셋 허용."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L4")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", "L4")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__OUTPUT_LAYERS", "")
 
     from app.config import Settings
 
@@ -311,7 +315,7 @@ def test_skip_policy_fetch_custom_layers_allowed_in_dev(monkeypatch):
 def test_skip_policy_fetch_custom_layers_rejected_in_prod(monkeypatch):
     """APP_ENV=prod 에서 비기본 레이어 셋은 기동 실패."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L4")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", "L4")
 
     from app.config import Settings
 
@@ -324,7 +328,7 @@ def test_skip_policy_fetch_custom_output_layers_rejected_in_prod(
 ):
     """APP_ENV=prod 에서 출력 레이어 비기본값도 기동 실패."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__OUTPUT_LAYERS", "")
 
     from app.config import Settings
 
@@ -335,8 +339,12 @@ def test_skip_policy_fetch_custom_output_layers_rejected_in_prod(
 def test_skip_policy_fetch_default_layers_allowed_in_prod(monkeypatch):
     """APP_ENV=prod 라도 명시 기본값(L1~L6)은 기동 가능."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_INPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_OUTPUT_LAYERS", "L1,L2,L3,L4,L5,L6")
+    monkeypatch.setenv(
+        "SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS", "L1,L2,L3,L4,L5,L6"
+    )
+    monkeypatch.setenv(
+        "SKIP_POLICY_FETCH_CONFIG__OUTPUT_LAYERS", "L1,L2,L3,L4,L5,L6"
+    )
 
     from app.config import Settings
 
@@ -348,8 +356,8 @@ def test_skip_policy_fetch_default_layers_allowed_in_prod(monkeypatch):
 def test_skip_policy_fetch_l5_setting_default_is_none(monkeypatch):
     """L5 보조 환경변수 미설정 시 기본 L5 설정을 사용한다."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.delenv("SKIP_POLICY_FETCH_L5_MODEL", raising=False)
-    monkeypatch.delenv("SKIP_POLICY_FETCH_L5_THRESHOLD", raising=False)
+    monkeypatch.delenv("SKIP_POLICY_FETCH_CONFIG__L5_MODEL", raising=False)
+    monkeypatch.delenv("SKIP_POLICY_FETCH_CONFIG__L5_THRESHOLD", raising=False)
 
     from app.config import Settings
 
@@ -360,8 +368,8 @@ def test_skip_policy_fetch_l5_setting_default_is_none(monkeypatch):
 def test_skip_policy_fetch_l5_setting_parsed_in_dev(monkeypatch):
     """APP_ENV=dev 에서는 환경변수로 L5 model/threshold 를 지정할 수 있다."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_MODEL", "pii_model_v11")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", "0.82")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__L5_MODEL", "pii_model_v11")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__L5_THRESHOLD", "0.82")
 
     from app.config import Settings
 
@@ -375,8 +383,8 @@ def test_skip_policy_fetch_l5_setting_parsed_in_dev(monkeypatch):
 def test_skip_policy_fetch_l5_threshold_empty_string_is_none(monkeypatch):
     """빈 threshold 는 None 으로 정규화된다."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_MODEL", "pii_model_v11")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", "")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__L5_MODEL", "pii_model_v11")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__L5_THRESHOLD", "")
 
     from app.config import Settings
 
@@ -394,7 +402,7 @@ def test_skip_policy_fetch_l5_threshold_out_of_range_rejected(
 ):
     """L5 threshold 보조 환경변수도 0.0~1.0 범위만 허용한다."""
     _base_env(monkeypatch, app_env="dev")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", threshold)
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__L5_THRESHOLD", threshold)
 
     from app.config import Settings
 
@@ -405,7 +413,7 @@ def test_skip_policy_fetch_l5_threshold_out_of_range_rejected(
 def test_skip_policy_fetch_l5_model_rejected_in_prod(monkeypatch):
     """APP_ENV=prod 에서 L5 model 비기본값은 기동 실패."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_MODEL", "pii_model_v11")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__L5_MODEL", "pii_model_v11")
 
     from app.config import Settings
 
@@ -416,7 +424,7 @@ def test_skip_policy_fetch_l5_model_rejected_in_prod(monkeypatch):
 def test_skip_policy_fetch_l5_threshold_rejected_in_prod(monkeypatch):
     """APP_ENV=prod 에서 L5 threshold 비기본값은 기동 실패."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("SKIP_POLICY_FETCH_L5_THRESHOLD", "0.82")
+    monkeypatch.setenv("SKIP_POLICY_FETCH_CONFIG__L5_THRESHOLD", "0.82")
 
     from app.config import Settings
 
@@ -432,41 +440,41 @@ def test_skip_policy_fetch_l5_threshold_rejected_in_prod(monkeypatch):
 def test_llm_layer_endpoint_pair_is_valid(monkeypatch):
     """BASE_URL+API_KEY 가 짝으로 설정되면 정책 기반 경로가 활성화된다."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
-    monkeypatch.setenv("LLM_LAYER_API_KEY", "test-layer-key")
+    monkeypatch.setenv("LLM_LAYER__BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.setenv("LLM_LAYER__API_KEY", "test-layer-key")
 
     from app.config import Settings
 
     settings = Settings(_env_file=None)
-    assert settings.llm_layer_base_url == "http://localhost:4000/v1"
-    assert settings.llm_layer_api_key is not None
-    assert settings.llm_layer_api_key.get_secret_value() == "test-layer-key"
+    assert settings.llm_layer.base_url == "http://localhost:4000/v1"
+    assert settings.llm_layer.api_key is not None
+    assert settings.llm_layer.api_key.get_secret_value() == "test-layer-key"
 
 
 def test_llm_layer_endpoint_url_only_requires_api_key(monkeypatch):
     """BASE_URL 만 있고 API_KEY 가 없으면 기동 실패."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
-    monkeypatch.delenv("LLM_LAYER_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_LAYER__BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.delenv("LLM_LAYER__API_KEY", raising=False)
 
     from app.config import Settings
 
     with pytest.raises(ValidationError) as exc:
         Settings(_env_file=None)
-    assert "LLM_LAYER_API_KEY" in str(exc.value)
+    assert "LLM_LAYER__API_KEY" in str(exc.value)
 
 
 def test_llm_layer_endpoint_key_only_requires_base_url(monkeypatch):
     """API_KEY 만 있고 BASE_URL 이 없으면 기동 실패."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.delenv("LLM_LAYER_BASE_URL", raising=False)
-    monkeypatch.setenv("LLM_LAYER_API_KEY", "test-layer-key")
+    monkeypatch.delenv("LLM_LAYER__BASE_URL", raising=False)
+    monkeypatch.setenv("LLM_LAYER__API_KEY", "test-layer-key")
 
     from app.config import Settings
 
     with pytest.raises(ValidationError) as exc:
         Settings(_env_file=None)
-    assert "LLM_LAYER_BASE_URL" in str(exc.value)
+    assert "LLM_LAYER__BASE_URL" in str(exc.value)
 
 
 def test_llm_layer_has_endpoint_property_reports_true_when_url_and_key(
@@ -474,8 +482,8 @@ def test_llm_layer_has_endpoint_property_reports_true_when_url_and_key(
 ):
     """`has_llm_layer_endpoint` 는 URL+KEY 가 있으면 True 를 반환한다."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.setenv("LLM_LAYER_BASE_URL", "http://localhost:4000/v1")
-    monkeypatch.setenv("LLM_LAYER_API_KEY", "test-layer-key")
+    monkeypatch.setenv("LLM_LAYER__BASE_URL", "http://localhost:4000/v1")
+    monkeypatch.setenv("LLM_LAYER__API_KEY", "test-layer-key")
 
     from app.config import Settings
 
@@ -488,8 +496,8 @@ def test_llm_layer_has_endpoint_property_reports_false_when_missing(
 ):
     """엔드포인트 미설정이면 has_llm_layer_endpoint 는 False."""
     _base_env(monkeypatch, app_env="prod")
-    monkeypatch.delenv("LLM_LAYER_BASE_URL", raising=False)
-    monkeypatch.delenv("LLM_LAYER_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_LAYER__BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_LAYER__API_KEY", raising=False)
 
     from app.config import Settings
 

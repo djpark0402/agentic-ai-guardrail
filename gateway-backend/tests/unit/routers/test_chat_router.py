@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
+from app.config import SkipPolicyFetchSettings, get_settings
 from app.dependencies import (
     get_nonce_store,
     get_policy_service,
@@ -1329,8 +1329,10 @@ def test_skip_policy_fetch_input_layers_subset(
             skip_header_verification=True,
             continue_on_layer_failure=False,
             app_env="dev",
-            skip_policy_fetch_input_layers="L4,L5",
-            skip_policy_fetch_output_layers="L1,L2,L3,L4,L5,L6",
+            skip_policy_fetch_config=SkipPolicyFetchSettings(
+                input_layers="L4,L5",
+                output_layers="L1,L2,L3,L4,L5,L6",
+            ),
         )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_ps
@@ -1380,8 +1382,10 @@ def test_skip_policy_fetch_l5_setting_applied_to_input_and_output_policy(
             skip_header_verification=True,
             continue_on_layer_failure=False,
             app_env="dev",
-            skip_policy_fetch_l5_model="pii_model_v11",
-            skip_policy_fetch_l5_threshold=0.82,
+            skip_policy_fetch_config=SkipPolicyFetchSettings(
+                l5_model="pii_model_v11",
+                l5_threshold=0.82,
+            ),
         )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_ps
@@ -1436,8 +1440,10 @@ def test_skip_policy_fetch_output_layers_empty_skips_output_check(
             skip_header_verification=True,
             continue_on_layer_failure=False,
             app_env="dev",
-            skip_policy_fetch_input_layers="L4",
-            skip_policy_fetch_output_layers="",
+            skip_policy_fetch_config=SkipPolicyFetchSettings(
+                input_layers="L4",
+                output_layers="",
+            ),
         )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_ps
@@ -1485,8 +1491,10 @@ def test_skip_policy_fetch_input_layers_empty_runs_no_input_layers(
             skip_header_verification=True,
             continue_on_layer_failure=False,
             app_env="dev",
-            skip_policy_fetch_input_layers="",
-            skip_policy_fetch_output_layers="L1,L2,L3,L4,L5,L6",
+            skip_policy_fetch_config=SkipPolicyFetchSettings(
+                input_layers="",
+                output_layers="L1,L2,L3,L4,L5,L6",
+            ),
         )
 
     app.dependency_overrides[get_policy_service] = lambda: mock_ps

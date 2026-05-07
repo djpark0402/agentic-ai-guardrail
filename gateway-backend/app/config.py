@@ -1,10 +1,18 @@
 """애플리케이션 설정 모듈."""
 
+from __future__ import annotations
+
 import re
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models.policy import L5Setting
@@ -37,11 +45,134 @@ def _parse_layer_csv(value: str) -> frozenset[int]:
         match = _LAYER_TOKEN_RE.match(token)
         if not match:
             raise ValueError(
-                "SKIP_POLICY_FETCH_*_LAYERS 토큰은 'L1'~'L6' 만 허용됩니다. "
-                f"잘못된 토큰: {token!r}"
+                "SKIP_POLICY_FETCH_CONFIG__*_LAYERS 토큰은 'L1'~'L6' 만 "
+                f"허용됩니다. 잘못된 토큰: {token!r}"
             )
         indices.add(int(match.group(1)))
     return frozenset(indices)
+
+
+class SkipPolicyFetchSettings(BaseModel):
+    """SKIP_POLICY_FETCH=true 일 때 적용할 dev 전용 레이어 오버라이드.
+
+    환경변수는 `SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS` 처럼 nested
+    delimiter `__` 를 사용한다.
+
+    Attributes:
+        input_layers: 입력 가드레일에서 실행할 레이어 CSV. 예: 'L1,L4'.
+            빈 문자열이면 입력 측 가드레일이 비어 모든 입력이 통과한다.
+        output_layers: 출력 가드레일에서 실행할 레이어 CSV. 빈 문자열이면
+            outbound 파이프라인 전체가 생략된다.
+        l5_model: ADMIN 의 `l5Setting.model` 과 같은 역할. 빈 문자열이면
+            기본 L5 모델 설정을 사용한다.
+        l5_threshold: ADMIN 의 `l5Setting.threshold` 와 같은 역할. 빈 값이면
+            기본 L5 threshold. 값은 0.0~1.0 범위만 허용.
+    """
+
+    input_layers: str = "L1,L2,L3,L4,L5,L6"
+    output_layers: str = "L1,L2,L3,L4,L5,L6"
+    l5_model: str = ""
+    l5_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @field_validator("l5_threshold", mode="before")
+    @classmethod
+    def _empty_l5_threshold_is_none(cls, value: object) -> object:
+        """빈 L5 threshold 문자열은 None 으로 정규화한다."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("input_layers", "output_layers", mode="after")
+    @classmethod
+    def _validate_layer_csv(cls, value: str) -> str:
+        """CSV 토큰 형식만 검증하고 원문 문자열을 그대로 보존한다."""
+        _parse_layer_csv(value)
+        return value
+
+    @property
+    def input_layer_indices(self) -> frozenset[int]:
+        """입력 가드레일에서 실행할 레이어 셋."""
+        return _parse_layer_csv(self.input_layers)
+
+    @property
+    def output_layer_indices(self) -> frozenset[int]:
+        """출력 가드레일에서 실행할 레이어 셋. 빈 셋이면 outbound 생략."""
+        return _parse_layer_csv(self.output_layers)
+
+    @property
+    def l5_setting(self) -> L5Setting | None:
+        """정책 조회 생략 시 환경변수로 주입할 L5 설정."""
+        model_name = self.l5_model.strip() or None
+        threshold = self.l5_threshold
+        if model_name is None and threshold is None:
+            return None
+        return L5Setting(model=model_name, threshold=threshold)
+
+
+class LlmLayerSettings(BaseModel):
+    """정책 기반 `useLlm=true` 경로의 LLM 엔드포인트 설정.
+
+    환경변수는 `LLM_LAYER__BASE_URL` 처럼 nested delimiter `__` 를 사용한다.
+    BASE_URL+API_KEY 는 짝으로 설정돼야 하며, 한쪽만 설정된 채로 기동되면
+    `_endpoint_pair_required` 가 기동을 거부한다.
+
+    Attributes:
+        base_url: OpenAI 호환 LLM 엔드포인트 URL.
+        api_key: OpenAI 호환 LLM 인증 키. 빈 문자열은 None 으로 정규화.
+        timeout_seconds: LLM 호출 타임아웃(초). 0보다 큰 값만 허용.
+    """
+
+    base_url: str = ""
+    api_key: SecretStr | None = None
+    timeout_seconds: float = Field(default=15.0, gt=0.0)
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _empty_api_key_is_none(cls, value: object) -> object:
+        """빈 문자열 API_KEY 는 None 으로 정규화한다."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _endpoint_pair_required(self) -> LlmLayerSettings:
+        """BASE_URL/API_KEY 가 짝으로 설정돼야 한다."""
+        url_set = bool(self.base_url.strip())
+        key_set = self.api_key is not None
+        if url_set and not key_set:
+            raise ValueError(
+                "LLM_LAYER__BASE_URL 가 설정되면 LLM_LAYER__API_KEY 도 "
+                "필요합니다."
+            )
+        if key_set and not url_set:
+            raise ValueError(
+                "LLM_LAYER__API_KEY 가 설정되면 LLM_LAYER__BASE_URL 도 "
+                "필요합니다."
+            )
+        return self
+
+    @property
+    def has_endpoint(self) -> bool:
+        """OpenAI 호환 LLM 엔드포인트(URL+API key)가 모두 설정됐는지."""
+        return bool(self.base_url.strip() and self.api_key is not None)
+
+
+class PlaygroundSettings(BaseModel):
+    """Playground 페이지 dev 자동 채움 시크릿.
+
+    환경변수는 `PLAYGROUND__DEFAULT_API_KEY` 처럼 nested delimiter
+    `__` 를 사용한다. `app_env="dev"` 일 때만 `/v1/playground/defaults`
+    응답에 노출되고, 그 외 환경에서는 빈 문자열로 대체된다.
+
+    Attributes:
+        default_api_key: `/playground/` 페이지의 `X-API-Key` 입력 칸에
+            자동 채워질 데모용 키.
+        default_hmac_secret: `/playground/` 페이지의 `HMAC SECRET` 입력
+            칸에 자동 채워질 데모용 서명 시크릿.
+    """
+
+    default_api_key: str = ""
+    default_hmac_secret: SecretStr = SecretStr("")
 
 
 class Settings(BaseSettings):
@@ -64,18 +195,15 @@ class Settings(BaseSettings):
             레이어가 BLOCK 을 내려도 파이프라인을 끝까지 실행하고 응답에
             `guardrail_reports` 를 첨부한다. `app_env="dev"` 일 때만
             True 허용 — 그 외 환경에서 True 는 ValidationError.
-        playground_default_api_key: `/playground/` 페이지의 `X-API-Key`
-            입력 칸에 자동 채워질 데모용 키. `app_env="dev"` 에서만
-            응답에 노출되며, `prod` 에서는 값이 있어도 빈 문자열로
-            대체된다 (시크릿이 브라우저로 새지 않게 차단).
-        playground_default_hmac_secret: `/playground/` 페이지의
-            `HMAC SECRET` 입력 칸에 자동 채워질 데모용 서명 시크릿.
-            동일하게 `app_env="dev"` 에서만 노출. SecretStr 로 보관해
-            로그·repr 에 노출되지 않게 한다.
+        skip_policy_fetch_config: SKIP_POLICY_FETCH=true 일 때만 의미를
+            가지는 dev 전용 레이어 오버라이드 그룹.
+        llm_layer: 정책 기반 `useLlm=true` 경로의 LLM 엔드포인트 그룹.
+        playground: Playground 페이지 dev 자동 채움 시크릿 그룹.
     """
 
     model_config = SettingsConfigDict(
         env_file=".env",
+        env_nested_delimiter="__",
         extra="ignore",
     )
 
@@ -107,33 +235,13 @@ class Settings(BaseSettings):
     # `app_env="dev"` 일 때만 True 허용 (model_validator 로 강제).
     continue_on_layer_failure: bool = False
 
-    # SKIP_POLICY_FETCH=true 일 때만 의미가 있는 보조 토글.
-    # CSV 형식 `L1,L4` 처럼 활성 레이어를 지정한다. 기본값은 `L1~L6` 전체로
-    # 기존 동작과 동일. 빈 문자열은 해당 방향 가드레일을 빈 셋으로 두며,
-    # 출력 측이 빈 셋이면 outbound 파이프라인 전체가 생략된다.
-    # APP_ENV='dev' 가 아닌데 비기본값을 지정하면 model_validator 가
-    # 기동을 거부한다 (테스트용 환경변수가 prod 로 새지 않게 차단).
-    skip_policy_fetch_input_layers: str = "L1,L2,L3,L4,L5,L6"
-    skip_policy_fetch_output_layers: str = "L1,L2,L3,L4,L5,L6"
-    skip_policy_fetch_l5_model: str = ""
-    skip_policy_fetch_l5_threshold: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
+    # 그룹별 nested settings — 환경변수는 `SKIP_POLICY_FETCH_CONFIG__*`,
+    # `LLM_LAYER__*`, `PLAYGROUND__*` 처럼 nested delimiter `__` 사용.
+    skip_policy_fetch_config: SkipPolicyFetchSettings = Field(
+        default_factory=SkipPolicyFetchSettings
     )
-
-    # LLM 레이어 대체 — 정책 응답의 `useLlm=true` 시 활성화된다.
-    # BASE_URL+API_KEY 가 모두 설정돼 있어야 정책 기반 경로가 동작한다.
-    # 모델 이름은 정책 응답의 `judgmentModel` 만 사용한다 (정적 폴백 없음).
-    llm_layer_base_url: str = ""
-    llm_layer_api_key: SecretStr | None = None
-    llm_layer_timeout_seconds: float = Field(default=15.0, gt=0.0)
-
-    # Playground (/playground/) 기본 입력값 — APP_ENV=dev 에서만 노출.
-    # prod 환경에서 값이 설정되어 있어도 /v1/playground/defaults 응답은
-    # 빈 문자열로 대체되어 시크릿이 브라우저로 새지 않는다.
-    playground_default_api_key: str = ""
-    playground_default_hmac_secret: SecretStr = SecretStr("")
+    llm_layer: LlmLayerSettings = Field(default_factory=LlmLayerSettings)
+    playground: PlaygroundSettings = Field(default_factory=PlaygroundSettings)
 
     @field_validator("admin_api_key", mode="before")
     @classmethod
@@ -143,37 +251,10 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("llm_layer_api_key", mode="before")
-    @classmethod
-    def _empty_llm_layer_api_key_is_none(cls, value: object) -> object:
-        """빈 문자열 `LLM_LAYER_API_KEY` 는 None 으로 정규화한다."""
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        return value
-
-    @field_validator("skip_policy_fetch_l5_threshold", mode="before")
-    @classmethod
-    def _empty_l5_threshold_is_none(cls, value: object) -> object:
-        """빈 L5 threshold 문자열은 None 으로 정규화한다."""
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        return value
-
-    @field_validator(
-        "skip_policy_fetch_input_layers",
-        "skip_policy_fetch_output_layers",
-        mode="after",
-    )
-    @classmethod
-    def _validate_layer_csv(cls, value: str) -> str:
-        """CSV 토큰 형식만 검증하고 원문 문자열을 그대로 보존한다."""
-        _parse_layer_csv(value)
-        return value
-
     @property
     def input_layer_indices(self) -> frozenset[int]:
         """`SKIP_POLICY_FETCH=true` 시 입력 가드레일에서 실행할 레이어 셋."""
-        return _parse_layer_csv(self.skip_policy_fetch_input_layers)
+        return self.skip_policy_fetch_config.input_layer_indices
 
     @property
     def output_layer_indices(self) -> frozenset[int]:
@@ -181,7 +262,7 @@ class Settings(BaseSettings):
 
         빈 셋이면 출력 파이프라인 전체가 생략된다 (outbound=False 동등).
         """
-        return _parse_layer_csv(self.skip_policy_fetch_output_layers)
+        return self.skip_policy_fetch_config.output_layer_indices
 
     @property
     def has_llm_layer_endpoint(self) -> bool:
@@ -189,19 +270,12 @@ class Settings(BaseSettings):
 
         정책 기반 `useLlm=True` 경로를 활성화하기 위해 DI 팩토리가 참조한다.
         """
-        return bool(
-            self.llm_layer_base_url.strip()
-            and self.llm_layer_api_key is not None
-        )
+        return self.llm_layer.has_endpoint
 
     @property
     def skip_policy_fetch_l5_setting(self) -> L5Setting | None:
         """정책 조회 생략 시 환경변수로 주입할 L5 설정."""
-        model_name = self.skip_policy_fetch_l5_model.strip() or None
-        threshold = self.skip_policy_fetch_l5_threshold
-        if model_name is None and threshold is None:
-            return None
-        return L5Setting(model=model_name, threshold=threshold)
+        return self.skip_policy_fetch_config.l5_setting
 
     @model_validator(mode="after")
     def _observe_mode_requires_dev(self) -> Settings:
@@ -227,39 +301,19 @@ class Settings(BaseSettings):
         """
         if self.app_env == "dev":
             return self
+        cfg = self.skip_policy_fetch_config
         if (
-            self.input_layer_indices != _DEFAULT_LAYER_INDICES
-            or self.output_layer_indices != _DEFAULT_LAYER_INDICES
-            or self.skip_policy_fetch_l5_setting is not None
+            cfg.input_layer_indices != _DEFAULT_LAYER_INDICES
+            or cfg.output_layer_indices != _DEFAULT_LAYER_INDICES
+            or cfg.l5_setting is not None
         ):
             raise ValueError(
-                "SKIP_POLICY_FETCH_INPUT_LAYERS / "
-                "SKIP_POLICY_FETCH_OUTPUT_LAYERS / "
-                "SKIP_POLICY_FETCH_L5_MODEL / "
-                "SKIP_POLICY_FETCH_L5_THRESHOLD 의 비기본값은 "
+                "SKIP_POLICY_FETCH_CONFIG__INPUT_LAYERS / "
+                "SKIP_POLICY_FETCH_CONFIG__OUTPUT_LAYERS / "
+                "SKIP_POLICY_FETCH_CONFIG__L5_MODEL / "
+                "SKIP_POLICY_FETCH_CONFIG__L5_THRESHOLD 의 비기본값은 "
                 "APP_ENV='dev' 에서만 허용됩니다. "
                 f"현재 APP_ENV={self.app_env!r}."
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _llm_layer_endpoint_pair_required(self) -> Settings:
-        """LLM 엔드포인트는 BASE_URL/API_KEY 가 짝으로 설정돼야 한다.
-
-        한쪽만 설정된 채로 기동되면 정책 기반 `useLlm=True` 요청이 들어왔을
-        때 런타임에서야 실패하므로, 부팅 시점에 차단한다.
-        """
-        url_set = bool(self.llm_layer_base_url.strip())
-        key_set = self.llm_layer_api_key is not None
-        if url_set and not key_set:
-            raise ValueError(
-                "LLM_LAYER_BASE_URL 가 설정되면 LLM_LAYER_API_KEY 도 "
-                "필요합니다."
-            )
-        if key_set and not url_set:
-            raise ValueError(
-                "LLM_LAYER_API_KEY 가 설정되면 LLM_LAYER_BASE_URL 도 "
-                "필요합니다."
             )
         return self
 

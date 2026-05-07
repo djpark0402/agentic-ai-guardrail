@@ -330,9 +330,9 @@ async def playground_defaults() -> dict[str, str]:
     if settings.app_env != "dev":
         return {"api_key": "", "hmac_secret": ""}
     return {
-        "api_key": settings.playground_default_api_key,
+        "api_key": settings.playground.default_api_key,
         "hmac_secret": (
-            settings.playground_default_hmac_secret.get_secret_value()
+            settings.playground.default_hmac_secret.get_secret_value()
         ),
     }
 
