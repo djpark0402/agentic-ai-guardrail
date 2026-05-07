@@ -60,9 +60,10 @@ def fetch_guardrail_result(prompt: str, model: str) -> dict[str, Any]:
 - Google 스타일 docstring의 섹션 키워드(`Args:`, `Returns:`, `Raises:`)는 영문 그대로 유지한다.
 
 ## Environment Variables
-- **DO NOT** read or modify `.env` files directly.
+- **DO NOT** read or modify `.env` / `.env.dev` files directly.
 - 환경변수는 두 파일로 나뉘어 있다:
-  - `.env.example` — prod 운영용 필수/선택 변수 (Solar, Admin, LLM 레이어, 추가 LLM 제공자).
-  - `.env.dev.example` — 개발/로컬 전용 토글 (헤더·정책 우회, 관찰 모드, Playground 자동 채움). `APP_ENV=dev` 에서만 의미를 가진다.
-- 새 환경변수를 추가할 때는 prod 운영에 필요한지 dev 전용인지에 따라 둘 중 하나에 먼저 적는다.
+  - `.env.example` → `.env` 로 복사해 사용 — prod 운영용 필수/선택 변수 (Solar, Admin, LLM 레이어, 추가 LLM 제공자).
+  - `.env.dev.example` → `.env.dev` 로 복사해 사용 — 개발/로컬 전용 토글 (헤더·정책 우회, 관찰 모드, Playground 자동 채움). `APP_ENV=dev` 에서만 의미를 가진다.
+- `docker compose up` 은 두 파일을 순서대로 주입한다 (`.env` 다음 `.env.dev`). 같은 키가 양쪽에 있으면 `.env.dev` 가 우선이라 dev 토글이 자연스럽게 prod 값을 덮어쓴다. `.env.dev` 가 없는 환경에서는 자동으로 skip 된다 (`required: false`).
+- 새 환경변수를 추가할 때는 prod 운영에 필요한지 dev 전용인지에 따라 둘 중 하나의 example 파일에 먼저 적는다.
 - dev 전용 토글을 prod 환경에서 비기본값으로 설정하면 기동이 거부된다 (safe-by-default).

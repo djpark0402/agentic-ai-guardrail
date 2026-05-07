@@ -38,8 +38,11 @@ docs/
 **/.idea
 **/.DS_Store
 
-# 시크릿 — 이미지에 절대 embed 금지
+# 시크릿 — 이미지에 절대 embed 금지 (compose 의 env_file 로 주입되므로
+# 이미지 안에는 들어가면 안 된다. .env.example / .env.dev.example 템플릿은
+# 시크릿이 아니므로 이미지에 포함되어도 무해.)
 **/.env
+**/.env.dev
 **/.env.local
 **/.env.*.local
 **/*.pem
