@@ -1,6 +1,5 @@
 """Gateway Backend FastAPI 애플리케이션 진입점."""
 
-import html as html_lib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -8,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+import litellm
 import openai
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,8 +60,15 @@ logging.getLogger("uvicorn.access").addFilter(_HealthAccessLogFilter())
 # 미들웨어 로깅에서 제외할 경로.
 _SKIP_LOG_PATHS: frozenset[str] = frozenset({"/health", "/openapi.json"})
 _STATIC_DIR = Path(__file__).parent / "static"
-_DOCS_CSS_PATH = _STATIC_DIR / "docs-overrides.css"
 _DOCS_TITLE = "Agentic AI Guardrail Gateway - Swagger UI"
+# LiteLLM 패키지에 번들된 Swagger UI 정적 자산 디렉토리.
+# CDN 의존을 끊고 오프라인/사내망 배포에서도 /docs 가 깨지지 않도록 한다.
+_LITELLM_SWAGGER_DIR = Path(litellm.__file__).parent / "proxy" / "swagger"
+if not _LITELLM_SWAGGER_DIR.is_dir():
+    raise RuntimeError(
+        "LiteLLM 번들 Swagger UI 자산을 찾지 못했습니다: "
+        f"{_LITELLM_SWAGGER_DIR}. litellm 패키지 설치 상태를 확인하세요."
+    )
 _SWAGGER_UI_PARAMETERS: dict[str, object] = {
     "defaultModelsExpandDepth": -1,
     "displayRequestDuration": True,
@@ -237,47 +244,26 @@ app.mount(
     name="playground",
 )
 
+# LiteLLM 번들 Swagger UI 자산 마운트 (/swagger/*).
+# /docs 핸들러가 이 경로의 정적 파일을 가리켜 외부 CDN 의존을 제거한다.
+app.mount(
+    "/swagger",
+    StaticFiles(directory=_LITELLM_SWAGGER_DIR),
+    name="swagger",
+)
+
 
 @app.get("/docs", include_in_schema=False)
-async def custom_swagger_docs(url: str | None = None) -> HTMLResponse:
-    """기본 Swagger UI 에 개발 편의 설정만 적용한 문서를 반환한다."""
-    docs_url = url or app.openapi_url
-    swagger_html = get_swagger_ui_html(
-        openapi_url=docs_url,
+async def custom_swagger_docs() -> HTMLResponse:
+    """LiteLLM 번들 Swagger UI 자산으로 OpenAPI 문서를 렌더한다."""
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
         title=_DOCS_TITLE,
+        swagger_js_url="/swagger/swagger-ui-bundle.js",
+        swagger_css_url="/swagger/swagger-ui.css",
+        swagger_favicon_url="/swagger/favicon.png",
         swagger_ui_parameters=_SWAGGER_UI_PARAMETERS,
     )
-    html = swagger_html.body.decode("utf-8")
-    css = _DOCS_CSS_PATH.read_text(encoding="utf-8")
-    topbar = f"""
-    <div class="gateway-swagger-topbar">
-      <div class="gateway-swagger-topbar__brand">
-        <span class="gateway-swagger-topbar__mark">{{}}</span>
-        <div>
-          <strong class="gateway-swagger-topbar__title">Swagger</strong>
-          <span class="gateway-swagger-topbar__subtitle">
-            Supported by SmartBear
-          </span>
-        </div>
-      </div>
-      <form
-        class="gateway-swagger-topbar__controls"
-        method="get"
-        action="/docs"
-      >
-        <input
-          type="text"
-          name="url"
-          aria-label="OpenAPI URL"
-          value="{html_lib.escape(docs_url, quote=True)}"
-        />
-        <button type="submit">Explore</button>
-      </form>
-    </div>
-    """
-    html = html.replace("<body>", f"<body>{topbar}", 1)
-    html = html.replace("</head>", f"<style>{css}</style></head>")
-    return HTMLResponse(content=html, status_code=swagger_html.status_code)
 
 
 @app.get("/health", tags=["meta"], summary="헬스체크")

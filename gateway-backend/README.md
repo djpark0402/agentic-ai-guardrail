@@ -452,7 +452,7 @@ aggregation 전략(`aggregation_strategy`) 을 선언한다. 상태 API 는 이
 | GET | `/v1/playground/defaults` | playground 입력 자동완성용 메타. `APP_ENV=dev` 일 때만 `PLAYGROUND_DEFAULT_API_KEY` / `PLAYGROUND_DEFAULT_HMAC_SECRET` 값 노출, prod 에서는 빈 문자열 (Swagger 비노출) |
 | GET | `/v1/layers/status` | L1~L6 각 레이어의 모델 로드 여부 + 실제 BLOCK 가능 여부(`effective`) + 레이어별 `signals` 진단 조회 (아래 _레이어 진단_ 참고) |
 | GET | `/health` | 헬스체크 |
-| GET | `/docs` | 커스텀 Swagger UI (상단 바 + `static/docs-overrides.css`) |
+| GET | `/docs` | Swagger UI — LiteLLM 패키지에 번들된 정적 자산(`/swagger/*`) 사용으로 외부 CDN 의존 없음 |
 | GET | `/openapi.json` | OpenAPI 스키마 |
 | GET | `/playground/` | 커스텀 API 설명 + 테스트 플레이그라운드 |
 
@@ -709,7 +709,7 @@ docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지
 
 ```
 app/
-├── main.py              # FastAPI 진입점 + 커스텀 /docs + StaticFiles 마운트
+├── main.py              # FastAPI 진입점 + /docs + StaticFiles 마운트
 ├── config.py            # pydantic-settings 기반 Settings
 ├── dependencies.py      # DI factory 함수
 ├── errors.py            # 업스트림(LLM/admin) 예외 → JSON 매퍼
@@ -726,8 +726,7 @@ app/
 │   ├── request_verifier.py    # 사용자 헤더·timestamp·nonce·bodyHash 검증
 │   └── policy_service.py      # ADMIN /api/v1/gateway/verify 위임 호출
 └── static/
-    ├── index.html       # 플레이그라운드 페이지
-    └── docs-overrides.css  # /docs 커스텀 Swagger UI 스타일
+    └── index.html       # 플레이그라운드 페이지
 tests/unit/              # pytest 단위 테스트
 ```
 
