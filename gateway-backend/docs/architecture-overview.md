@@ -194,7 +194,7 @@ app.mount(
 1. `FastAPI(...)` 로 앱 인스턴스 생성 (`lifespan` 으로 httpx 클라이언트 수명주기 관리).
 2. `CORSMiddleware` 전체 허용 + HTTP 로깅 미들웨어 1개 추가.
 3. `include_router(chat.router, prefix="/v1")` — 이 한 줄로 `/v1/chat/completions` 가 살아난다.
-4. `docs_url=None` 으로 FastAPI 기본 Swagger 를 끄고, `custom_swagger_docs` 핸들러가 `/docs` 에서 **LiteLLM 패키지에 번들된 Swagger UI 자산(`litellm/proxy/swagger/`)** 을 `/swagger/*` 로 마운트한 뒤 그 경로를 가리키도록 렌더한다. 외부 CDN 의존이 없어 오프라인/사내망에서도 정상 동작한다.
+4. `docs_url=None` 으로 FastAPI 기본 `/docs` 진입점을 끄고, **`/swagger-ui/index.html`** 핸들러(`swagger_ui_page`)가 **LiteLLM 패키지에 번들된 Swagger UI 자산(`litellm/proxy/swagger/`)** 을 `/swagger/*` 로 마운트한 뒤 그 경로를 가리키도록 렌더한다. `/swagger-ui` · `/swagger-ui/` 는 index.html 로 307 리디렉트되고, 기존 `/docs` 는 제거되어 404. 외부 CDN 의존이 없어 오프라인/사내망에서도 정상 동작한다.
 5. `/playground` 정적 파일, `/health`, `/v1/models/default` 도 이 파일에서 붙는다.
 6. 업스트림 예외 2종(`openai.APIError`, `httpx.HTTPError`) 을 `@app.exception_handler` 로 잡아 `app/errors.py` 의 매퍼로 구조화 JSON 응답을 내려준다.
 

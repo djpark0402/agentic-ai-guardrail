@@ -12,7 +12,7 @@ import openai
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.dependencies import get_http_client
@@ -62,7 +62,7 @@ _SKIP_LOG_PATHS: frozenset[str] = frozenset({"/health", "/openapi.json"})
 _STATIC_DIR = Path(__file__).parent / "static"
 _DOCS_TITLE = "Agentic AI Guardrail Gateway - Swagger UI"
 # LiteLLM 패키지에 번들된 Swagger UI 정적 자산 디렉토리.
-# CDN 의존을 끊고 오프라인/사내망 배포에서도 /docs 가 깨지지 않도록 한다.
+# CDN 의존을 끊고 오프라인/사내망 배포에서도 Swagger UI 가 깨지지 않도록 한다.
 _LITELLM_SWAGGER_DIR = Path(litellm.__file__).parent / "proxy" / "swagger"
 if not _LITELLM_SWAGGER_DIR.is_dir():
     raise RuntimeError(
@@ -245,7 +245,7 @@ app.mount(
 )
 
 # LiteLLM 번들 Swagger UI 자산 마운트 (/swagger/*).
-# /docs 핸들러가 이 경로의 정적 파일을 가리켜 외부 CDN 의존을 제거한다.
+# swagger_ui_page 가 이 경로의 정적 파일을 가리켜 외부 CDN 의존을 제거한다.
 app.mount(
     "/swagger",
     StaticFiles(directory=_LITELLM_SWAGGER_DIR),
@@ -253,8 +253,8 @@ app.mount(
 )
 
 
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_docs() -> HTMLResponse:
+@app.get("/swagger-ui/index.html", include_in_schema=False)
+async def swagger_ui_page() -> HTMLResponse:
     """LiteLLM 번들 Swagger UI 자산으로 OpenAPI 문서를 렌더한다."""
     return get_swagger_ui_html(
         openapi_url=app.openapi_url,
@@ -264,6 +264,23 @@ async def custom_swagger_docs() -> HTMLResponse:
         swagger_favicon_url="/swagger/favicon.png",
         swagger_ui_parameters=_SWAGGER_UI_PARAMETERS,
     )
+
+
+async def _swagger_ui_redirect() -> RedirectResponse:
+    """/swagger-ui 와 /swagger-ui/ 는 index.html 로 보낸다."""
+    return RedirectResponse(url="/swagger-ui/index.html")
+
+
+app.add_api_route(
+    "/swagger-ui",
+    _swagger_ui_redirect,
+    include_in_schema=False,
+)
+app.add_api_route(
+    "/swagger-ui/",
+    _swagger_ui_redirect,
+    include_in_schema=False,
+)
 
 
 @app.get("/health", tags=["meta"], summary="헬스체크")

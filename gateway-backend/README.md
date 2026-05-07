@@ -312,7 +312,7 @@ L4 처럼 `nli_path_ok` / `vector_llm_path_ok` 중 한쪽만 True 인 **부분
 
 #### 2) `GET /v1/layers/status`
 
-런타임에 HTTP 로 같은 정보를 조회한다. `/docs` 의 **meta** 태그에 함께
+런타임에 HTTP 로 같은 정보를 조회한다. `/swagger-ui/index.html` 의 **meta** 태그에 함께
 노출되며, 외부 모니터링에서도 폴링 가능하다.
 
 ```bash
@@ -452,7 +452,7 @@ aggregation 전략(`aggregation_strategy`) 을 선언한다. 상태 API 는 이
 | GET | `/v1/playground/defaults` | playground 입력 자동완성용 메타. `APP_ENV=dev` 일 때만 `PLAYGROUND_DEFAULT_API_KEY` / `PLAYGROUND_DEFAULT_HMAC_SECRET` 값 노출, prod 에서는 빈 문자열 (Swagger 비노출) |
 | GET | `/v1/layers/status` | L1~L6 각 레이어의 모델 로드 여부 + 실제 BLOCK 가능 여부(`effective`) + 레이어별 `signals` 진단 조회 (아래 _레이어 진단_ 참고) |
 | GET | `/health` | 헬스체크 |
-| GET | `/docs` | Swagger UI — LiteLLM 패키지에 번들된 정적 자산(`/swagger/*`) 사용으로 외부 CDN 의존 없음 |
+| GET | `/swagger-ui/index.html` | Swagger UI — LiteLLM 패키지에 번들된 정적 자산(`/swagger/*`) 사용으로 외부 CDN 의존 없음. `/swagger-ui` · `/swagger-ui/` 는 이 경로로 307 리디렉트. 기존 `/docs` 진입점은 제거됨(404). |
 | GET | `/openapi.json` | OpenAPI 스키마 |
 | GET | `/playground/` | 커스텀 API 설명 + 테스트 플레이그라운드 |
 
@@ -492,7 +492,7 @@ curl -X POST http://localhost:54088/v1/chat/completions \
 
 ## 플레이그라운드
 
-FastAPI 기본 Swagger UI(`/docs`)와 별개로,
+Swagger UI(`/swagger-ui/index.html`)와 별개로,
 `/playground/`에 가드레일 파이프라인을 설명하고 직접 테스트할 수 있는
 정적 HTML 페이지를 제공한다.
 
