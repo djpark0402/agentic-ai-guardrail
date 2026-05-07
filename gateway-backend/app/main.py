@@ -14,12 +14,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from langchain_core.exceptions import LangChainException
 
 from app.dependencies import get_http_client
 from app.errors import (
     map_admin_backend_error,
-    map_langchain_error,
     map_solar_error,
 )
 from app.routers import chat, layers
@@ -109,9 +107,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Agentic AI Guardrail Gateway",
     description=(
-        "LangChain 기반 Multi-provider LLM Gateway. **OpenAI "
+        "LiteLLM 기반 Multi-provider LLM Gateway. **OpenAI "
         "`/v1/chat/completions` 호환** 엔드포인트를 제공하며, 요청/응답이 모두 "
-        "OpenAI 스펙을 따르므로 `openai` SDK·LiteLLM·LangChain 클라이언트에서 "
+        "OpenAI 스펙을 따르므로 `openai` SDK·LiteLLM 클라이언트에서 "
         "base_url 만 바꿔 바로 사용할 수 있습니다.\n\n"
         "### Provider 라우팅\n"
         "모델명으로 자동 감지합니다:\n"
@@ -341,11 +339,11 @@ async def playground_defaults() -> dict[str, str]:
 async def solar_error_handler(
     request: Request, exc: openai.APIError
 ) -> JSONResponse:
-    """Solar(openai) 예외를 구조화된 JSON 으로 반환한다.
+    """LLM(openai 호환) 예외를 구조화된 JSON 으로 반환한다.
 
     Args:
         request: FastAPI 요청 객체.
-        exc: OpenAI API 오류 인스턴스.
+        exc: OpenAI 호환 API 오류 인스턴스.
 
     Returns:
         구조화된 에러 JSON 응답.
@@ -385,42 +383,6 @@ async def admin_backend_error_handler(
         구조화된 에러 JSON 응답.
     """
     status, detail = map_admin_backend_error(exc)
-    sid = getattr(
-        getattr(request, "state", None),
-        "session_id",
-        None,
-    )
-    logger.error(
-        "upstream_error: provider=%s "
-        "exception_type=%s upstream_status=%s "
-        "session_id=%s",
-        detail.provider,
-        type(exc).__name__,
-        detail.upstream_status,
-        sid,
-    )
-    return JSONResponse(
-        status_code=status,
-        content=detail.model_dump(),
-    )
-
-
-@app.exception_handler(LangChainException)
-async def langchain_error_handler(
-    request: Request, exc: LangChainException
-) -> JSONResponse:
-    """LangChain 예외를 구조화된 JSON 으로 반환한다.
-
-    openai.APIError 가 아닌 LangChain 고유 예외에 대한 fallback 핸들러.
-
-    Args:
-        request: FastAPI 요청 객체.
-        exc: LangChain 오류 인스턴스.
-
-    Returns:
-        구조화된 에러 JSON 응답.
-    """
-    status, detail = map_langchain_error(exc)
     sid = getattr(
         getattr(request, "state", None),
         "session_id",

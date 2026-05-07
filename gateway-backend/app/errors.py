@@ -1,6 +1,6 @@
 """upstream 에러를 구조화된 JSON 응답으로 매핑하는 모듈.
 
-Solar(openai SDK) 및 admin-backend(httpx) 예외를 원인별로 분류하여
+LLM(openai 호환 예외) 및 admin-backend(httpx) 예외를 원인별로 분류하여
 HTTP 상태 코드와 구조화된 에러 상세를 반환한다.
 """
 
@@ -9,7 +9,6 @@ from typing import Any
 
 import httpx
 import openai
-from langchain_core.exceptions import LangChainException
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,7 @@ class UpstreamErrorDetail(BaseModel):
     retryable: bool
 
 
-# ── Solar 예외 매핑 ──────────────────────────────────────────
+# ── LLM 예외 매핑 ────────────────────────────────────────────
 
 # (HTTP 상태, retryable) 쌍. isinstance 순서가 중요하므로
 # 리스트로 관리한다 — APITimeoutError 는 APIConnectionError 의
@@ -69,10 +68,10 @@ def _extract_upstream_code(
 def map_solar_error(
     exc: openai.APIError,
 ) -> tuple[int, UpstreamErrorDetail]:
-    """Solar(openai) 예외를 HTTP 상태와 구조화된 상세로 매핑한다.
+    """LLM(openai 호환) 예외를 HTTP 상태와 구조화된 상세로 매핑한다.
 
     Args:
-        exc: openai SDK 예외 인스턴스.
+        exc: openai 호환 예외 인스턴스.
 
     Returns:
         (HTTP 상태 코드, UpstreamErrorDetail) 튜플.
@@ -81,7 +80,7 @@ def map_solar_error(
     for exc_type, status, retryable in _SOLAR_MAP:
         if isinstance(exc, exc_type):
             return status, UpstreamErrorDetail(
-                detail=f"Solar API 오류: {exc.message}",
+                detail=f"LLM API 오류: {exc.message}",
                 provider="solar",
                 upstream_status=getattr(exc, "status_code", None),
                 upstream_code=_extract_upstream_code(exc),
@@ -93,7 +92,7 @@ def map_solar_error(
         raw_status = getattr(exc, "status_code", 500)
         mapped = 503 if raw_status == 503 else 502
         return mapped, UpstreamErrorDetail(
-            detail=f"Solar API 오류: {exc.message}",
+            detail=f"LLM API 오류: {exc.message}",
             provider="solar",
             upstream_status=raw_status,
             upstream_code=_extract_upstream_code(exc),
@@ -105,7 +104,7 @@ def map_solar_error(
     mapped = raw_status if raw_status else 502
     retryable = mapped >= 500 if raw_status else True
     return mapped, UpstreamErrorDetail(
-        detail=f"Solar API 오류: {exc.message}",
+        detail=f"LLM API 오류: {exc.message}",
         provider="solar",
         upstream_status=raw_status,
         upstream_code=_extract_upstream_code(exc),
@@ -165,27 +164,3 @@ def map_admin_backend_error(
         retryable=True,
     )
 
-
-# ── LangChain 예외 매핑 ──────────────────────────────────────
-
-
-def map_langchain_error(
-    exc: LangChainException,
-) -> tuple[int, UpstreamErrorDetail]:
-    """LangChain 예외를 HTTP 상태와 구조화된 상세로 매핑한다.
-
-    openai.APIError 가 아닌 LangChain 고유 예외에 대한 fallback 핸들러.
-
-    Args:
-        exc: LangChain 예외 인스턴스.
-
-    Returns:
-        (HTTP 상태 코드, UpstreamErrorDetail) 튜플.
-    """
-    return 502, UpstreamErrorDetail(
-        detail=f"LLM 호출 오류: {exc!s}",
-        provider="solar",
-        upstream_status=None,
-        upstream_code=None,
-        retryable=True,
-    )

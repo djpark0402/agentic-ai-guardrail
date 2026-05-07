@@ -92,22 +92,19 @@ class TestParseModel:
 class TestGetService:
     """서비스 생성 및 캐싱 테스트."""
 
-    def test_get_solar_service(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_get_solar_service(self):
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
         svc = router.get_service("solar")
         assert svc.provider_name == "solar"
 
-    def test_get_openai_service(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_get_openai_service(self):
         settings = _make_settings(openai_key="sk-test")
         router = ProviderRouter(settings=settings)
         svc = router.get_service("openai")
         assert svc.provider_name == "openai"
 
-    def test_get_ollama_service(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_get_ollama_service(self):
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
         svc = router.get_service("ollama")
@@ -119,15 +116,13 @@ class TestGetService:
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             router.get_service("openai")
 
-    def test_unknown_provider_raises(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_unknown_provider_raises(self):
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
         with pytest.raises(ValueError, match="지원하지 않는 provider"):
             router.get_service("anthropic")
 
-    def test_service_is_cached(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_service_is_cached(self):
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
         svc1 = router.get_service("solar")
@@ -138,24 +133,21 @@ class TestGetService:
 class TestResolve:
     """resolve() 통합 테스트."""
 
-    def test_resolve_gpt_model(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_resolve_gpt_model(self):
         settings = _make_settings(openai_key="sk-test")
         router = ProviderRouter(settings=settings)
         svc, model = router.resolve("gpt-4o")
         assert svc.provider_name == "openai"
         assert model == "gpt-4o"
 
-    def test_resolve_solar_model(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_resolve_solar_model(self):
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
         svc, model = router.resolve("solar-pro")
         assert svc.provider_name == "solar"
         assert model == "solar-pro"
 
-    def test_resolve_ollama_strips_prefix(self, mocker):
-        mocker.patch("app.services.llm_service.ChatOpenAI")
+    def test_resolve_ollama_strips_prefix(self):
         settings = _make_settings()
         router = ProviderRouter(settings=settings)
         svc, model = router.resolve("ollama/llama3")

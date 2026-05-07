@@ -346,34 +346,3 @@ class TestAdminBackendErrorHandlerLogging:
             for r in caplog.records
         )
 
-
-# ── LangChain 예외 매핑 ──────────────────────────────────────
-
-
-class TestMapLangChainError:
-    """map_langchain_error 테스트."""
-
-    def test_returns_502_with_retryable(self):
-        """LangChainException 을 502 retryable 로 매핑한다."""
-        from langchain_core.exceptions import LangChainException
-
-        from app.errors import map_langchain_error
-
-        exc = LangChainException("Something failed")
-        status, detail = map_langchain_error(exc)
-
-        assert status == 502
-        assert detail.provider == "solar"
-        assert detail.retryable is True
-        assert "LLM 호출 오류" in detail.detail
-
-    def test_preserves_error_message(self):
-        """예외 메시지가 detail 에 포함된다."""
-        from langchain_core.exceptions import LangChainException
-
-        from app.errors import map_langchain_error
-
-        exc = LangChainException("specific error message")
-        _, detail = map_langchain_error(exc)
-
-        assert "specific error message" in detail.detail

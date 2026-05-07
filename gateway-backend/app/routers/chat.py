@@ -881,8 +881,8 @@ _RESPONSE_EXAMPLES_OBSERVE: dict[str, Any] = {
 
 _CHAT_COMPLETIONS_DESCRIPTION = (
     "OpenAI `/v1/chat/completions` 호환 엔드포인트. 요청과 응답 스키마는"
-    " OpenAI 스펙을 그대로 따르므로 `openai` Python SDK, LiteLLM,"
-    " LangChain 의 `ChatOpenAI` 등에서 base_url 만 바꿔 사용할 수"
+    " OpenAI 스펙을 그대로 따르므로 `openai` Python SDK, LiteLLM"
+    " 등에서 base_url 만 바꿔 사용할 수"
     " 있습니다.\n\n"
     "### 호출 규칙\n"
     "- 모든 요청은 **HMAC 서명된 4종 헤더**가 필요합니다"

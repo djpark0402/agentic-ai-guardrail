@@ -10,10 +10,15 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
     "python-dotenv>=1.0.0",
-    "openai>=1.0.0",
-    "langchain-openai>=0.3.0",
+    "openai>=2.26.0",
+    "litellm==1.83.14",
     "core-secure-layer",
 ]
+
+[tool.uv]
+# core-secure-layer 의 langchain-openai 와 LiteLLM 이 요구하는 openai 버전
+# 범위가 일시적으로 충돌한다. 애플리케이션은 openai 2.31.0 으로 검증한다.
+override-dependencies = ["openai==2.31.0"]
 
 [tool.uv.sources]
 # editable 설치로 지정해, 패키지 빌드 시 wheel 에 포함되지 않는
