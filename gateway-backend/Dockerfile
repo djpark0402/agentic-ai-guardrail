@@ -76,10 +76,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 #    requirements.txt 에는 editable path-dep 인 core-secure-layer 가
 #    -e file:///app/core-secure-layer 로, gateway-backend 자체도 editable
 #    project 로 포함되어 함께 설치된다 (각자 .pth 로 source 트리 연결).
+#    editable path-dep 의 pyproject 를 다시 resolve 하면 core-secure-layer 의
+#    torch 의존성이 기본 PyPI/CUDA wheel 로 함께 설치될 수 있으므로, uv export 가
+#    이미 고정한 requirements 항목만 설치하도록 --no-deps 를 사용한다.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install -r /tmp/requirements.txt
+    uv pip install --no-deps -r /tmp/requirements.txt
 
 # 5) torch 는 PyTorch 공식 CPU 인덱스에서만 설치.
 #    이 index 의 Linux wheel 은 nvidia-* 를 Requires-Dist 로 선언하지

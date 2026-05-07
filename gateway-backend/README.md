@@ -548,14 +548,16 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
 ## Docker 배포
 
 팀 개발 서버(Linux x86_64, CPU 추론) 배포용 구성 파일이 포함되어 있다.
-로컬 macOS 환경과 어긋나지 않도록 `pyproject.toml` / `uv.lock` 은 손대지
-않고 Docker 레이어만으로 배포 차이를 흡수한다.
+`pyproject.toml` / `uv.lock` 을 단일 의존성 소스로 사용하고, Docker 에서는
+배포 환경 차이만 흡수한다. 현재 LLM 호출부는 LiteLLM SDK 기반이며,
+컨테이너에도 `litellm==1.83.14` 와 `openai==2.31.0` 이 lockfile 기준으로
+설치된다.
 
 ### 포함 파일
 
 | 파일 | 역할 |
 |---|---|
-| `Dockerfile` | Python 3.14-slim-bookworm 기반 multi-stage 빌드. `uv export --frozen --prune torch` 로 `uv.lock` 에서 torch·nvidia-\*/triton 을 dep graph 기준으로 제거한 `requirements.txt` 를 만들어 non-torch 의존성을 설치하고, `torch` 는 PyTorch 공식 CPU 인덱스에서 별도 설치한다 (CUDA 바이너리·nvidia-\* 이미지 미포함). `core-secure-layer` 는 editable path-dep 으로 설치된다. **무거운 모델 파일 (`layers/*/model/`, ~7GB) 은 이미지에 넣지 않고 compose 의 bind mount 로 런타임에 공급**되어 이미지 크기가 대폭 줄어든다. 비-root `appuser` 로 기동. |
+| `Dockerfile` | Python 3.14-slim-bookworm 기반 multi-stage 빌드. `uv export --frozen --prune torch` 로 `uv.lock` 에서 torch·nvidia-\*/triton 을 dep graph 기준으로 제거한 `requirements.txt` 를 만들고, `uv pip install --no-deps -r /tmp/requirements.txt` 로 lockfile 에 이미 확정된 non-torch 의존성만 설치한다. 이후 `torch` 는 PyTorch 공식 CPU 인덱스에서 별도 설치한다 (CUDA 바이너리·nvidia-\* 이미지 미포함). `core-secure-layer` 는 editable path-dep 으로 설치된다. **무거운 모델 파일 (`layers/*/model/`, ~7GB) 은 이미지에 넣지 않고 compose 의 bind mount 로 런타임에 공급**되어 이미지 크기가 대폭 줄어든다. 비-root `appuser` 로 기동. |
 | `Dockerfile.dockerignore` | BuildKit 의 Dockerfile 전용 ignore. 빌드 컨텍스트(monorepo 루트) 에서 `admin-backend/`, `admin-frontend/`, `docs/`, `.venv/`, `.git`, `.env`, `tests/`, `*.egg-info` 등을 제외. 그리고 `core-secure-layer/core_secure_layer/layers/*/model/` 도 제외해 빌드 컨텍스트 전송 크기를 **GB 단위로 줄인다**. vectordb / patterns / policies 는 chromadb sqlite 쓰기 잠금/권한 문제 회피를 위해 이미지에 포함 유지. |
 | `docker-compose.yml` | `context: ..` 로 monorepo 루트를 빌드 컨텍스트로 잡고, `platform: linux/amd64` 고정. `env_file: .env`, `extra_hosts: host.docker.internal:host-gateway`, `start_period: 300s` (모델 로드 유예). **`volumes` 섹션에서 `../core-secure-layer/core_secure_layer/layers/l{2..5}/model` 를 `:ro` 로 bind mount** 해 이미지에서 제외된 모델을 공급한다. L6 `kanana-safeguard-8b` 는 아직 호스트에 없으므로 마운트하지 않으며, 모델이 준비되면 같은 패턴으로 한 줄 추가. |
 
@@ -574,9 +576,16 @@ FastAPI 기본 Swagger UI(`/docs`)와 별개로,
   (`https://download.pytorch.org/whl/cpu`) 에서만 설치하고, `uv export
   --prune torch` 로 `uv.lock` 의 nvidia-\*/triton 런타임 의존성을 dep graph
   기준으로 제거한다. 결과적으로 이미지에 CUDA 바이너리가 포함되지 않는다.
-  `pyproject.toml` / `uv.lock` 은 수정하지 않아 로컬 macOS 개발 환경과 완전히
-  분리되어 있다 (배포 전용 오버라이드는 Dockerfile 안에만 존재). 런타임에는
-  transformers / sentence-transformers 가 device 자동 선택으로 CPU 추론.
+  특히 editable path-dep 인 `core-secure-layer` 를 일반 dependency resolve 로
+  다시 설치하면 `torch` 가 기본 PyPI/CUDA 경로로 재유입될 수 있으므로,
+  Dockerfile 은 `uv pip install --no-deps -r /tmp/requirements.txt` 로 export
+  결과를 그대로 설치한 뒤 CPU torch 를 별도 설치한다. 런타임에는 transformers
+  / sentence-transformers 가 device 자동 선택으로 CPU 추론.
+- **LiteLLM / OpenAI 버전**: LiteLLM 전환 후에도 Docker 는 별도 provider
+  프록시를 띄우지 않고 애플리케이션 프로세스 안에서 LiteLLM Python SDK 를
+  사용한다. `pyproject.toml` 의 `override-dependencies` 로 `openai==2.31.0` 을
+  고정해 `core-secure-layer` 의 `langchain-openai` 요구사항과 LiteLLM 을
+  함께 만족시키며, `uv export --frozen` 이 이 결정을 그대로 반영한다.
 - **모델 공급 방식**: 이미지는 `core-secure-layer` 의 Python 패키지만 품고,
   각 레이어의 모델 바이너리(`layers/l{2..5}/model/`)는 `docker-compose.yml`
   의 `volumes:` 섹션이 **호스트의 `../core-secure-layer/...` 경로를 `:ro`
@@ -631,6 +640,13 @@ curl -fsS http://localhost:54088/health
 curl -fsS http://localhost:54088/v1/models/default
 #  -> {"default_model":"..."}
 
+# 6-1) LiteLLM / OpenAI SDK 버전 확인 (선택)
+docker exec -i gateway-backend python - <<'PY'
+import importlib.metadata
+print("litellm", importlib.metadata.version("litellm"))
+print("openai", importlib.metadata.version("openai"))
+PY
+
 # 7) Docker healthcheck 상태
 docker inspect --format='{{json .State.Health}}' gateway-backend \
   | python3 -m json.tool
@@ -661,6 +677,10 @@ docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지
 - **`.env` 는 이미지에 들어가지 않는다.** `Dockerfile.dockerignore` 에서
   명시적으로 제외하고 compose 의 `env_file` 로 런타임에 주입한다. 새 키가
   필요하면 `.env.example` 에 먼저 추가.
+- **LiteLLM 전환으로 추가 컨테이너는 필요 없다.** gateway-backend 안에서
+  LiteLLM SDK 를 직접 호출하므로 `docker-compose.yml` 에 별도 LiteLLM proxy
+  서비스를 추가하지 않는다. 기존 `LLM_MODEL`, `UPSTAGE_API_KEY`,
+  `OPENAI_*`, `OLLAMA_BASE_URL` 설정을 그대로 사용한다.
 - **로컬 macOS 에서 실제 이미지 빌드는 비권장**: `linux/amd64` QEMU 에뮬레이션
   으로 시간이 오래 걸린다. 다만 이번 bind mount 전환으로 **빌드 컨텍스트
   전송이 GB → MB 단위로 줄어** 과거 대비 크게 빨라졌다. 구문 검증은
@@ -682,6 +702,8 @@ docker compose down     # 컨테이너 제거 (이미지·네트워크는 유지
 | 컨테이너가 healthcheck 로 `unhealthy` 되어 재시작 반복 | 모델 로드가 `start_period` 를 초과. `docker compose logs` 로 실제 로드 시간 확인 후 `start_period` 상향. |
 | admin-backend 연결 실패 (`policy_service` 로그) | `ADMIN_BACKEND_URL` 값 확인. `docker exec gateway-backend python -c "import urllib.request; print(urllib.request.urlopen('$ADMIN_BACKEND_URL/health').status)"` 로 도달성 점검. 호스트 프로세스인 경우 admin-backend 가 `0.0.0.0` 에 바인딩돼 있어야 한다. |
 | CUDA / `libcu*` / `nvidia-*` 관련 경고 또는 오류 | CPU-only `torch` wheel 만 설치되어 CUDA 런타임 로드 경로 자체가 없어야 정상. 만약 빌드 로그에서 `Downloading nvidia-*` / `Downloading triton` 이 다시 보이면 이미지 캐시에 이전 빌드가 재사용됐을 가능성 → `docker builder prune -f --filter "label=com.docker.compose.project=gateway-backend"` 후 재빌드. transformers 가 단순 probe 차원에서 찍는 CUDA 관련 info 메시지는 무해. |
+| `uv pip install -r /tmp/requirements.txt` 단계에서 torch/CUDA wheel 이 같이 잡힘 | Dockerfile 이 `--no-deps` 없이 editable `core-secure-layer` 의 의존성을 다시 resolve 한 경우다. 현재 Dockerfile 은 `uv pip install --no-deps -r /tmp/requirements.txt` 후 CPU torch 를 별도 설치하도록 고정돼 있어야 한다. |
+| LiteLLM 또는 OpenAI 버전 충돌로 빌드 실패 | `uv export --frozen --no-dev --prune torch ...` 가 먼저 성공하는지 확인한다. `pyproject.toml` 의 `override-dependencies = ["openai==2.31.0"]` 와 `uv.lock` 이 함께 커밋돼 있어야 한다. |
 
 ## 프로젝트 구조
 
